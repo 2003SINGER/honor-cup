@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# ROS
+build/
+install/
+log/
+devel/
+*.bag
+*.mcap
+
+# 数据与产出
+*.log
+*.png
+*.jpg
+output/
+dist/
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 编辑器
+.idea/
+.vscode/
+*.swp
+
+# 临时文件
+tmp/
+temp/

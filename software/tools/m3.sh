@@ -1,14 +1,15 @@
 #!/bin/bash
 # ================================================================
-#  M3Pro 小车 一键脚本 —— 在【车上 Ubuntu】运行
+#  M3Pro 小车统一脚本 —— 在【车上 Ubuntu】运行
 #
-#    bash ~/m3.sh           查看状态
-#    bash ~/m3.sh up        ★ 重启小车后跑这一条：自动修复代理 + 起雷达/TF + 相机
-#                           （失败时自动打印原因和日志）
-#    bash ~/m3.sh arm       机械臂回竖直
-#    bash ~/m3.sh stop      停雷达 / 相机
+#    bash ~/m3.sh            查看状态
+#    bash ~/m3.sh up         ★ 一键：修代理 + 雷达/TF + 相机 + 定位链（幂等）
+#    bash ~/m3.sh boot       开机自启入口（autostart 调用）：校时 + up
+#    bash ~/m3.sh arm        机械臂回竖直
+#    bash ~/m3.sh stop       停雷达 / 相机
 #
-#  远程用法（Mac 上）:  ssh car "bash ~/m3.sh up"
+#  远程用法（Mac）:  ssh car "bash ~/m3.sh up"
+#  日志:  /tmp/m3_log/  （boot.log = 开机流程；agent/laser/camera/imu/ekf.log = 各服务）
 # ================================================================
 
 export DISPLAY=:0
@@ -21,14 +22,15 @@ source /opt/ros/humble/setup.bash
 
 LOG=/tmp/m3_log
 mkdir -p "$LOG"
+log() { echo "$(date '+%F %T') $*" >> "$LOG/boot.log"; }
 
 has() { ros2 topic list 2>/dev/null | grep -qx "$1"; }
 yn()  { has "$1" && printf '✅' || printf '❌'; }
 flow() { timeout 2 ros2 topic hz "$1" 2>/dev/null | grep -q "average rate"; }
 agent_running() { pgrep -f micro_ros_agent > /dev/null; }
 
-# 重启代理：官方 start_agent.sh 用 gnome-terminal 开窗口，日志看不到；
-# 这里直接跑它里面那一行命令（domain 30 + serial /dev/myserial 2000000），日志落盘
+# 重启代理：官方 start_agent.sh 用 gnome-terminal 开窗口日志看不到；
+# 这里直接跑同一行命令（domain 30 + serial /dev/myserial 2000000），日志落盘
 start_agent() {
   pkill -f micro_ros_agent 2>/dev/null
   sleep 3
@@ -50,7 +52,7 @@ dump_agent_diag() {
 case "${1:-check}" in
 
 up)
-  echo "[1/3] 通讯代理（上位机 ↔ 底层 STM32 的桥）"
+  echo "[1/5] 通讯代理（上位机 ↔ 底层 STM32 的桥）"
   if has /cmd_vel && agent_running; then
     echo "      ✅ 正常，跳过"
   else
@@ -65,7 +67,7 @@ up)
     fi
   fi
 
-  echo "[2/3] 雷达 + TF"
+  echo "[2/5] 雷达 + TF"
   if has /scan_multi; then
     echo "      ✅ 已在运行"
   else
@@ -74,7 +76,7 @@ up)
     has /scan_multi && echo "      ✅ 好了（/tf 一起出来）" || echo "      ❌ 看 $LOG/laser.log"
   fi
 
-  echo "[3/3] 相机 + 机械臂解算"
+  echo "[3/5] 相机 + 机械臂解算"
   if has /camera/color/image_raw || has /rgb; then
     echo "      ✅ 已在运行"
   else
@@ -83,8 +85,42 @@ up)
     has /camera/color/image_raw && echo "      ✅ 好了" || echo "      ❌ 看 $LOG/camera.log"
   fi
 
+  echo "[4/5] IMU 滤波（/imu/data，EKF 融合输入）"
+  if pgrep -f imu_filter_madgwick > /dev/null; then
+    echo "      ✅ 已在运行"
+  else
+    nohup ros2 launch imu_filter_madgwick imu_filter.launch.py > "$LOG/imu.log" 2>&1 < /dev/null &
+    echo "      已启动"
+  fi
+
+  echo "[5/5] 定位链（URDF 静态 TF + EKF 里程计）"
+  if pgrep -f robot_state_publisher > /dev/null && pgrep -f ekf_filter_node > /dev/null; then
+    echo "      ✅ 已在运行"
+  else
+    pgrep -f robot_state_publisher > /dev/null || \
+      nohup ros2 launch M3Pro display.launch.py > "$LOG/display.log" 2>&1 < /dev/null &
+    pgrep -f ekf_filter_node > /dev/null || \
+      nohup ros2 launch ekf_bringup ekf.launch.py > "$LOG/ekf.log" 2>&1 < /dev/null &
+    sleep 8   # 给 TF/EKF 一点时间
+    echo "      已启动（TF 树几秒后齐）"
+  fi
+
   echo
-  bash ~/m3.sh check
+  bash "$0" check
+  ;;
+
+boot)
+  # —— 由 autostart 调用，无窗口运行；过程全部写 boot.log ——
+  log "=== boot 开始 ==="
+  # 校时：车没有可靠 RTC，重启后必漂；优先 NTP，不行留给 Mac 手动校时
+  if ! timedatectl 2>/dev/null | grep -q 'synchronized: yes'; then
+    echo yahboom | sudo -S timedatectl set-ntp true >/dev/null 2>&1
+    sleep 8   # 等 NTP
+  fi
+  timedatectl 2>/dev/null | grep -q 'synchronized: yes' \
+    && log "时钟: NTP 已同步" || log "时钟: NTP 未同步 → 需在 Mac 跑手动校时命令"
+  bash "$0" up >> "$LOG/boot.log" 2>&1
+  log "=== boot 完成 ==="
   ;;
 
 check)
@@ -124,10 +160,10 @@ check)
   echo "  [相机]     ${cam:-❌ 没启动}"
 
   echo "╠════════════════════════════════╣"
-  echo "  缺雷达/相机 → bash ~/m3.sh up     （只起这两个）"
-  echo "  代理断了    → bash ~/m3.sh up     （自动杀旧起新 + 打印失败原因）"
-  echo "  机械臂不直  → bash ~/m3.sh arm"
-  echo "  日志        → $LOG/"
+  echo "  缺服务     → bash ~/m3.sh up     （自动补齐 + 失败打印原因）"
+  echo "  机械臂不直 → bash ~/m3.sh arm"
+  echo "  看可视化   → 应用菜单「RViz 雷达」"
+  echo "  日志       → $LOG/"
   echo "╚════════════════════════════════╝"
   ;;
 
@@ -142,12 +178,16 @@ arm)
   ;;
 
 stop)
+  pkill -x rviz2 2>/dev/null
   pkill -f laser_driver.launch.py 2>/dev/null
   pkill -f camera_arm_kin 2>/dev/null
-  echo "已停雷达 / 相机"
+  pkill -f imu_filter_madgwick 2>/dev/null
+  pkill -f robot_state_publisher 2>/dev/null
+  pkill -f ekf_filter_node 2>/dev/null
+  echo "已停雷达 / 相机 / 定位链（代理没动）"
   ;;
 
 *)
-  echo "用法: bash ~/m3.sh {up|check|arm|stop}"
+  echo "用法: bash ~/m3.sh {up|boot|check|arm|stop}"
   ;;
 esac

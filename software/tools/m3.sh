@@ -27,12 +27,13 @@ waitfor() { for i in $(seq 1 "$2"); do has "$1" && return 0; sleep 1; done; retu
 case "${1:-check}" in
 
 up)
-  echo "[1/3] 通讯代理（上位机 ↔ 底层 STM32 的桥）"
+  echo "[1/3] 通讯代理（开机自启 —— 这里只检查，绝不重复启动）"
   if has /cmd_vel; then
-    echo "      已在运行，跳过"
+    echo "      ✅ 正常"
   else
-    nohup bash ~/start_agent.sh > /tmp/m3_agent.log 2>&1 &
-    waitfor /cmd_vel 30 && echo "      ✅ 好了" || echo "      ❌ 30 秒没起来，看 /tmp/m3_agent.log"
+    echo "      ❌ 断了。不重复启动：两个代理会抢同一个串口，只会越搞越坏。"
+    echo "         先跑  bash ~/m3.sh check  看自动诊断结果"
+    exit 1
   fi
 
   echo "[2/3] 雷达 + TF"
@@ -66,12 +67,23 @@ check)
   echo "  运行   $(uptime -p 2>/dev/null | sed 's/^up //')"
   echo "╠════════════════════════════════╣"
 
-  echo "  [通讯代理 / 底层]"
-  printf "    %-15s %s\n" "/cmd_vel"      "$(yn /cmd_vel)"
-  printf "    %-15s %s\n" "/odom_raw"     "$(yn /odom_raw)"
-  printf "    %-15s %s\n" "/imu/data_raw" "$(yn /imu/data_raw)"
-  printf "    %-15s %s\n" "/battery"      "$(yn /battery)"
-  printf "    %-15s %s\n" "/arm6_joints"  "$(yn /arm6_joints)"
+  echo "  [通讯代理 / 底层]   ← 上位机 ↔ 底层 STM32 的桥，它断则下面全断"
+  if has /cmd_vel; then
+    printf "    %-15s %s\n" "/cmd_vel"      "$(yn /cmd_vel)"
+    printf "    %-15s %s\n" "/odom_raw"     "$(yn /odom_raw)"
+    printf "    %-15s %s\n" "/imu/data_raw" "$(yn /imu/data_raw)"
+    printf "    %-15s %s\n" "/battery"      "$(yn /battery)"
+    printf "    %-15s %s\n" "/arm6_joints"  "$(yn /arm6_joints)"
+  else
+    echo "    ❌ 断了。自动诊断——"
+    echo "      代理进程  $(pgrep -af micro_ros_agent 2>/dev/null | head -2 | tr '\n' '|')"
+    echo "      会话日志  $(tail -3 /tmp/m3_agent.log 2>/dev/null | tr '\n' '|')"
+    echo "      串口设备  $(ls /dev/myserial /dev/ttyUSB* /dev/ttyACM* 2>/dev/null | tr '\n' ' ')"
+    echo "      自启项    $(ls ~/.config/autostart/ 2>/dev/null | tr '\n' ' ')"
+    echo "      ---- start_agent.sh 的内容 ----"
+    sed 's/^/       /' ~/start_agent.sh 2>/dev/null | head -30
+    echo "      --------------------------------"
+  fi
 
   echo "  [机械臂]   底板订阅数 ${SUB:-0}   $([ "${SUB:-0}" = "1" ] && echo '✅ 可发角度指令' || echo '❌ 底板未挂上')"
 
@@ -90,9 +102,9 @@ check)
   echo "  [相机]     ${cam:-❌ 没启动}"
 
   echo "╠════════════════════════════════╣"
-  echo "  缺哪个服务 → bash ~/m3.sh up"
-  echo "  机械臂不直 → bash ~/m3.sh arm"
-  echo "  看日志     → /tmp/m3_*.log"
+  echo "  缺雷达/相机 → bash ~/m3.sh up     （只起这两个）"
+  echo "  代理断了    → 上面已自动诊断，贴出来看"
+  echo "  机械臂不直  → bash ~/m3.sh arm"
   echo "╚════════════════════════════════╝"
   ;;
 

@@ -21,6 +21,7 @@ source /opt/ros/humble/setup.bash
 
 has() { ros2 topic list 2>/dev/null | grep -qx "$1"; }
 yn()  { has "$1" && printf '✅' || printf '❌'; }
+flow() { timeout 2 ros2 topic hz "$1" 2>/dev/null | grep -q "average rate"; }
 waitfor() { for i in $(seq 1 "$2"); do has "$1" && return 0; sleep 1; done; return 1; }
 
 case "${1:-check}" in
@@ -58,16 +59,41 @@ up)
   ;;
 
 check)
-  echo "=========== M3Pro 状态 ==========="
-  echo "代理/底层  /cmd_vel $(yn /cmd_vel)   /odom_raw $(yn /odom_raw)   /imu/data_raw $(yn /imu/data_raw)   /battery $(yn /battery)   /arm6_joints $(yn /arm6_joints)"
-  echo "机械臂订阅 $(ros2 topic info /arm6_joints 2>/dev/null | sed -n 's/.*Subscription count: \([0-9]*\).*/\1/p')"
-  echo "雷达       /scan0 $(yn /scan0)   /scan1 $(yn /scan1)   /scan_multi $(yn /scan_multi)"
-  echo "TF         /tf $(yn /tf)   /tf_static $(yn /tf_static)"
-  echo -n "相机       "
+  SUB=$(ros2 topic info /arm6_joints 2>/dev/null | sed -n 's/.*Subscription count: \([0-9]*\).*/\1/p')
+  echo
+  echo "╔════════ M3Pro 小车状态 ════════╗"
+  echo "  主机   $(hostname)   $(hostname -I 2>/dev/null | awk '{print $1}')"
+  echo "  运行   $(uptime -p 2>/dev/null | sed 's/^up //')"
+  echo "╠════════════════════════════════╣"
+
+  echo "  [通讯代理 / 底层]"
+  printf "    %-15s %s\n" "/cmd_vel"      "$(yn /cmd_vel)"
+  printf "    %-15s %s\n" "/odom_raw"     "$(yn /odom_raw)"
+  printf "    %-15s %s\n" "/imu/data_raw" "$(yn /imu/data_raw)"
+  printf "    %-15s %s\n" "/battery"      "$(yn /battery)"
+  printf "    %-15s %s\n" "/arm6_joints"  "$(yn /arm6_joints)"
+
+  echo "  [机械臂]   底板订阅数 ${SUB:-0}   $([ "${SUB:-0}" = "1" ] && echo '✅ 可发角度指令' || echo '❌ 底板未挂上')"
+
+  echo "  [雷达]"
+  printf "    %-15s %s\n" "/scan0" "$(yn /scan0)"
+  printf "    %-15s %s\n" "/scan1" "$(yn /scan1)"
+  if has /scan_multi; then
+    printf "    %-15s ✅ %s\n" "/scan_multi" "$(flow /scan_multi && echo '有数据流' || echo '⚠️ 话题在但无数据流')"
+  else
+    printf "    %-15s ❌\n" "/scan_multi"
+  fi
+
+  echo "  [TF]       /tf $(yn /tf)    /tf_static $(yn /tf_static)"
+
   cam=$(ros2 topic list 2>/dev/null | grep -iE 'rgb|camera|depth' | tr '\n' ' ')
-  [ -n "$cam" ] && echo "$cam" || echo "❌ 没启动"
-  echo "日志       /tmp/m3_*.log"
-  echo "=================================="
+  echo "  [相机]     ${cam:-❌ 没启动}"
+
+  echo "╠════════════════════════════════╣"
+  echo "  缺哪个服务 → bash ~/m3.sh up"
+  echo "  机械臂不直 → bash ~/m3.sh arm"
+  echo "  看日志     → /tmp/m3_*.log"
+  echo "╚════════════════════════════════╝"
   ;;
 
 arm)

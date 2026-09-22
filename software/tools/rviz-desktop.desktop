@@ -2,7 +2,7 @@
 Type=Application
 Name=RViz 雷达
 Comment=rviz2 -d radar.rviz（Fixed Frame=base_link，/scan0 /scan1 /scan_multi 预置）
-Exec=gnome-terminal --title=RViz -- bash -c "export ROS_DOMAIN_ID=30 && source /opt/ros/humble/setup.bash && rviz2 -d /home/jetson/radar.rviz; exec bash"
+Exec=gnome-terminal --title=RViz -- bash -c "source /opt/ros/humble/setup.bash && source ~/yahboomcar_ws/install/setup.bash && source ~/M3Pro_ws/install/setup.bash && export ROS_DOMAIN_ID=30 && rviz2 -d ~/radar.rviz; exec bash"
 Terminal=false
 Icon=utilities-x-terminal
 Categories=Development;Science;

@@ -14,6 +14,7 @@
 # ================================================================
 
 export DISPLAY=:0          # SSH 下 start_agent.sh 需要，否则报 Cannot open display
+export ROS_DOMAIN_ID=30    # 车的 domain（check_sensor.desktop 里读到的），SSH 非交互 shell 不读 .bashrc
 
 source /opt/ros/humble/setup.bash
 [ -f ~/yahboomcar_ws/install/setup.bash ] && source ~/yahboomcar_ws/install/setup.bash

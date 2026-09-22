@@ -33,3 +33,17 @@ else
   nohup ros2 launch M3Pro_demo camera_arm_kin.launch.py > /tmp/m3_log/camera.log 2>&1 &
   echo "$(date '+%F %T') camera: 启动" >> /tmp/m3_log/boot.log
 fi
+
+# ---- 3. URDF 静态 TF（base_link / imu_frame 等坐标系）----
+if ! pgrep -f robot_state_publisher > /dev/null; then
+  nohup ros2 launch M3Pro display.launch.py > /tmp/m3_log/display.log 2>&1 &
+  echo "$(date '+%F %T') display: 启动" >> /tmp/m3_log/boot.log
+fi
+
+# ---- 4. EKF（发 odom→base_footprint TF + /odom 融合里程计）----
+if ! pgrep -f ekf_filter_node > /dev/null; then
+  nohup ros2 launch ekf_bringup ekf.launch.py > /tmp/m3_log/ekf.log 2>&1 &
+  echo "$(date '+%F %T') ekf: 启动" >> /tmp/m3_log/boot.log
+fi
+
+sleep 8   # 给 TF/EKF 一点时间

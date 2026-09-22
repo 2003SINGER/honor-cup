@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Exec=bash /home/jetson/m3_up.sh
+Hidden=false
+NoDisplay=false
+X-GNOME-Autostart-enabled=true
+Name=M3Pro services
+Comment=Start laser/TF and camera after login

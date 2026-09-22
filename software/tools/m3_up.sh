@@ -34,6 +34,12 @@ else
   echo "$(date '+%F %T') camera: 启动" >> /tmp/m3_log/boot.log
 fi
 
+# ---- 2.5 IMU 滤波（/imu/data_raw → /imu/data，EKF 融合的输入之一）----
+if ! pgrep -f imu_filter_madgwick > /dev/null; then
+  nohup ros2 launch imu_filter_madgwick imu_filter.launch.py > /tmp/m3_log/imu.log 2>&1 &
+  echo "$(date '+%F %T') imu_filter: 启动" >> /tmp/m3_log/boot.log
+fi
+
 # ---- 3. URDF 静态 TF（base_link / imu_frame 等坐标系）----
 if ! pgrep -f robot_state_publisher > /dev/null; then
   nohup ros2 launch M3Pro display.launch.py > /tmp/m3_log/display.log 2>&1 &

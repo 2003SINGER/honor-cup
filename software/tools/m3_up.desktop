@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Exec=bash /home/jetson/m3.sh boot
+Exec=gnome-terminal -- bash -c "bash /home/jetson/m3.sh boot && echo && bash /home/jetson/m3.sh check && echo && read -p '✅ 启动流程结束，按回车关闭...'"
 Hidden=false
 NoDisplay=false
 X-GNOME-Autostart-enabled=true

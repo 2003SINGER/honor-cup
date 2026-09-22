@@ -36,7 +36,7 @@ start_agent() {
     > "$LOG/agent.log" 2>&1 < /dev/null &
 }
 
-wait_agent() { for i in $(seq 1 $(($2/2))); do has /cmd_vel && return 0; sleep 2; done; return 1; }
+wait_agent() { for i in $(seq 1 $(($1/2))); do has /cmd_vel && return 0; sleep 2; done; return 1; }
 
 dump_agent_diag() {
   echo "    ── 自动诊断（失败原因）──"

@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="dofbot_pro_descripton">
+    <xacro:arg name="initial_positions_file" default="initial_positions.yaml" />
+
+    <!-- Import dofbot_pro_descripton urdf file -->
+    <xacro:include filename="$(find dofbot_pro_descripton)/urdf/X5PLUS_V12.urdf" />
+
+    <!-- Import control_xacro -->
+    <xacro:include filename="dofbot_pro_descripton.ros2_control.xacro" />
+
+
+    <xacro:dofbot_pro_descripton_ros2_control name="FakeSystem" initial_positions_file="$(arg initial_positions_file)"/>
+
+</robot>

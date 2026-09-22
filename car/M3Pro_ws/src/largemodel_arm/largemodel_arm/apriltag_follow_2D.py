@@ -1,0 +1,488 @@
+import cv2
+import os
+import numpy as np
+from sensor_msgs.msg import Image, CameraInfo
+import message_filters
+from M3Pro_demo.vutils import draw_tags
+from dt_apriltags import Detector
+from cv_bridge import CvBridge
+import cv2 as cv
+from M3Pro_demo.Robot_Move import *
+from M3Pro_demo.compute_pose import *
+from arm_interface.srv import ArmKinemarics
+from arm_interface.msg import AprilTagInfo,CurJoints
+from arm_msgs.msg import ArmJoints
+from std_msgs.msg import Float32,Bool,Int16,UInt16,String
+encoding = ['16UC1', '32FC1']
+import time
+import transforms3d.euler as t3d_euler
+import math
+from rclpy.node import Node
+import rclpy
+from message_filters import Subscriber, TimeSynchronizer,ApproximateTimeSynchronizer
+from sensor_msgs.msg import Image
+from geometry_msgs.msg import Twist
+import threading
+import yaml
+from M3Pro_demo.PID import *
+from M3Pro_demo.compute_joint5 import *
+from ament_index_python.packages import get_package_share_directory
+offset_file = os.path.join(get_package_share_directory('arm_kin'), "param", "offset_value.yaml")
+with open(offset_file, 'r') as file:
+    offset_config = yaml.safe_load(file)
+print(offset_config)
+print("----------------------------")
+print("x_offset: ",offset_config.get('x_offset'))
+print("y_offset: ",offset_config.get('y_offset'))
+print("z_offset: ",offset_config.get('z_offset'))
+print('init done')
+
+
+class AprilTagTrackNode(Node):
+	def __init__(self, name):
+		super().__init__(name)
+		self.init_joints = [90, 130, 0, 20, 90, 0]
+		self.rgb_bridge = CvBridge()
+		self.depth_bridge = CvBridge()
+		self.pub_pos_falg = True
+		self.pr_time = time.time()
+		self.cnt = 0
+		self.cur_distance = 0.0
+		self.track_flag = True
+		self.prev_dist = 0
+		self.prev_angular = 0
+		self.prev_roll = 0
+		self.minDist = 200
+		self.grasp_Dist = 260
+		self.xy_track_flag = True
+		self.linearx_PID = (0.5, 0.0, 0.2)
+		self.lineary_PID = (0.2, 0.0, 0.1)
+		self.angz_PID = (0.5, 0.0, 0.5)
+		self.camera_info_K = [477.57421875, 0.0, 319.3820495605469, 0.0, 477.55718994140625, 238.64108276367188, 0.0, 0.0, 1.0]
+		self.EndToCamMat = np.array([[ 0 ,0 ,1 ,-1.00e-01],
+									 [-1  ,0 ,0  ,0],
+									 [0  ,-1  ,0 ,4.82000000e-02],
+									 [ 0.00000000e+00 , 0.00000000e+00 , 0.00000000e+00 , 1.00000000e+00]])
+		self.CurEndPos = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+		self.x_offset = offset_config.get('x_offset')
+		self.y_offset = offset_config.get('y_offset')
+		self.z_offset = offset_config.get('z_offset')
+		self.at_detector = Detector(searchpath=['apriltags'], 
+                                    families='tag36h11',
+                                    nthreads=8,
+                                    quad_decimate=2.0,
+                                    quad_sigma=0.0,
+                                    refine_edges=1,
+                                    decode_sharpening=0.25,
+                                    debug=0)
+
+		self.rgb_image_sub = Subscriber(self, Image, '/camera/color/image_raw')
+		self.sub_grasp_status = self.create_subscription(Bool,"grasp_done",self.get_graspStatusCallBack,100)
+		self.depth_image_sub = Subscriber(self, Image, '/camera/depth/image_raw')
+		self.CmdVel_pub = self.create_publisher(Twist,"cmd_vel",1)
+		self.pub_CurJoints = self.create_publisher(CurJoints,"Curjoints",1)
+		self.pos_info_pub = self.create_publisher(AprilTagInfo,"PosInfo",1)
+		self.pub_SixTargetAngle = self.create_publisher(ArmJoints, "arm6_joints", 10)
+		self.TargetJoint5_pub = self.create_publisher(Int16, "set_joint5", 10)
+		self.pub_beep = self.create_publisher(UInt16, "beep", 10)
+		self.pub_reset_gesture = self.create_publisher(Bool,"reset_gesture",1)
+		self.camera_info_sub = self.create_subscription(
+            CameraInfo, '/camera/color/camera_info', self.camera_info_callback, 10)
+		self.ts = ApproximateTimeSynchronizer([self.rgb_image_sub, self.depth_image_sub], 1, 0.5)
+		self.ts.registerCallback(self.callback)
+		self.pub_cur_joints = self.create_publisher(CurJoints,"Curjoints",1)
+		self.client = self.create_client(ArmKinemarics, 'get_kinemarics')
+		while not self.client.wait_for_service(timeout_sec=1.0):
+			self.get_logger().info('Service not available, waiting again...')	
+		self.largemodel_arm_done_pub = self.create_publisher(String,'/largemodel_arm_done',1)
+		self.pubSixArm(self.init_joints)
+		self.tag_size = 0.05
+		self.camera_matrix = None
+		self.dist_coeffs = None
+		self.rotation_direction = 1
+		self.roll_track_flag = True
+		self.start_grasp = False
+		self.move_y = True
+		self.compute_dist = ComputePose("compute_dist")
+		self.x_direction = 1
+		self.x_roll_track_flag = True
+		self.y_roll_track_flag = False
+		self.x_track_done = False
+		self.roll_track_done = False
+		self.y_track_done = False
+		self.adjust_dist = False
+
+		self.px = 0.0
+		self.py = 0.0
+
+		self.target_servox=90
+		self.target_servoy=180
+
+		self.xservo_pid = PositionalPID(0.25, 0.1, 0.05)
+		self.yservo_pid = PositionalPID(0.25, 0.1, 0.05)
+
+		self.y_out_range = False
+		self.x_out_range = False
+        
+		self.cur_joints = self.init_joints
+
+		self.a = 0
+		self.b = 0
+
+		self.pubPos_flag = False
+		self.XY_Track_flag = True
+		self.joint5 = Int16()
+		self.Grasp_flag = False
+
+		self.Done_flag = True
+
+		self.PID_init()
+
+		self.declare_parameter('target_id', 0.0)
+		self.TargetID = int(self.get_parameter('target_id').get_parameter_value().double_value)
+		print("Get self.target_id is ",self.TargetID)
+
+	def Beep_Loop(self):
+		beep =UInt16()
+		beep.data = 1
+		self.pub_beep.publish(beep)
+		time.sleep(1.0)
+		beep.data = 0
+		self.pub_beep.publish(beep)
+
+	def PID_init(self):
+		self.linearx_pid = simplePID(self.linearx_PID[0] / 1000.0, self.linearx_PID[1] / 1000.0, self.linearx_PID[2] / 1000.0)
+
+
+	def camera_info_callback(self, msg):
+        # 获取相机内参矩阵和畸变系数
+		self.camera_matrix = np.array(msg.k).reshape(3, 3)
+		self.dist_coeffs = np.array(msg.d)
+
+	def get_graspStatusCallBack(self,msg):
+		if msg.data == True:
+			# self.pubSixArm(self.init_joints)
+			self.track_flag = True
+			self.x_track_done = False
+			self.roll_track_done = False
+			self.y_track_done = False
+			self.XY_Track_flag = True
+			self.pubPos_flag = True
+			self.Done_flag = True
+			reset = Bool()
+			reset.data = True
+			self.pub_reset_gesture.publish(reset)
+			self.largemodel_arm_done_pub.publish(String(data="apriltag_follow_2D_done"))
+			
+            
+	def pubSixArm(self, joints, id=6, angle=180.0, runtime=2000):
+		arm_joints =ArmJoints()
+		arm_joints.joint1 = 180 - int(joints[0])
+		arm_joints.joint2 = joints[1]
+		arm_joints.joint3 = joints[2]
+		arm_joints.joint4 = joints[3]
+		arm_joints.joint5 = joints[4]
+		arm_joints.joint6 = joints[5]
+		arm_joints.time = runtime
+		self.pub_SixTargetAngle.publish(arm_joints)
+
+	def move_dist(self,dist):
+		if abs(self.prev_dist - dist) > 10:
+			self.prev_dist = dist
+			return
+		linear_x = self.linearx_pid.compute(dist, self.grasp_Dist)
+		if abs(dist - self.grasp_Dist) < 10: 
+			linear_x = 0
+			self.adjust_dist = False
+			self.start_grasp = True
+			print("Adjust Done.")
+            
+		self.pubVel(linear_x,0,0)
+    
+	def robot_move(self,point_x,dist,roll):
+		roll_degree = abs(math.degrees(roll))
+		print("point_x: ",point_x)
+		print("dist: ",dist)
+		print("roll_degree: ",roll_degree)
+		if abs(self.prev_dist - dist) > 30:
+			self.prev_dist = dist
+			return
+		linear_x = self.linearx_pid.compute(dist, self.minDist)
+		angular_z = -self.rotation_direction * 0.25
+		linera_y = self.rotation_direction * 0.1
+		if abs(dist - self.minDist) < 30: 
+			linear_x = 0
+			self.x_track_done = True
+		if abs(roll_degree - 175) < 5: 
+			angular_z = 0
+			#linera_y = 0
+			self.roll_track_done = True
+			linera_y = self.lineary_pid.compute(320,point_x)*0.3
+			if abs(point_x - 320) < 5:
+				linera_y = 0.0
+				self.y_track_done = True
+		print("linear_x: ",linear_x)
+		print("linear_y: ",linera_y)
+		print("angular_z: ",angular_z)
+		self.pubVel(linear_x,linera_y,angular_z)
+		if self.x_track_done == True and self.roll_track_done == True and self.y_track_done == True:
+			print("adjust dist to grasp it.")
+			self.track_flag = False
+			self.adjust_dist = True
+
+            
+	def pubVel(self,vx,vy,vz):
+		vel = Twist()
+		vel.linear.x = float(vx)
+		vel.linear.y = float(vy)
+		vel.angular.z = float(vz)
+		self.CmdVel_pub.publish(vel)
+            
+	def callback(self,color_frame,depth_frame):
+        # 将画面转为 opencv 格式
+		rgb_image = self.rgb_bridge.imgmsg_to_cv2(color_frame,'rgb8')
+		result_image = np.copy(rgb_image)
+		#depth_image
+		depth_image = self.depth_bridge.imgmsg_to_cv2(depth_frame, encoding[1])
+		#depth_to_color_image = cv2.applyColorMap(cv2.convertScaleAbs(depth_image, alpha=1.0), cv2.COLORMAP_JET)
+		frame = cv2.resize(depth_image, (640, 480))
+		depth_image_info = frame.astype(np.float32)
+
+		tags = self.at_detector.detect(cv2.cvtColor(rgb_image, cv2.COLOR_RGB2GRAY), False, None, 0.025)
+		tags = sorted(tags, key=lambda tag: tag.tag_id) 
+		draw_tags(result_image, tags, corners_color=(0, 0, 255), center_color=(0, 255, 0))
+		# show_frame = threading.Thread(target=self.img_out, args=(result_image,))
+		# show_frame.start()
+		# show_frame.join()
+		frame1 = cv2.cvtColor(result_image, cv2.COLOR_RGB2BGR)
+		cv2.imshow("result_image", frame1)
+		key = cv2.waitKey(1)
+		if len(tags) > 0 :
+            #print("tag: ",tags)
+			cur_id = tags[0].tag_id
+			if cur_id == self.TargetID:
+				center_x, center_y = tags[0].center
+				corners = tags[0].corners
+				#print("corners: ",corners)
+				cur_depth = depth_image_info[int(center_y),int(center_x)]
+				dist = round(self.cur_distance,3)
+				get_dist = self.compute_heigh(center_x,center_y,cur_depth/1000.0)
+				# if get_dist!=[]:
+				self.cur_distance = math.sqrt(get_dist[1] ** 2 + get_dist[0]** 2)*1000
+				if (abs(center_x-320) >10 or abs(center_y-240)>10) and self.XY_Track_flag==True:
+					self.XY_track(center_x,center_y)
+					print("Tracking")
+					print("-------------------------------------")
+	            
+				if abs(center_x-320) <10 and abs(center_y-240)<10 and self.Done_flag==True:
+					self.adjust_dist = True
+					self.pubCurrentJoints()
+					self.XY_Track_flag = False
+					print("self.cur_distance: ",self.cur_distance)
+					print("Adjust it.")
+					print("-------------------------------------")
+	
+				if self.adjust_dist== True:
+					if self.cur_distance>260:
+						dist_adjust = self.cur_distance
+						self.move_dist(dist_adjust)
+					else:
+						self.adjust_dist = False
+						self.start_grasp = True
+						self.pubVel(0,0,0)	
+	                    
+				if self.start_grasp == True:
+					tag = AprilTagInfo()
+					tag.id = tags[0].tag_id
+					center_x, center_y = tags[0].center
+					tag.x = center_x
+					tag.y = center_y
+					tag.z = depth_image_info[int(tag.y),int(tag.x)]/1000
+					vx = int(tags[0].corners[0][0]) - int(tags[0].corners[1][0])
+					vy = int(tags[0].corners[0][1]) - int(tags[0].corners[1][1])
+					target_joint5 = compute_joint5(vx,vy)
+					print("target_joint5: ",target_joint5)
+					self.joint5.data = int(target_joint5)                        
+					if tag.z!=0:
+						self.Done_flag = False
+						self.start_grasp = False
+						self.Beep_Loop()
+						self.TargetJoint5_pub.publish(self.joint5)
+						self.pos_info_pub.publish(tag)
+						print("Publish tag info.")
+					else:
+						print("Invalid distance.")
+						self.XY_Track_flag = True
+			else:
+				print("Not target apriltag.")
+                        
+	def XY_track(self,center_x,center_y):
+        #self.pub_arm(self.init_joint)
+		self.px = center_x
+		self.py = center_y
+
+		if not (self.target_servox>=180 and center_x<=320 and self.a == 1 or self.target_servox<=0 and center_x>=320 and self.a == 1):
+			if(self.a == 0):
+				self.xservo_pid.SystemOutput = center_x
+				if self.x_out_range == True:
+					if self.target_servox<0:
+						self.target_servox = 0
+						self.xservo_pid.SetStepSignal(630)
+					if self.target_servox>0:
+						self.target_servox = 180
+						self.xservo_pid.SetStepSignal(10)
+					self.x_out_range = False
+				else:
+					self.xservo_pid.SetStepSignal(320)
+					self.x_out_range = False
+               
+				self.xservo_pid.SetInertiaTime(0.01, 0.1)
+                
+				target_valuex = int(1500 + self.xservo_pid.SystemOutput)
+                
+				self.target_servox = int((target_valuex - 500) / 10) -10
+                #print("self.target_servox:",self.target_servox)
+                
+				if self.target_servox > 180:
+					self.x_out_range = True
+                    
+				if self.target_servox < 0:
+					self.x_out_range = True
+
+		if not (self.target_servoy>=180 and center_y<=240 and self.b == 1 or self.target_servoy<=0 and center_y>=240 and self.b == 1):
+			if(self.b == 0):
+				self.yservo_pid.SystemOutput = center_y
+				if self.y_out_range == True:
+					self.yservo_pid.SetStepSignal(450)
+					self.y_out_range = False
+				else:
+					self.yservo_pid.SetStepSignal(240)
+
+				self.yservo_pid.SetInertiaTime(0.01, 0.1)
+               
+				target_valuey = int(1500 + self.yservo_pid.SystemOutput)
+				if target_valuey<=1000:
+					target_valuey = 1000
+					self.y_out_range = True
+				self.target_servoy = int((target_valuey - 500) / 10) - 55#int((target_valuey - 500) / 10) - 55
+				if self.target_servoy > 180: self.target_servoy = 180 #if self.target_servoy > 390: self.target_servoy = 390
+				if self.target_servoy < 0: self.target_servoy = 0 
+                #print("self.target_servoy = ",self.target_servoy)
+				joint2 = 120 + self.target_servoy
+				joint3 =  self.target_servoy / 4.5
+				joint4 =  self.target_servoy / 3
+                
+
+        
+		joints_0 = [int(self.target_servox), int(joint2), int(joint3), int(joint4), 90, 30]
+		print(joints_0)
+		self.pubSixArm(joints_0)
+		self.cur_joints = joints_0
+
+	def pubCurrentJoints(self):
+		cur_joints = CurJoints()
+		cur_joints.joints = self.cur_joints
+		self.pub_cur_joints.publish(cur_joints) 
+    
+
+	# def img_out(self,frame):
+	# 	frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+	# 	cv2.imshow("result_image", frame)
+	# 	key = cv2.waitKey(1)
+
+
+	def compute_heigh(self,x,y,z):
+		camera_location = self.pixel_to_camera_depth((x,y),z)
+        #print("camera_location: ",camera_location)
+		PoseEndMat = np.matmul(self.EndToCamMat, self.xyz_euler_to_mat(camera_location, (0, 0, 0)))
+        #PoseEndMat = np.matmul(self.xyz_euler_to_mat(camera_location, (0, 0, 0)),self.EndToCamMat)
+		EndPointMat = self.get_end_point_mat()
+		WorldPose = np.matmul(EndPointMat, PoseEndMat) 
+        #WorldPose = np.matmul(PoseEndMat,EndPointMat)
+		pose_T, pose_R = self.mat_to_xyz_euler(WorldPose)
+		pose_T[0] = pose_T[0] + self.x_offset
+		pose_T[1] = pose_T[1] + self.y_offset
+		pose_T[2] = pose_T[2] + self.z_offset
+		#print("pose_T: ",pose_T)
+		#print("pose_R: ",pose_R)
+		return pose_T
+
+	def get_end_point_mat(self):
+        #print("Get the current pose is ",self.CurEndPos)
+		self.get_current_end_pos()
+		end_w,end_x,end_y,end_z = self.euler_to_quaternion(self.CurEndPos[3],self.CurEndPos[4],self.CurEndPos[5])
+		endpoint_mat = self.xyz_quat_to_mat([self.CurEndPos[0],self.CurEndPos[1],self.CurEndPos[2]],[end_w,end_x,end_y,end_z])
+        #print("endpoint_mat: ",endpoint_mat)
+		return endpoint_mat
+        
+	def pixel_to_camera_depth(self,pixel_coords, depth):
+		fx, fy, cx, cy = self.camera_info_K[0],self.camera_info_K[4],self.camera_info_K[2],self.camera_info_K[5]
+		px, py = pixel_coords
+		x = (px - cx) * depth / fx
+		y = (py - cy) * depth / fy
+		z = depth
+		return np.array([x, y, z])
+        
+	def xyz_euler_to_mat(self,xyz, euler, degrees=False):
+		if degrees:
+			mat = tfs.euler.euler2mat(math.radians(euler[0]), math.radians(euler[1]), math.radians(euler[2]))
+		else:
+			mat = tfs.euler.euler2mat(euler[0], euler[1], euler[2])
+		mat = tfs.affines.compose(np.squeeze(np.asarray(xyz)), mat, [1, 1, 1])
+		return mat 
+        
+	def euler_to_quaternion(self,roll,pitch, yaw):
+		quaternion = tf.quaternion_from_euler(roll, pitch, yaw)
+		qw = quaternion[3]
+		qx = quaternion[0]
+		qy = quaternion[1]
+		qz = quaternion[2]
+        #print("quaternion: ",quaternion )
+		return np.array([qw, qx, qy, qz])
+        
+	def xyz_quat_to_mat(self,xyz, quat):
+		mat = tfs.quaternions.quat2mat(np.asarray(quat))
+		mat = tfs.affines.compose(np.squeeze(np.asarray(xyz)), mat, [1, 1, 1])
+		return mat
+        
+	def mat_to_xyz_euler(self,mat, degrees=False):
+		t, r, _, _ = tfs.affines.decompose(mat)
+		if degrees:
+			euler = np.degrees(tfs.euler.mat2euler(r))
+		else:
+			euler = tfs.euler.mat2euler(r)
+		return t, euler
+
+	def get_current_end_pos(self):
+		request = ArmKinemarics.Request()
+		request.cur_joint1 = float(self.cur_joints[0])
+		request.cur_joint2 = float(self.cur_joints[1])
+		request.cur_joint3 = float(self.cur_joints[2])
+		request.cur_joint4 = float(self.cur_joints[3])
+		request.cur_joint5 = float(self.cur_joints[4])
+		request.kin_name = "fk"
+		future = self.client.call_async(request)
+		future.add_done_callback(self.get_fk_respone_callback)
+
+	def get_fk_respone_callback(self, future):
+		try:
+			response = future.result()
+			#self.get_logger().info(f'Response received: {response.x}')
+			self.CurEndPos[0] = response.x 
+			self.CurEndPos[1] = response.y
+			self.CurEndPos[2] = response.z 
+			self.CurEndPos[3] = response.roll
+			self.CurEndPos[4] = response.pitch
+			self.CurEndPos[5] = response.yaw
+			#print("self.CurEndPose: ",self.CurEndPos)
+		except Exception as e:
+			self.get_logger().error(f'Service call failed: {e}')
+
+		   
+def main():
+	print('----------------------')
+	rclpy.init()
+	apriltag_track = AprilTagTrackNode('ApriltagTrack_node')
+	rclpy.spin(apriltag_track)
+
+           

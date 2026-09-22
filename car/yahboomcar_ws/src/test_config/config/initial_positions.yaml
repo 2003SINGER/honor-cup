@@ -1,0 +1,9 @@
+# Default initial positions for dofbot_pro_descripton's ros2_control fake system
+
+initial_positions:
+  arm1_Joint: 0
+  arm2_Joint: 0
+  arm3_Joint: 0
+  arm4_Joiint: 0
+  arm5_Joint: 0
+  rlink1_Joint: 0

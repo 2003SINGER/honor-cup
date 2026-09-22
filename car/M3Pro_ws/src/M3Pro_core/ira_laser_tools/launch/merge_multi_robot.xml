@@ -1,0 +1,19 @@
+<launch>
+  <arg name="ns" description="Namespace to launch nodes in" default="robot1"/>
+  
+  <node pkg="ira_laser_tools" exec="laserscan_multi_merger" name="laserscan_multi_merger" namespace="$(var ns)">
+	  <param from="$(find-pkg-share ira_laser_tools)/config/laserscan_merge_Multi_$(var ns).yaml"/>
+  </node>
+
+  <node pkg="tf2_ros" exec="static_transform_publisher" name="static_transform_publisher_imu" args="0.06 0.0 0.080 0 0 0 $(var ns)/base_link $(var ns)/imu_frame" namespace="$(var ns)">
+  </node>	
+
+  <node pkg="tf2_ros" exec="static_transform_publisher" name="static_transform_publisher_laser0_frame" args="-0.11617 0.09156 0.1253 0 0 0 $(var ns)/base_link $(var ns)/laser0_frame" namespace="$(var ns)">
+  </node>
+
+  <node pkg="tf2_ros" exec="static_transform_publisher" name="static_transform_publisher_laser1_frame" args="0.10766 -0.09078 0.1253 0 0 0 $(var ns)/base_link $(var ns)/laser1_frame" namespace="$(var ns)">
+  </node>
+
+  <include file="$(find-pkg-share M3Pro)/launch/display_$(var ns).launch.py"/>
+
+</launch>

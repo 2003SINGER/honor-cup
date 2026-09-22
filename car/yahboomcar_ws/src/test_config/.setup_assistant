@@ -1,0 +1,25 @@
+moveit_setup_assistant_config:
+  urdf:
+    package: dofbot_pro_descripton
+    relative_path: urdf/X5PLUS_V12.urdf
+  srdf:
+    relative_path: config/dofbot_pro_descripton.srdf
+  package_settings:
+    author_name: yahboom
+    author_email: yahboom@123.com
+    generated_timestamp: 1731503424
+  control_xacro:
+    command:
+      - position
+    state:
+      - position
+      - velocity
+  modified_urdf:
+    xacros:
+      - control_xacro
+  control_xacro:
+    command:
+      - position
+    state:
+      - position
+      - velocity

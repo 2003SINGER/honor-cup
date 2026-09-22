@@ -1,0 +1,11 @@
+aliyun-python-sdk-core==2.16.0
+aliyun-python-sdk-kms==2.16.5
+dify-client==0.1.10
+torchaudio==2.6.0
+webencodings==0.5.1
+webrtcvad==2.0.10
+websocket-client==1.8.0
+websockets==15.0.1
+pygame==2.6.1
+playsound==1.3.0
+piper-tts==1.2.0

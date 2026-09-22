@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="M3Pro">
+    <xacro:arg name="initial_positions_file" default="initial_positions.yaml" />
+
+    <!-- Import M3Pro urdf file -->
+    <xacro:include filename="$(find yahboom_M3Pro_description)/urdf/M3Pro.urdf" />
+
+    <!-- Import control_xacro -->
+    <xacro:include filename="M3Pro.ros2_control.xacro" />
+
+
+    <xacro:M3Pro_ros2_control name="FakeSystem" initial_positions_file="$(arg initial_positions_file)"/>
+
+</robot>

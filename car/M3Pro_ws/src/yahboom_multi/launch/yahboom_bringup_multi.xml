@@ -1,0 +1,15 @@
+<launch>
+	<arg name="robot_name" default="robot1"/>
+	<include file="$(find-pkg-share ira_laser_tools)/launch/merge_multi_robot.xml">
+		<arg name="ns" value="$(var robot_name)"/>
+	</include>
+	
+	<include file="$(find-pkg-share yahboom_laser_filter)/launch/laser_filter_node_multi.xml">
+		<arg name="ns" value="$(var robot_name)"/>
+	</include>	
+
+	<include file="$(find-pkg-share ekf_bringup)/launch/ekf_multi.xml">
+		<arg name="ns" value="$(var robot_name)"/>
+	</include>		
+	
+</launch>	

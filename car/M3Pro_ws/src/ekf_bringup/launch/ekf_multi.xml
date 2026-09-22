@@ -1,0 +1,13 @@
+<launch>
+  <arg name="ns" description="Namespace to launch nodes in" default="robot2"/>
+  
+  <node pkg="robot_localization" exec="ekf_node" name="ekf_filter_node" namespace="$(var ns)">
+	  <param from="$(find-pkg-share ekf_bringup)/params/$(var ns)_ekf.yaml"/>
+	  <remap from="odometry/filtered" to="odom" />
+  </node>
+
+  <node pkg="imu_filter_madgwick" exec="imu_filter_madgwick_node" name="imu_filter_madgwick_node" namespace="$(var ns)">
+	  <remap from="/imu/data_raw" to="imu/data_raw" />
+  </node>
+	
+</launch>

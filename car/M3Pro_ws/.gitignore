@@ -1,0 +1,12 @@
+build/
+install/
+log/
+# resources_file/
+# meshes/
+# urdf/
+# resource/
+# test/
+# *.cfg
+.ipynb_checkpoints
+__pycache__
+# __init__.py

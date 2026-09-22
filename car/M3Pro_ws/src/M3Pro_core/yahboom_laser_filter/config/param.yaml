@@ -1,0 +1,4 @@
+laser_filter_node:
+  ros__parameters:
+    angle_min: -45.0
+    angle_max: 45.0

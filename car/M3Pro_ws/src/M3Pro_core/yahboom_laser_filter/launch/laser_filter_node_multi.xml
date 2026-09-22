@@ -1,0 +1,11 @@
+<launch>
+  <arg name="ns" description="Namespace to launch nodes in" default="robot2"/>
+  
+  <node pkg="yahboom_laser_filter" exec="laser_filter_node" name="laser_filter_node" namespace="$(var ns)">
+	  <param name="angle_min" value="-180.0"/>
+	  <param name="angle_max" value="180.0"/>
+	  <remap from="/scan_multi" to="scan_multi" />
+	  <remap from="/scan" to="scan" />
+  </node>
+
+</launch>

@@ -8,9 +8,17 @@ venv/
 build/
 install/
 log/
+Log/
 devel/
 *.bag
 *.mcap
+*.pbstream
+
+# Notebook / 模型
+.ipynb_checkpoints/
+*.onnx
+*.pt
+*.engine
 
 # 数据与产出
 *.log

@@ -25,6 +25,10 @@ DIRS = {'N': (0, 1), 'E': (1, 0), 'S': (0, -1), 'W': (-1, 0)}
 OPP = {'N': 'S', 'S': 'N', 'E': 'W', 'W': 'E'}
 ORDER_D = {'N': 'N', 'E': 'E', 'S': 'S', 'W': 'W'}
 
+# 双 TOF 雷达安装偏移 (URDF M3Pro.urdf laser_frame_Joint origin, 车体系: x前 y左)
+# laser0 = 后左 (-0.11617, +0.09156) · laser1 = 前右 (+0.10766, -0.09078) —— 对角分布
+LIDAR_OFFS = [(-0.11617, 0.09156), (0.10766, -0.09078)]
+
 # ---------------- 迷宫 ----------------
 
 def gen_maze(seed):
@@ -225,16 +229,18 @@ def localize(seed, meters, v=0.30, dt=0.05,
         est = [C / 2, C / 2]
         register = {}                               # ('x'|'y', 格线坐标) -> 精确坐标
         errs = []
-        anomalies = 0                               # 违反「d≡0.2 mod 0.4」的观测(=方块/噪声)
+        anomalies = 0                               # 地图系门限外观测(=方块/打滑/噪声)
         traveled = 0.0
         slip_done = False
 
-        if mode == 'reg':                           # 启动扫描: 4m 内墙全部入库
-            for dv in DV:
-                d = _raycast(true, dv, walls)
+        if mode == 'reg':                           # 启动扫描: 4m 内墙全部入库(两只雷达轮询)
+            for si, dv in enumerate(DV):
+                off = LIDAR_OFFS[si % 2]
+                sen = [true[0] + off[0], true[1] + off[1]]
+                d = _raycast(sen, dv, walls)
                 if d < 4.0:
                     a = 0 if dv[0] else 1
-                    W = true[a] + dv[a] * d
+                    W = sen[a] + dv[a] * d
                     register[(('x', 'y')[a], round(W / C) * C)] = W
 
         while traveled < meters:
@@ -258,32 +264,36 @@ def localize(seed, meters, v=0.30, dt=0.05,
                 traveled += m
 
                 if mode != 'raw':
-                    for dv in sides:                # 前 + 左右三向观测
+                    # 观测建在【地图坐标系】: 墙线坐标 = 传感器位置 + sgn*墙距, 恒在格点上
+                    # 传感器世界位置 = 车位姿 + 旋转后的安装偏移(URDF: laser0 后左 / laser1 前右)
+                    fwd = hv
+                    left = (-hv[1], hv[0])              # 朝向左转 90°
+                    for idx, dv in enumerate(sides):
                         a = 0 if dv[0] else 1
                         sgn = dv[a]
-                        d_true = _raycast(true, dv, walls)
+                        off = LIDAR_OFFS[idx % 2]       # 车体系偏移 (fx前, fy左)
+                        w_off = (off[0] * fwd[0] + off[1] * left[0],
+                                 off[0] * fwd[1] + off[1] * left[1])
+                        sen_t = [true[0] + w_off[0], true[1] + w_off[1]]
+                        sen_e = [est[0] + w_off[0], est[1] + w_off[1]]
+                        d_true = _raycast(sen_t, dv, walls)
                         if d_true >= 4.0:
                             continue
                         d_meas = d_true + rnd.gauss(0, lidar_noise)
-                        # 离散关系校验(仅侧向射线): 侧墙距中线恒 ≡ 0.2 (mod 0.4),
-                        # 违反者 = 方块/噪声。前方射线在格内移动时墙距连续变化, 不适用此校验。
-                        if dv != hv:
-                            rel = (d_meas - C / 2) % C
-                            if min(rel, C - rel) > 0.05:
-                                anomalies += 1
-                                continue
-                        cand = est[a] + sgn * d_meas            # 观测推出的墙坐标
+                        cand = sen_e[a] + sgn * d_meas              # 地图系墙坐标估计
                         key = (('x', 'y')[a], round(cand / C) * C)
                         if mode == 'reg':
                             W = register.get(key)
                             if W is not None and abs(cand - W) <= gate:   # 查册命中且过门限
-                                est[a] += ((W - sgn * d_meas) - est[a]) * snap_gain
+                                est[a] += ((W - sgn * d_meas - w_off[a]) - est[a]) * snap_gain
                             elif W is None and abs(cand - key[1]) <= gate:  # 新墙: 门限内才收
                                 register[key] = key[1]
-                                est[a] += ((key[1] - sgn * d_meas) - est[a]) * snap_gain
-                            # 命中但残差超门限(位姿已偏) 或 新墙超门限 → 丢弃, 宁可不用不可吸错
+                                est[a] += ((key[1] - sgn * d_meas - w_off[a]) - est[a]) * snap_gain
+                            else:
+                                anomalies += 1              # 残差超门限 = 方块/打滑/噪声
+                                continue
                         else:                                   # naive: 无脑硬吸
-                            est[a] = key[1] - sgn * d_meas
+                            est[a] = key[1] - sgn * d_meas - w_off[a]
 
                     # 路口(格中心)事件: 黑线分叉可检测 → 沿航向吸附到格点
                     if abs((true[axis] % C) - C / 2) < v * dt / 2:

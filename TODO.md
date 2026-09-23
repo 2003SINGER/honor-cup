@@ -123,8 +123,14 @@ ros2 run M3Pro_demo follow_line
 - [x] 搭 **7×7 迷宫仿真**（通道 40cm、场地 2.8m×2.8m）→ `software/sim/maze_sim.py`（09-23）
 - [x] **MazeMap 地图数据结构**（已知/未知路线、frontier、回终点最短路、JSON 可视化）→ `software/src/mazemap.py`（09-23，已与仿真对拍）
 - [x] MazeMap 接进 explore —— 仿真与实车共用同一决策代码（09-23）
-- [ ] **弧线过弯实验**：赛题黑线仅为"导航辅助"（非强制沿线），位置环弧线过弯 vs 停-转-走，
-      40 弯预计省 30~50s —— 仿真量化 + 内角余量校核
+- [x] **弧线过弯实验**（09-23 完成）：`maze_sim.py explore --corner all` ——
+      30 种子: pivot 186.7s → holo 109.8s(-41%) → **arc 78.2s(-58%)**，路程还省 3.6m；
+      内角余量与直道相同（弧线绕内角点，车缘距角 9.25cm）
+- [x] **全向跟踪控制器**（09-23）：`software/src/tracker.py` 弧长参数化纯跟踪，
+      麦轮边走边转；8 噪声种子全过，最大横向偏差 6-8cm（余量内）
+- [x] **决策层 ROS2 包骨架**（09-23）：`software/ros2/m3pro_nav/`（mazemap+tracker 已并入，
+      传感器接口标 ⛔ 待实车填写）
+- [x] **日志工具**（09-23）：`m3.sh log` 一键录 rosbag（odom/scan/cmd_vel/imu/tf/rgb）
 - [ ] 在仿真里验证搜索策略，量化"探索完 7×7 需要多久"
 - [ ] 做**罚时敏感性分析**：不同深度方块漏取的代价，倒推"该不该进深支路"
 

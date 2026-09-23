@@ -22,4 +22,6 @@
 ERROR:dashscope:Request failed, request_id: b4ff9d1f15704029bbd6ed593b0ccb2c, http_code: 44 error_name: Arrearage, error_message: Access denied, please make sure your account is in good standing.
 ERROR:dashscope:{"status_code": 44, "request_id": "b4ff9d1f15704029bbd6ed593b0ccb2c", "code": "Arrearage", "message": "Access denied, please make sure your account is in good standing.", "output": null, "usage": null}
 ASR Error:ASR Error:Access denied, please make sure your account is in good standing.
+[ERROR] [1790088615.082098753] [rviz2]: Error retrieving file [package://M3Pro/meshes/rwheel2.STL]: Package [M3Pro] does not exist
+[INFO] [1790088616.444122314] [rviz]: Message Filter dropping message: frame 'base_link' at time 1790088615.022 for reason 'discarding message because the queue is full'
 

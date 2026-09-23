@@ -23,8 +23,8 @@ def generate_launch_description():
             executable='calibrate_angular',
             name='calibrate_angular',
             parameters=[
-                {'base_frame': 'base_footprint'},
-                {'odom_frame': 'odom'}
+                {'base_frame': 'robot1/base_footprint'},
+                {'odom_frame': 'robot1/odom'}
                 ],
             output='screen'
             )

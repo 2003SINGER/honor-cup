@@ -176,18 +176,43 @@ def explore(walls, entry, ex, order, blocks, v=0.30, t_turn=1.5, t_grab=1.0):
         cur = drive(cur, d)
     return st_
 
-# ---------------- 定位仿真 ----------------
+# ---------------- 定位仿真（墙登记册版） ----------------
+
+def _raycast(true, dvec, walls, rmax=4.0):
+    """真值位置沿 dvec 单位向量打雷达, 返回到第一面墙的距离(>maze 边界则 rmax)"""
+    ax = 0 if dvec[0] else 1
+    s = 1 if dvec[ax] > 0 else -1
+    dd = {(1, 0): 'E', (-1, 0): 'W', (0, 1): 'N', (0, -1): 'S'}[dvec]
+    i, j = min(max(int(true[0] // C), 0), N - 1), min(max(int(true[1] // C), 0), N - 1)
+    d = ((i + 1) * C - true[0]) if (ax == 0 and s > 0) else \
+        (true[0] - i * C) if ax == 0 else \
+        ((j + 1) * C - true[1]) if s > 0 else (true[1] - j * C)
+    while d <= rmax:
+        if dd in walls.get((i, j), {'E', 'W', 'N', 'S'}):   # 边界外的格子视为全墙
+            return d
+        i += dvec[0]
+        j += dvec[1]
+        if not (0 <= i < N and 0 <= j < N):
+            return rmax
+        d += C
+    return rmax
+
 
 def localize(seed, meters, v=0.30, dt=0.05,
              odom_scale=1.03, odom_noise=0.02,          # 里程计: 比例误差 + 每步噪声σ(m)
              lidar_noise=0.01,                          # 雷达测距噪声 σ(m)
-             snap_gain=0.8):
-    """沿迷宫走廊走 meters 米, 对比「纯里程计推算」 vs 「墙离散性校正」的定位误差.
-       校正 A(横向): 走廊两侧墙距标称 0.2m, 雷达实测偏差 → 横向误差按增益吸回
-       校正 B(纵向): 路口=格点事件(黑线分叉可检测) → 沿航向坐标吸附到格点
-       每个种子跑两遍(同轨迹不同噪声流): 一遍开校正, 一遍关校正"""
-    def run(with_snap):
-        rnd = random.Random(seed + (0 if with_snap else 1000))
+             snap_gain=0.8, gate=0.1,                   # 吸附门限: 必须 < 半格0.2m, 否则会级联吸错
+             slip_at=0.4, slip=0.25):                   # 中途打滑: 推算坐标突跳(模拟撞墙/打滑)
+    """定位对比 · 三种模式走同一条轨迹(各 30m, 独立噪声流):
+       raw    纯里程计推算
+       naive  无脑吸附: 每次墙观测都硬吸到最近格线 —— 吸附错了会锁死
+       reg    墙登记册 + 门限: 启动时(漂移=0,吸附可信)登记 4m 内墙的绝对格线坐标;
+              之后观测先查册, 查到→按登记坐标校正; 查不到→|残差|≤gate 才新增, 否则丢弃
+       中途注入一次打滑 est += slip (0.25m > 半格 0.2m) —— 用户担心的「吸附错」场景"""
+    DV = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+
+    def run(mode):
+        rnd = random.Random(seed + {'raw': 0, 'naive': 1000, 'reg': 2000}[mode])
         walls, entry, ex, _ = gen_maze(seed)
         NBR = {}
         for (i, j) in walls:
@@ -196,10 +221,21 @@ def localize(seed, meters, v=0.30, dt=0.05,
                            and 0 <= i + DIRS[d][0] < N and 0 <= j + DIRS[d][1] < N]
 
         cell, came, heading = entry, None, 'N'
-        true = [0.0, 0.0]
-        est = [0.0, 0.0]
+        true = [C / 2, C / 2]                       # 入口格中心, 位姿已知 → 漂移=0
+        est = [C / 2, C / 2]
+        register = {}                               # ('x'|'y', 格线坐标) -> 精确坐标
         errs = []
         traveled = 0.0
+        slip_done = False
+
+        if mode == 'reg':                           # 启动扫描: 4m 内墙全部入库
+            for dv in DV:
+                d = _raycast(true, dv, walls)
+                if d < 4.0:
+                    a = 0 if dv[0] else 1
+                    W = true[a] + dv[a] * d
+                    register[(('x', 'y')[a], round(W / C) * C)] = W
+
         while traveled < meters:
             opts = list(NBR[cell])
             if came in opts and len(opts) > 1:
@@ -207,36 +243,60 @@ def localize(seed, meters, v=0.30, dt=0.05,
             heading = rnd.choice(opts)
             axis = 0 if DIRS[heading][0] else 1
             perp = 1 - axis
+            hv = DIRS[heading]
+            sides = [hv, (0, 1) if abs(hv[0]) else (1, 0), (0, -1) if abs(hv[0]) else (-1, 0)]
+
             for _ in range(int(C / dt)):
-                # 真值: 理想沿线运动
-                true[0] += DIRS[heading][0] * v * dt
-                true[1] += DIRS[heading][1] * v * dt
-                # 里程计推算: 比例误差 + 噪声
+                true[0] += hv[0] * v * dt
+                true[1] += hv[1] * v * dt
                 m = v * dt
-                est[0] += DIRS[heading][0] * m * odom_scale + rnd.gauss(0, odom_noise)
-                est[1] += DIRS[heading][1] * m * odom_scale + rnd.gauss(0, odom_noise)
+                est[0] += hv[0] * m * odom_scale + rnd.gauss(0, odom_noise)
+                est[1] += hv[1] * m * odom_scale + rnd.gauss(0, odom_noise)
                 traveled += m
 
-                if with_snap:
-                    # 校正 A: 侧墙距标称 0.2m → 估计横向漂移并按增益吸回
-                    drift_perp = est[perp] - true[perp]
-                    meas = drift_perp + rnd.gauss(0, lidar_noise)   # 雷达对横向漂移的含噪观测
-                    est[perp] -= meas * snap_gain
-                    # 校正 B: 路口(格中心)事件 → 沿航向吸附到格点
+                if mode != 'raw':
+                    for dv in sides:                # 前 + 左右三向观测
+                        a = 0 if dv[0] else 1
+                        sgn = dv[a]
+                        d_true = _raycast(true, dv, walls)
+                        if d_true >= 4.0:
+                            continue
+                        d_meas = d_true + rnd.gauss(0, lidar_noise)
+                        cand = est[a] + sgn * d_meas            # 观测推出的墙坐标
+                        key = (('x', 'y')[a], round(cand / C) * C)
+                        if mode == 'reg':
+                            W = register.get(key)
+                            if W is not None and abs(cand - W) <= gate:   # 查册命中且过门限
+                                est[a] += ((W - sgn * d_meas) - est[a]) * snap_gain
+                            elif W is None and abs(cand - key[1]) <= gate:  # 新墙: 门限内才收
+                                register[key] = key[1]
+                                est[a] += ((key[1] - sgn * d_meas) - est[a]) * snap_gain
+                            # 命中但残差超门限(位姿已偏) 或 新墙超门限 → 丢弃, 宁可不用不可吸错
+                        else:                                   # naive: 无脑硬吸
+                            est[a] = key[1] - sgn * d_meas
+
+                    # 路口(格中心)事件: 黑线分叉可检测 → 沿航向吸附到格点
                     if abs((true[axis] % C) - C / 2) < v * dt / 2:
                         node = round((true[axis] - C / 2) / C) * C + C / 2
                         est[axis] -= (est[axis] - node) * snap_gain
 
+                if mode != 'raw' and not slip_done and traveled > meters * slip_at:
+                    est[0] += slip                              # 打滑/撞墙: 推算突跳
+                    slip_done = True
+
                 errs.append(((est[0] - true[0]) ** 2 + (est[1] - true[1]) ** 2) ** 0.5)
-            cell = (cell[0] + DIRS[heading][0], cell[1] + DIRS[heading][1])
+
+            cell = (cell[0] + hv[0], cell[1] + hv[1])
             came = OPP[heading]
         return errs
 
-    off = run(False)
-    on = run(True)
-    return {'meters': meters,
-            'rmse_off': (sum(e * e for e in off) / len(off)) ** 0.5, 'max_off': max(off),
-            'rmse_on': (sum(e * e for e in on) / len(on)) ** 0.5, 'max_on': max(on)}
+    out = {}
+    for mode in ('raw', 'naive', 'reg'):
+        e = run(mode)
+        out[mode] = {'rmse': (sum(x * x for x in e) / len(e)) ** 0.5, 'max': max(e), 'errs': e}
+    out['meters'] = meters
+    out['slip'] = slip
+    return out
 
 # ---------------- CLI ----------------
 
@@ -263,14 +323,20 @@ def cmd_explore(a):
 
 
 def cmd_localize(a):
+    print(f"定位仿真 · 每种子走 {a.meters}m · 里程计比例误差+3% · 中途打滑 est+0.25m(>半格0.2m)\n")
+    print(f"{'种子':<6}{'raw-RMSE':>10}{'naive-RMSE':>12}{'reg-RMSE':>10}{'naive峰值':>10}{'reg峰值':>9}")
+    rs = {'raw': [], 'naive': [], 'reg': []}
     for s in range(a.seeds):
         r = localize(s, a.meters)
-        if s == 0:
-            print(f"定位仿真 · 每个种子独立走 {r['meters']:.0f} m · 里程计比例误差 +3% · 噪声 σ2cm\n")
-            print(f"{'种子':<6}{'无校正RMSE':>12}{'无校正峰值':>12}{'墙吸附RMSE':>12}{'墙吸附峰值':>12}")
-        print(f"{s:<6}{r['rmse_off']:>11.3f}m{r['max_off']:>11.3f}m{r['rmse_on']:>11.3f}m{r['max_on']:>11.3f}m")
-    print("\n注: 「墙吸附」= 走廊侧墙距标称 0.2m 的横向校正 + 路口格点事件的纵向校正。")
-    print("    误差参数是占位值, 实车实测后回填 (跟线误差/转弯误差/雷达噪声)。")
+        for k in rs:
+            rs[k].append(r[k]['rmse'])
+        print(f"{s:<6}{r['raw']['rmse']:>9.3f}m{r['naive']['rmse']:>11.3f}m"
+              f"{r['reg']['rmse']:>9.3f}m{r['naive']['max']:>9.3f}m{r['reg']['max']:>8.3f}m")
+    print('-' * 60)
+    print(f"{'均值':<6}{st.mean(rs['raw']):>9.3f}m{st.mean(rs['naive']):>11.3f}m"
+          f"{st.mean(rs['reg']):>9.3f}m")
+    print("\nnaive = 无脑吸附(用户担心的「吸附错」: 打滑后锁死在错误格线上)")
+    print("reg   = 墙登记册 + 门限(启动时位姿准→首批墙可信入库; 之后查册校正, 残差>0.1m 丢弃)")
 
 
 def cmd_maze(a):

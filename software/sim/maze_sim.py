@@ -15,6 +15,7 @@ M3 Pro 迷宫 7×7 网格仿真 —— 场地建好之前的算法测试台
   python3 maze_sim.py maze     --seed 3        (打印一个迷宫看看)
 """
 
+import math
 import argparse
 import random
 import statistics as st
@@ -97,9 +98,13 @@ def rel_of(d, heading):
     return m[d]
 
 
-def explore(walls, entry, ex, order, blocks, v=0.30, t_turn=1.5, t_grab=1.0):
+def explore(walls, entry, ex, order, blocks, v=0.30, t_turn=1.5, t_grab=1.0, corner='pivot'):
     """DFS 探索 —— 直接跑在 MazeMap 上（与实车决策层同一数据结构，09-23 接入）.
        order: 相对方向优先级, 如 'LFR' (B 永远最后).
+       corner: 过弯方式
+         pivot 停-转-走（巡线逻辑, 基线）
+         holo  麦轮全向: 旋转与平移并行, 转弯零额外耗时（位置环解锁）
+         arc   弧线切角: 转弯不停车, 且切掉路口角(路程省 C-(π/2)(C/2), 弧段限速 0.7v)
        提前终止: 出口已发现 且 方块收齐 → path_between 直奔出口.
        返回统计 dict"""
     m = MazeMap(N, entry)
@@ -108,11 +113,21 @@ def explore(walls, entry, ex, order, blocks, v=0.30, t_turn=1.5, t_grab=1.0):
     true_open = {c: [d for d in DIRS if d not in walls[c]] for c in walls}
 
     def turn_to(d):
-        if st_['heading'] != d:
-            r = 2 if st_['heading'] == OPP[d] else 1     # 原地掉头按两次 90° 计
-            st_['turns'] += r
+        if st_['heading'] == d:
+            return
+        rev = st_['heading'] == OPP[d]               # 是否 180° 掉头
+        r = 2 if rev else 1
+        st_['turns'] += r
+        if corner == 'holo':
+            pass                                     # 全向: 旋转与平移并行, 零额外耗时
+        elif corner == 'arc' and not rev:
+            # 弧线切角(90°): 不停车, 切掉路口角
+            cut = C - (math.pi / 2) * (C / 2)        # 路程省 ~0.086m (r=C/2)
+            st_['dist'] -= cut
+            st_['time'] += -t_turn + cut / (v * 0.7)  # 弧段限速 0.7v, 无原地转
+        else:                                        # pivot / arc 的 180° 掉头: 原地转
             st_['time'] += t_turn * r
-            st_['heading'] = d
+        st_['heading'] = d
 
     def drive(d):
         turn_to(d)
@@ -301,21 +316,25 @@ def localize(seed, meters, v=0.30, dt=0.05,
 
 def cmd_explore(a):
     orders = a.orders.split(',')
-    print(f"探索仿真 · {a.seeds} 个迷宫种子 · 车速 {a.v} m/s · 抓取 {a.grab}s/个 · 不剪枝\n")
-    print(f"{'顺序':<8}{'平均路程(m)':>12}{'最短':>8}{'最长':>8}{'平均用时(s)':>12}{'出口发现(m)':>12}")
-    for o in orders:
-        res = []
-        for s in range(a.seeds):
-            rnd = random.Random(1000 + s)
-            walls, entry, ex, _ = gen_maze(s)
-            cells = [(i, j) for i in range(N) for j in range(N) if (i, j) not in (entry, ex)]
-            blocks = set(rnd.sample(cells, 8))
-            r = explore(walls, entry, ex, o, blocks, v=a.v, t_grab=a.grab)
-            res.append(r)
-        d = [r['dist'] for r in res]
-        t = [r['time'] for r in res]
-        e = [r['exit_at'] for r in res]
-        print(f"{o:<8}{st.mean(d):>12.1f}{min(d):>8.1f}{max(d):>8.1f}{st.mean(t):>12.1f}{st.mean(e):>12.1f}")
+    corners = ['pivot', 'holo', 'arc'] if a.corner == 'all' else [a.corner]
+    print(f"探索仿真 · {a.seeds} 个迷宫种子 · 车速 {a.v} m/s · 抓取 {a.grab}s/个 · 不剪枝")
+    print(f"过弯方式: {', '.join(corners)}   (pivot=停转走 holo=麦轮边走边转 arc=弧线切角)\n")
+    for corner in corners:
+        print(f"── 过弯方式 [{corner}] ──")
+        print(f"{'顺序':<8}{'平均路程(m)':>12}{'最短':>8}{'最长':>8}{'平均用时(s)':>12}{'出口发现(m)':>12}")
+        for o in orders:
+            res = []
+            for s in range(a.seeds):
+                rnd = random.Random(1000 + s)
+                walls, entry, ex, _ = gen_maze(s)
+                cells = [(i, j) for i in range(N) for j in range(N) if (i, j) not in (entry, ex)]
+                blocks = set(rnd.sample(cells, 8))
+                r = explore(walls, entry, ex, o, blocks, v=a.v, t_grab=a.grab, corner=corner)
+                res.append(r)
+            d = [r['dist'] for r in res]
+            t = [r['time'] for r in res]
+            e = [r['exit_at'] for r in res]
+            print(f"{o:<8}{st.mean(d):>12.1f}{min(d):>8.1f}{max(d):>8.1f}{st.mean(t):>12.1f}{st.mean(e):>12.1f}")
     print("\n注: 树形迷宫里, 不触发提前终止时 DFS 每条边恰走两次(路程与顺序无关);")
     print("    分支顺序的全部影响 = 「出口/最后一块被发现的早晚」→ 决定『收齐+见出口→直奔出口』何时触发。")
     print("    单个迷宫差异大(方差高), 结论要以多种子统计为准。")
@@ -355,6 +374,7 @@ def main():
     e.add_argument('--orders', default='LFR,FLR,RFL,FRS')
     e.add_argument('--v', type=float, default=0.30)
     e.add_argument('--grab', type=float, default=1.0)
+    e.add_argument('--corner', default='pivot', choices=['pivot', 'holo', 'arc', 'all'])
     l = sub.add_parser('localize')
     l.add_argument('--seeds', type=int, default=10)
     l.add_argument('--meters', type=float, default=30)

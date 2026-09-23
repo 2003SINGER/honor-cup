@@ -187,7 +187,36 @@ stop)
   echo "已停雷达 / 相机 / 定位链（代理没动）"
   ;;
 
+log)
+  # 误差参数标定的数据来源: 录 rosbag, 拷回 Mac 分析
+  case "$2" in
+    stop)
+      pkill -f "ros2 bag recor[d]" 2>/dev/null
+      echo "已停止录制"
+      ;;
+    *)
+      if pgrep -f "ros2 bag recor[d]" > /dev/null; then
+        echo "已在录制中（先 stop 再开新的）"
+      else
+        BAG="$LOG/bag_$(date +%m%d_%H%M%S)"
+        nohup ros2 bag record -o "$BAG" \
+          /odom_raw /scan0 /scan1 /cmd_vel /imu/data_raw /tf /rgb \
+          > "$LOG/bag.log" 2>&1 < /dev/null &
+        sleep 3
+        if pgrep -f "ros2 bag recor[d]" > /dev/null; then
+          echo "✅ 录制中 → $BAG"
+          echo "   停止: bash ~/m3.sh log stop   （拷回 Mac: scp -r car:$BAG ./）"
+        else
+          echo "❌ 起不来，看 $LOG/bag.log"
+        fi
+      fi
+      ;;
+  esac
+  ;;
+
 *)
-  echo "用法: bash ~/m3.sh {up|boot|check|arm|stop}"
+  echo "用法: bash ~/m3.sh {up|boot|check|arm|stop|log}"
+  echo "  log       录 rosbag（误差参数标定数据源）"
+  echo "  log stop  停止录制"
   ;;
 esac

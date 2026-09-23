@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>m3pro_nav</name>
+  <version>0.1.0</version>
+  <description>英才杯 A 题：迷宫探索决策层（MazeMap + 墙登记册定位 + 全向跟踪控制）</description>
+  <maintainer email="jetson@todo.todo">jetson</maintainer>
+  <license>MIT</license>
+  <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>tf_transformations</depend>
+  <exec_depend>ros2launch</exec_depend>
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

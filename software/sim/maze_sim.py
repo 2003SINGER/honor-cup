@@ -18,6 +18,11 @@ M3 Pro 迷宫 7×7 网格仿真 —— 场地建好之前的算法测试台
 import argparse
 import random
 import statistics as st
+import sys
+import os
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src'))
+from mazemap import MazeMap
 
 C = 0.4            # 格距 m (通道 40cm)
 N = 7              # 7×7
@@ -93,91 +98,63 @@ def rel_of(d, heading):
 
 
 def explore(walls, entry, ex, order, blocks, v=0.30, t_turn=1.5, t_grab=1.0):
-    """DFS 物理回溯仿真. order: 相对方向优先级, 如 'LFR' (B 永远最后).
-       提前终止: 出口已发现 且 方块收齐 → 停止探索, 沿树最短路直奔出口.
+    """DFS 探索 —— 直接跑在 MazeMap 上（与实车决策层同一数据结构，09-23 接入）.
+       order: 相对方向优先级, 如 'LFR' (B 永远最后).
+       提前终止: 出口已发现 且 方块收齐 → path_between 直奔出口.
        返回统计 dict"""
-    visited = set()
+    m = MazeMap(N, entry)
     st_ = {'dist': 0.0, 'turns': 0, 'time': 0.0, 'got': 0,
            'exit_at': None, 'heading': 'N'}
+    true_open = {c: [d for d in DIRS if d not in walls[c]] for c in walls}
 
-    class _Done(Exception):
-        def __init__(self, cell):
-            self.cell = cell
-
-    NBR = {}
-    for (i, j) in walls:
-        NBR[(i, j)] = [d for d in DIRS
-                       if d not in walls[(i, j)]
-                       and 0 <= i + DIRS[d][0] < N and 0 <= j + DIRS[d][1] < N]
-
-    def drive(cur, d):
-        """沿 d 开去相邻格(含转弯计费), 返回新格"""
+    def turn_to(d):
         if st_['heading'] != d:
-            st_['turns'] += 1
-            st_['time'] += t_turn
+            r = 2 if st_['heading'] == OPP[d] else 1     # 原地掉头按两次 90° 计
+            st_['turns'] += r
+            st_['time'] += t_turn * r
             st_['heading'] = d
+
+    def drive(d):
+        turn_to(d)
         st_['dist'] += C
         st_['time'] += C / v
-        return (cur[0] + DIRS[d][0], cur[1] + DIRS[d][1])
 
-    def trigger(cell):
-        if st_['exit_at'] is not None and st_['got'] == len(blocks):
-            raise _Done(cell)
+    cell = entry
+    m.touch(cell)
+    stack = [entry]
 
-    def visit(cell, came):
-        visited.add(cell)
-        if cell in blocks:
+    while True:
+        for d in true_open[cell]:                        # 路口检测: 报出全部分支
+            m.open_edge(cell, d)
+        if cell in blocks and not m.nodes[cell]['block']:  # 只在首次到访时收集
             st_['got'] += 1
             st_['time'] += t_grab
-        if cell == ex and st_['exit_at'] is None:
+            m.mark_block(cell)
+        if m.exit_cell == cell and st_['exit_at'] is None:
             st_['exit_at'] = st_['dist']
-        trigger(cell)          # 出口已见 + 方块收齐 → 立即停止探索
+        if m.exit_cell is not None and st_['got'] == len(blocks):
+            break                                        # 出口已见 + 方块收齐 → 停止探索
 
-        opts = [d for d in NBR[cell] if OPP[d] != came]
-        opts.sort(key=lambda d: order.index(rel_of(d, st_['heading'])) if rel_of(d, st_['heading']) in order else 99)
-        for d in opts:
-            nxt = (cell[0] + DIRS[d][0], cell[1] + DIRS[d][1])
-            if nxt in visited:
-                continue
-            drive(cell, d)
-            visit(nxt, d)
-            # 物理原路返回
-            back = OPP[d]
-            if st_['heading'] != back:
-                st_['turns'] += 2 if st_['heading'] == OPP[back] else 1
-                st_['time'] += t_turn
-                st_['heading'] = back
-            st_['dist'] += C
-            st_['time'] += C / v
+        front = m.frontier(cell)
+        if front:
+            front.sort(key=lambda d: order.index(rel_of(d, st_['heading']))
+                       if rel_of(d, st_['heading']) in order else 99)
+            d = front[0]
+        elif len(stack) > 1:                             # 回溯: 沿来路退一格
+            stack.pop()
+            d = next(dd for dd, (dx, dy) in DIRS.items()
+                     if (cell[0] + dx, cell[1] + dy) == stack[-1])
+        else:
+            break                                        # 全图遍历完成, 回到入口
 
-    try:
-        visit(entry, None)
-        final = entry
-    except _Done as e:
-        final = e.cell
+        drive(d)
+        cell = m.walk_edge(cell, d)
+        if front:
+            stack.append(cell)
 
-    # 从停止点沿树最短路直奔出口
-    parent = {}
-    stack = [(entry, None)]
-    seen = {entry}
-    while stack:
-        c, p = stack.pop()
-        parent[c] = p
-        for d in NBR[c]:
-            nb = (c[0] + DIRS[d][0], c[1] + DIRS[d][1])
-            if nb not in seen:
-                seen.add(nb)
-                stack.append((nb, (c, d)))
-    path = []
-    c = ex
-    while parent[c] is not None:
-        pc, pd = parent[c]
-        path.append(pd)
-        c = pc
-    path.reverse()
-    cur = final
-    for d in path:
-        cur = drive(cur, d)
+    if cell != ex:                                       # 直奔出口
+        for d in m.path_between(cell, ex):
+            drive(d)
     return st_
 
 # ---------------- 定位仿真（墙登记册版） ----------------

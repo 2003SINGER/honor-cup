@@ -225,6 +225,7 @@ def localize(seed, meters, v=0.30, dt=0.05,
         est = [C / 2, C / 2]
         register = {}                               # ('x'|'y', 格线坐标) -> 精确坐标
         errs = []
+        anomalies = 0                               # 违反「d≡0.2 mod 0.4」的观测(=方块/噪声)
         traveled = 0.0
         slip_done = False
 
@@ -246,10 +247,12 @@ def localize(seed, meters, v=0.30, dt=0.05,
             hv = DIRS[heading]
             sides = [hv, (0, 1) if abs(hv[0]) else (1, 0), (0, -1) if abs(hv[0]) else (-1, 0)]
 
-            for _ in range(int(C / dt)):
-                true[0] += hv[0] * v * dt
-                true[1] += hv[1] * v * dt
-                m = v * dt
+            nsteps = int(-(-C // (v * dt)))             # ceil: 每格整数步
+            step = C / nsteps                           # 步长归一 → 每格恰好走 C 米
+            for _ in range(nsteps):
+                true[0] += hv[0] * step
+                true[1] += hv[1] * step
+                m = step
                 est[0] += hv[0] * m * odom_scale + rnd.gauss(0, odom_noise)
                 est[1] += hv[1] * m * odom_scale + rnd.gauss(0, odom_noise)
                 traveled += m
@@ -262,6 +265,13 @@ def localize(seed, meters, v=0.30, dt=0.05,
                         if d_true >= 4.0:
                             continue
                         d_meas = d_true + rnd.gauss(0, lidar_noise)
+                        # 离散关系校验(仅侧向射线): 侧墙距中线恒 ≡ 0.2 (mod 0.4),
+                        # 违反者 = 方块/噪声。前方射线在格内移动时墙距连续变化, 不适用此校验。
+                        if dv != hv:
+                            rel = (d_meas - C / 2) % C
+                            if min(rel, C - rel) > 0.05:
+                                anomalies += 1
+                                continue
                         cand = est[a] + sgn * d_meas            # 观测推出的墙坐标
                         key = (('x', 'y')[a], round(cand / C) * C)
                         if mode == 'reg':
@@ -288,12 +298,14 @@ def localize(seed, meters, v=0.30, dt=0.05,
 
             cell = (cell[0] + hv[0], cell[1] + hv[1])
             came = OPP[heading]
-        return errs
+        return errs, anomalies
 
     out = {}
     for mode in ('raw', 'naive', 'reg'):
-        e = run(mode)
+        e, ano = run(mode)
         out[mode] = {'rmse': (sum(x * x for x in e) / len(e)) ** 0.5, 'max': max(e), 'errs': e}
+        if mode == 'reg':
+            out['anomalies'] = ano
     out['meters'] = meters
     out['slip'] = slip
     return out

@@ -229,7 +229,7 @@ def localize(seed, meters, v=0.30, dt=0.05,
         est = [C / 2, C / 2]
         register = {}                               # ('x'|'y', 格线坐标) -> 精确坐标
         errs = []
-        anomalies = 0                               # 地图系门限外观测(=方块/打滑/噪声)
+        anomalies = 0                               # 地图系门限外观测(=障碍物/打滑/噪声; 方块太矮雷达扫不到)
         traveled = 0.0
         slip_done = False
 

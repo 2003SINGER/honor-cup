@@ -242,13 +242,13 @@ class World:
                     break
                 if s < 0.05:
                     if axis == self.heading and k == 0:
-                        opens.append((ck, axis))   # 正在穿越: 必开口
+                        opens.append((ck, axis, s))  # 正在穿越: 必开口
                     continue
                 if axis in self.walls[ck]:
                     hits[(ck, axis)] = s + random.gauss(0, rng)
                     occl = True
                 else:
-                    opens.append((ck, axis))
+                    opens.append((ck, axis, s))
         # ② 前方格侧边对角掠射
         occluded = False
         for k in range(1, N + 2):
@@ -267,7 +267,7 @@ class World:
                     phi = math.atan2(P_HALF, s_far)
                     hits[(ck, sd)] = s_far + random.gauss(0, max(rng, P_HALF / math.sin(phi) ** 2 * math.radians(0.3)))
                 else:
-                    opens.append((ck, sd))
+                    opens.append((ck, sd, s_far))
             if self.heading in self.walls[ck]:
                 occluded = True
         return hits, opens
@@ -283,7 +283,8 @@ class World:
 def explore_stream(walls, entry, ex, order, blocks, *,
                    v_cruise=0.50, a_acc=1.0, a_dec=1.0, a_lat=0.7,
                    dphi_deg=0.30, gate=0.06, scan_hz=10.0, proc_ms=5.0,
-                   t_spin180=1.0, t_grab=1.0, ctrl_hz=50.0, v_run=0.60):
+                   t_spin180=1.0, t_grab=1.0, ctrl_hz=50.0, v_run=0.60,
+                   assume_tree=True):
     """流式探索 v3 —— 世界/小车分离:
        World 持真值, 只暴露 sense()(带噪观测)/block_at(); Agent(本函数内联)持认知:
        MazeMap + wall_known + exit_open, 永不读真值. 决策骨架同 explore()."""
@@ -320,12 +321,18 @@ def explore_stream(walls, entry, ex, order, blocks, *,
                 else math.hypot(0.02, d_meas * DPHI)
             if err < gate:
                 wall_known[(ck, axis)] = True
+                nbm = (ck[0] + DIRV[axis][0], ck[1] + DIRV[axis][1])
+                if 0 <= nbm[0] < N and 0 <= nbm[1] < N:
+                    wall_known[(nbm, OPP[axis])] = True   # 边共享: 一面墙两侧同时确认
                 newly += 1
-        for (ck, axis) in opens:
+        for (ck, axis, s) in opens:
             if resolved(ck, axis):
                 continue
-            phi = math.atan2(P, max(0.2, 0.21))
-            err = 0.02                                # 开口确认: 由轴扫描正入射给出
+            if s < 0.25:                              # 正入射/贴身: 直接确认
+                err = 0.02
+            else:                                     # 对角掠射: 远才可信
+                phi = math.atan2(P, s)
+                err = max(0.02, P / math.sin(phi) ** 2 * DPHI)
             if err < gate:
                 nb = m.open_edge(ck, axis)
                 if nb is None:
@@ -336,11 +343,52 @@ def explore_stream(walls, entry, ex, order, blocks, *,
     def cell_classified(c):
         return all(resolved(c, d) for d in DIRS)
 
+    def prune():
+        """树环剪枝: 未知边两端点在已知通道图已连通 → 必是墙 (加边即成环). 另含镜像."""
+        newly = 0
+        for (ck, axis) in list(wall_known):
+            nbm = (ck[0] + DIRV[axis][0], ck[1] + DIRV[axis][1])
+            if 0 <= nbm[0] < N and 0 <= nbm[1] < N and (nbm, OPP[axis]) not in wall_known:
+                wall_known[(nbm, OPP[axis])] = True
+                newly += 1
+        if not assume_tree:
+            return newly
+        parent = {}
+        def find(x):
+            parent.setdefault(x, x)
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+        for c2, nd in m.nodes.items():
+            for d, s in nd['edges'].items():
+                if s not in ('seen', 'walked'):
+                    continue
+                a, b = find(c2), find((c2[0] + DIRV[d][0], c2[1] + DIRV[d][1]))
+                if a != b:
+                    parent[a] = b
+        for i in range(N):
+            for j in range(N):
+                for d, dv in DIRV.items():
+                    nb = (i + dv[0], j + dv[1])
+                    if not (0 <= nb[0] < N and 0 <= nb[1] < N):
+                        continue
+                    ck = (i, j)
+                    if resolved(ck, d):
+                        continue
+                    if find(ck) == find(nb):
+                        wall_known[(ck, d)] = True
+                        wall_known[(nb, OPP[d])] = True
+                        newly += 1
+        return newly
+
     # ---- 初始静态扫描 ----
     cell, heading, o, v = entry, 'N', 0.0, 0.0
     m.touch(entry)
+    exit_open.add((entry, 'S'))                    # 入口外=已确认开口(非墙, 非出口格)
     hits, opens = world.sense()
     ingest(hits, opens)
+    prune()
 
     plan = None
     arc_left = 0.0
@@ -380,9 +428,19 @@ def explore_stream(walls, entry, ex, order, blocks, *,
                           if b != a and b != OPP[a])
 
     def finish():
+        unres = 0
+        for i in range(N):
+            for j in range(N):
+                for d, dv in DIRV.items():
+                    nb = (i + dv[0], j + dv[1])
+                    if not (0 <= nb[0] < N and 0 <= nb[1] < N):
+                        continue
+                    if not resolved((i, j), d):
+                        unres += 1
+        st['unresolved'] = unres // 2
         dirs, extra = go_home()
         if dirs is None:
-            return st
+            return None                                 # 出口区域还没走到
         speed_run(dirs)
         if extra:
             st['dist'] += extra
@@ -447,32 +505,24 @@ def explore_stream(walls, entry, ex, order, blocks, *,
         tick += 1
         st['time'] += dt
 
-        if m.exit_cell is not None and st['got'] == len(blocks):
-            dirs, extra = go_home()
-            if dirs is None:
-                return st
-            speed_run(dirs)
-            if extra:
-                st['dist'] += extra
-                st['time'] += extra / v_run
-            return st
+        if len(blocks) > 0 and m.exit_cell is not None and st['got'] == len(blocks):
+            r = finish()
+            if r is not None:
+                return r
 
         # ---- 观测(扫描拍; 世界给带噪数据, 小车只消费) ----
         if tick % scan_every == 0:
             st['obs_new'] += ingest(*world.sense())
+            prune()
 
         # ---- 决策 ----
         if plan is None:
             p_ = make_plan()
             if p_ == 'home':
-                dirs, extra = go_home()
-                if dirs is None:
-                    return st
-                speed_run(dirs)
-                if extra:
-                    st['dist'] += extra
-                    st['time'] += extra / v_run
-                return st
+                r = finish()
+                if r is not None:
+                    return r
+                continue                               # 极罕见: 出口未可达, 继续探
             if p_ == 'wait':
                 v = 0.0
                 continue
@@ -744,23 +794,25 @@ def cmd_stream(a):
     orders = a.orders.split(',')
     print(f"流式探索 · {a.seeds} 种子 · 巡航 {a.vc} m/s · 弧线限速 √(0.7·0.2)={math.sqrt(0.7*0.2):.3f} m/s · "
           f"δφ={a.dphi}° · gate={a.gate}m · 扫描 {a.scan}Hz · 处理 {a.proc}ms\n")
-    print(f"{'顺序':<8}{'平均用时(s)':>10}{'最短':>7}{'最长':>7}{'平均路程':>9}{'平均速':>8}{'弧线':>6}{'掉头':>6}{'违规':>6}")
+    print(f"{'顺序':<8}{'平均用时(s)':>10}{'最短':>7}{'最长':>7}{'平均路程':>9}{'平均速':>8}{'弧线':>6}{'掉头':>6}{'违规':>6}{'未确认':>7}")
     for o_ in orders:
         res = []
         for s in range(a.seeds):
             rnd = random.Random(1000 + s)
             walls, entry, ex, _ = gen_maze(s)
             cells = [(i, j) for i in range(N) for j in range(N) if (i, j) not in (entry, ex)]
-            blocks = set(rnd.sample(cells, 8))
+            blocks = set() if a.fullinfo else set(rnd.sample(cells, 8))
             r = explore_stream(walls, entry, ex, o_, blocks, v_cruise=a.vc,
-                               dphi_deg=a.dphi, gate=a.gate, scan_hz=a.scan, proc_ms=a.proc)
+                               dphi_deg=a.dphi, gate=a.gate, scan_hz=a.scan, proc_ms=a.proc,
+                               assume_tree=not a.no_prune)
             res.append(r)
         t = [r['time'] for r in res]
         d = [r.get('dist', 0.0) for r in res]
         print(f"{o_:<8}{st.mean(t):>10.1f}{min(t):>7.1f}{max(t):>7.1f}{st.mean(d):>9.1f}"
               f"{st.mean(d) / st.mean(t):>8.2f}"
               f"{st.mean([r['arcs'] for r in res]):>6.0f}{st.mean([r['spins'] for r in res]):>6.1f}"
-              f"{st.mean([r['violations'] for r in res]):>6.1f}")
+              f"{st.mean([r['violations'] for r in res]):>6.1f}"
+              f"{st.mean([r.get('unresolved', -1) for r in res]):>6.1f}")
     print("\n对照(同迷宫): pivot@0.3 186.7s · holo@0.3 109.8s · arc@0.3 78.2s (30种子, explore 命令)")
     print("流式 = 观测置信建图+弧线提前承诺+视界调速+处理延迟; 违规>0 说明视界模型过于乐观")
 
@@ -796,6 +848,8 @@ def main():
     s2.add_argument('--gate', type=float, default=0.06)
     s2.add_argument('--scan', type=float, default=10.0)
     s2.add_argument('--proc', type=float, default=5.0)
+    s2.add_argument('--fullinfo', action='store_true', help='不看方块: 最快拿全地图信息')
+    s2.add_argument('--no-prune', action='store_true', help='关闭树环剪枝对照')
     a = p.parse_args()
     {'explore': cmd_explore, 'localize': cmd_localize, 'maze': cmd_maze,
      'stream': cmd_stream}[a.cmd](a)

@@ -261,9 +261,12 @@ class StreamNav:
         出口边方向 = 出口格上 effective OPEN 的 boundary 边 (派生, 可撤销)."""
         best = None
         for exc in self.exit_cells():
-            seg = self.route_between(cell, exc)
-            if not seg:
-                continue
+            if cell == exc:
+                seg = []                         # 已在出口格: 合法, 直接沿出口边出场
+            else:
+                seg = self.route_between(cell, exc)
+                if not seg:
+                    continue                     # 不可达
             edirs = [d for d in DIRS if self.is_boundary(exc, d) and self.is_open(exc, d)]
             if not edirs:
                 continue

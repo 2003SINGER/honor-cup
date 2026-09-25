@@ -26,6 +26,20 @@ CrossedEdge/EnteredCell 几何事件 + MotionPlanner/Executor + CellVisit 迟分
 - ✅ tests: G0a+G0b+R3 Gates = 41/41 全绿
 - ✅ 出口语义修正: 角格 side 优先级 (E>S) 曾致返航冲墙; home_route 派生出口方向
 
+## ✅ R3 验收封口 (GPT 七审三件 + gate 实测加赠)
+
+- ✅ home_route cell==exc 零长路径合法化 (车已在出口格 → 直接沿出口边出场, 有回归测试)
+- ✅ wrong_edges 真值对账: finish() 逐 internal canonical edge 认知 vs 真值 (unresolved=0
+  只证明"有答案", wrong_edges=0 才证明"答案对")
+- ✅ run_semantic_gate.py: 每 seed 硬断言 (not aborted / violations==0 / unresolved==0
+  [fullinfo] / wrong_edges==0 / got==8 [blocks]), 失败保存 fixture → exit 1, 不看平均值
+- ✅ gate 实测加赠修 (blocks 模式暴露):
+  - 返航可从偏心位姿(切弯出口)起跑 → 整条返航线贴格线刮墙 595 次 → plan_route 先回格中心
+  - 偏心位姿 creep → 车角扫墙段端点 → plan_creep 先横移回中线
+  - 方块收齐但 believed-exit 未连通即 abort → 早停改判 home_route 可达性, 未连通继续探索
+- ✅ **保守 baseline 冻结: 100/100 fullinfo (avg 95.8s, 0 fail) + 100/100 blocks
+  (avg 91.2s, 8/8 块, 0 fail)** —— 全部 wrong_edges==0
+
 ## 下一步 (按序, 禁跳)
 
 ### P1-A KnownHorizon 接入速度规划 (R4)

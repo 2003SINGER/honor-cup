@@ -584,3 +584,46 @@ def test_move_intent_contract():
     assert mi.next_edge == 'E' and mi.mode == 'EXPLORE'
     assert not hasattr(mi, 'end_o') and not hasattr(mi, 'v_end')
     assert not hasattr(mi, 'turn_here') and not hasattr(mi, 'far_cut')
+
+
+# ---------------- R3 验收封口 (GPT 七审) ----------------
+
+def test_home_route_from_exit_cell_zero_length():
+    """车已在出口格: seg=[] 是合法'已到', 不是不可达 (返回沿出口边出场)"""
+    from m3pro_nav.stream_nav import StreamNav
+    nav = StreamNav((0, 0), n=7)
+    # 出口格 (6,3): E 边界 OPEN (确认)
+    for _ in range(2):
+        nav.edges.observe_open((6, 3), 'E', 0.2)
+    hr = nav.home_route((6, 3))              # 车已在出口格
+    assert hr is not None
+    seg, exc, edir = hr
+    assert seg == [] and exc == (6, 3) and edir == 'E'
+    # 不在出口格时 route 正常
+    for _ in range(2):
+        nav.edges.observe_open((0, 3), 'N', 0.2)
+        nav.edges.observe_wall((0, 3), 'W', 0.2)
+        nav.edges.observe_wall((0, 3), 'E', 0.2)
+        nav.edges.observe_open((0, 2), 'N', 0.2)
+        nav.edges.observe_open((0, 2), 'S', 0.2)
+        nav.edges.observe_wall((0, 2), 'E', 0.2)
+        nav.edges.observe_wall((0, 2), 'W', 0.2)
+    nav.traversal.mark_crossed((0, 2), 'N')
+    nav.traversal.mark_crossed((0, 3), 'S')
+    for i in range(6):                        # 铺 walked 通道 (0,3)→(6,3)
+        nav.traversal.mark_crossed((i, 3), 'E')
+    hr = nav.home_route((0, 2))
+    assert hr is not None and len(hr[0]) >= 1
+
+
+def test_wrong_edges_matches_truth_on_gen_maze():
+    """wrong_edges 真值对账: 探索完成后认知地图逐边等于真值 (gate 已验, 这里固化 1 seed)"""
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    '..', 'sim'))
+    import runtime_v2 as R
+    import maze_sim as M
+    walls, entry, ex, side = M.gen_maze(0)
+    r = R.explore(walls, entry, ex, 'LFR', set(), v_cruise=0.7)
+    assert r.get('wrong_edges') == 0
+    assert r.get('unresolved') == 0
+    assert not r.get('aborted')

@@ -102,34 +102,60 @@ class MotionPlanner:
     # ---- CREEP_OBSERVE: 正式 primitive, 无无限蠕行 ----
 
     def plan_creep(self, pose, heading=None, node_center=None):
-        """朝前方蠕行观察, 最远 creep_max (不越边界). 到线仍 UNKNOWN → STOP."""
+        """朝前方蠕行观察, 最远 creep_max (不越边界). 到线仍 UNKNOWN → STOP.
+        偏离走廊中线 (如切弯出口) → 先横移回中线, 再蠕行."""
         h = heading or nearest_axis(pose.yaw)
         dv = DIRV[h]
         if node_center is None:
             node_center = (math.floor(pose.x / C_) * C_ + 0.5 * C_,
                            math.floor(pose.y / C_) * C_ + 0.5 * C_)
         o0 = (pose.x - node_center[0]) * dv[0] + (pose.y - node_center[1]) * dv[1]
+        prims = []
+        cur = pose.copy()
+        # 横向偏移 (切弯出口等) → 先回中线: 车角扫墙 8cm 的教训
+        lat = (pose.x - node_center[0]) * -dv[1] + (pose.y - node_center[1]) * dv[0]
+        if abs(lat) > 0.02:
+            on_line = (pose.x - (-dv[1]) * lat, pose.y - dv[0] * lat)
+            prims.append(MotionPrimitive(
+                kind='STRAIGHT', start_pose=cur.copy(), p0=(cur.x, cur.y),
+                p1=on_line, yaw0=cur.yaw, yaw1=cur.yaw,
+                length=abs(lat), v_max=0.2, v_end=0.0, meta={'recenter_lat': True}))
+            cur = Pose2D(on_line[0], on_line[1], cur.yaw)
         s_end = max(0.0, self.creep_max - o0)
         if s_end < 1e-6:
+            if prims:
+                return prims
             return [MotionPrimitive(
-                kind='STOP', start_pose=pose.copy(), p0=(pose.x, pose.y),
-                yaw0=pose.yaw, duration=0.2,
+                kind='STOP', start_pose=cur.copy(), p0=(cur.x, cur.y),
+                yaw0=cur.yaw, duration=0.2,
                 preconditions=('mark_incomplete',),
                 cancel_deadline=self.creep_max)]
-        target = (pose.x + dv[0] * s_end, pose.y + dv[1] * s_end)
-        return [MotionPrimitive(
-            kind='CREEP', start_pose=pose.copy(), p0=(pose.x, pose.y),
-            p1=target, yaw0=pose.yaw, yaw1=pose.yaw,
+        target = (cur.x + dv[0] * s_end, cur.y + dv[1] * s_end)
+        prims.append(MotionPrimitive(
+            kind='CREEP', start_pose=cur.copy(), p0=(cur.x, cur.y),
+            p1=target, yaw0=cur.yaw, yaw1=cur.yaw,
             length=s_end, v_max=self.v_creep, v_end=0.0,
             preconditions=('mark_incomplete',),
             cancel_deadline=self.creep_max,   # latest_safe_stop: 不越边界 (0.2)]
-            meta={'heading': h})]
+            meta={'heading': h}))
+        return prims
 
     # ---- 返航路线: 已知图逐边 SPIN+STRAIGHT (与探索同一运动模型) ----
 
     def plan_route(self, pose, seg_dirs, exit_len=0.6, exit_dir=None):
         prims = []
         cur = pose.copy()
+        # 返航必须从格中心起跑: 决策点可能在切弯出口等偏心位姿 (0.1 偏移
+        # 会让整条返航线贴着格线刮墙 595 次 —— gate 实测)
+        nc = (math.floor(pose.x / C_) * C_ + 0.5 * C_,
+              math.floor(pose.y / C_) * C_ + 0.5 * C_)
+        off = abs(pose.x - nc[0]) + abs(pose.y - nc[1])
+        if off > 0.02:
+            prims.append(MotionPrimitive(
+                kind='STRAIGHT', start_pose=cur.copy(), p0=(cur.x, cur.y),
+                p1=nc, yaw0=cur.yaw, yaw1=cur.yaw,
+                length=off, v_max=0.2, v_end=0.0, meta={'route_recenter': True}))
+            cur = Pose2D(nc[0], nc[1], cur.yaw)
         for d in seg_dirs:
             h = nearest_axis(cur.yaw)
             if d != h:

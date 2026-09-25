@@ -30,6 +30,7 @@ from m3pro_nav.motion_planner import MotionPlanner
 from m3pro_nav.motion_executor import MotionExecutor
 from m3pro_nav.event_detector import GridEventDetector
 
+OPEN_TRUTH = 'OPEN'
 N = 7
 P_HALF = 0.2
 HALF_W = 0.1075
@@ -226,8 +227,9 @@ def explore(walls, entry, ex, order, blocks, *,
     nav.on_entered(entry, 'S', ts=0.0)
 
     def finish():
-        """收尾: 未确认统计 + 返航路线装载 (执行由主循环继续; _finishing=1)."""
+        """收尾: 未确认统计 + 真值对账 + 返航路线装载."""
         unres = 0
+        wrong = 0
         for i in range(N):
             for j in range(N):
                 for d, dv in DIRV.items():
@@ -236,7 +238,12 @@ def explore(walls, entry, ex, order, blocks, *,
                         continue
                     if not nav.resolved((i, j), d):
                         unres += 1
+                        continue
+                    truth = OPEN_TRUTH if d not in walls[(i, j)] else 'WALL'
+                    if nav.edges.state((i, j), d, nav.traversal) != truth:
+                        wrong += 1               # 有答案但答错 (canonical 对账)
         st['unresolved'] = unres // 2
+        st['wrong_edges'] = wrong
         hr = nav.home_route(_cell_of(executor.pose))
         if hr is None:
             st['aborted'] = True              # 无出口候选: FAILED
@@ -304,11 +311,15 @@ def explore(walls, entry, ex, order, blocks, *,
         cur_cell = _cell_of(new_pose)
         nav.refresh_visit(cur_cell)
 
-        # 早停: 收齐 + 出口候选
-        if len(blocks) > 0 and nav.got >= len(blocks) and nav.exit_cells():
-            r = finish()
-            if r is not None:
-                return r
+        # 早停 (仅在决策点): 方块收齐 且 出口候选【可达】→ 回家;
+        # 不可达 → 继续探索 ( believed-exit 尚未连通, DFS 继续走, 连通后自然回家)
+        if executor.idle and len(blocks) > 0 and nav.got >= len(blocks) and nav.exit_cells():
+            if nav.home_route(cur_cell) is None:
+                pass                                 # 出口未连通: 继续探索
+            else:
+                r = finish()
+                if r is not None:
+                    return r
 
         # 8. 空闲 → 规划
         if executor.idle:

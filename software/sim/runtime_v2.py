@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
-"""runtime_v2 —— R3 事件驱动 SemanticSim 运行时 (Clean-Room, 规范 §11 tick 顺序).
+"""runtime_v2 —— 事件驱动 SemanticSim 运行时 (拓扑游标版, 规范 §11 tick 顺序).
 
 单一物理真相: MotionExecutor 持有 Pose2D; sensor/collision/event-detector 全部
-以参数接收同一 pose. 旧的三套位姿账本全部废除, 离散状态只由几何跨越事件产生.
+以参数接收同一 pose. 连续 Pose 只服务: 传感/碰撞/运动/跨越事件/定位.
+规划拓扑只来自地图图递推 —— runtime 持 planning_cursor (prev_cell, cell),
+绝不从 Pose 反推"现在是哪格、从哪格来".
 
 每 tick 固定顺序:
   1. executor.step(dt)               prev_pose → new_pose
   2. collision(world, new_pose)
   3. event_detector(prev, new)       → CrossedEdge 事件
-  4. dispatch: on_crossed / on_entered (TraversalMap / CellVisit / 岔路状态机)
-  5. sensor(world, new_pose)         → 观测 (scan_hz + proc_ms 延迟队列)
-  6. nav.observe()
-  7. refresh_branch(当前格)          → 迟分类岔路状态建立
-  8. executor.idle → compile_chain / compile_home → 新 primitive 链
+  4. dispatch: on_crossed (walked commit) /
+                on_entered (branch commit) / 入格收取 (时间暂停, 位姿不变)
+  5. sensor: sense_from (雷达) + block_observe_from (直线连通方块观测)
+  6. nav.observe / nav.observe_blocks
+  7. refresh_branch (迟分类 commit, 依据 visit 真父)
+  8. executor.idle → compile_chain(cursor) → 新 primitive 链
 
-禁止出现: 预登记式过边、第二套位姿账本、兼容层决策——见 tests 结构验收."""
+禁止: 从 Pose 反推规划拓扑 / NUDGE 蹭入 / 新方块清运动链 —— 见 tests 结构验收."""
 
 import math
 import random
@@ -115,7 +118,7 @@ class World:
 # ---------------- Sensor (以 pose 参数消费; 内部投影为派生快照) ----------------
 
 def project_pose(pose: Pose2D):
-    """连续位姿 → 离散投影快照 (纯派生, 非状态 owner)"""
+    """连续位姿 → 离散投影快照 (纯派生, 非状态 owner; 仅传感用)"""
     heading = nearest_axis(pose.yaw)
     i = min(max(int(pose.x // C), 0), N - 1)
     j = min(max(int(pose.y // C), 0), N - 1)
@@ -125,9 +128,29 @@ def project_pose(pose: Pose2D):
     return (i, j), heading, max(-0.19, min(0.19, o))
 
 
-def sense_from(world, pose, rng=0.02, maxr=2.4, dphi_deg=0.30):
-    """雷达一帧 (Tier A SemanticSim: 语义关联假设完美, 实车由 EdgeObserver 反算)"""
+_TOL_LINE = 1e-6
+
+
+def unambiguous_cell(pose: Pose2D):
+    """位姿恰在格线上 → None (floor 分配歧义, GPT 定案: 不得失忆也不得瞎猜);
+    严格在格内 → 格坐标. 供 runtime 维护 last_unambiguous + cursor 提示."""
+    i = int(pose.x // C)
+    j = int(pose.y // C)
+    fx = pose.x - i * C
+    fy = pose.y - j * C
+    if fx < _TOL_LINE or C - fx < _TOL_LINE or fy < _TOL_LINE or C - fy < _TOL_LINE:
+        return None
+    if not (0 <= i < N and 0 <= j < N):
+        return None
+    return (i, j)
+
+
+def sense_from(world, pose, rng=0.02, maxr=2.4, dphi_deg=0.30, cell_hint=None):
+    """雷达一帧 (Tier A SemanticSim: 语义关联假设完美, 实车由 EdgeObserver 反算).
+    cell_hint: 车恰停在格线上时的观测帧原点 (计划进入格), 消除 floor 歧义."""
     cell, heading, o = project_pose(pose)
+    if cell_hint is not None:
+        cell = cell_hint
     dphi = math.radians(dphi_deg)
     hits, opens = {}, []
     hv = DIRV[heading]
@@ -177,26 +200,27 @@ def sense_from(world, pose, rng=0.02, maxr=2.4, dphi_deg=0.30):
     return hits, opens
 
 
-def camera_from(world, pose, cam_range=1.5):
-    """相机: 视野内(前方 cam_range, ±45°锥)含块格 —— 非上帝视角"""
-    cell, heading, _ = project_pose(pose)
-    hv = DIRV[heading]
-    seen = []
-    for bc in world.blocks - world.collected:
-        dx, dy = bc[0] - cell[0], bc[1] - cell[1]
-        along = dx * hv[0] + dy * hv[1]
-        if along < 0:
-            continue
-        side = abs(dx * hv[1] - dy * hv[0])
-        if along * along + side * side == 0:
-            seen.append(bc)
-            continue
-        if math.hypot(along, side) * C > cam_range:
-            continue
-        if side > along + 1e-9:
-            continue
-        seen.append(bc)
-    return seen
+def block_observe_from(world, pose, cam_range=1.5, cell_hint=None):
+    """方块观测 —— 直线连通可直达格 (GPT 定稿 C1-C5):
+    只有从车所在格沿网格直线、沿途每条边真实 OPEN、距离 ≤ cam_range 的格
+    才进入观测集; 拐弯/隔墙不可见. 返回 {cell: 'EMPTY'|'BLOCK'} (负信息一等公民)."""
+    i = min(max(int(pose.x // C), 0), N - 1)
+    j = min(max(int(pose.y // C), 0), N - 1)
+    cell = (i, j) if cell_hint is None else cell_hint
+    uncollected = world.blocks - world.collected
+    obs = {cell: 'BLOCK' if cell in uncollected else 'EMPTY'}
+    for d, dv in DIRV.items():
+        c = cell
+        dist = 0.0
+        while d not in world.walls[c]:
+            c = (c[0] + dv[0], c[1] + dv[1])
+            if not (0 <= c[0] < N and 0 <= c[1] < N):
+                break
+            dist += C
+            if dist > cam_range:
+                break
+            obs[c] = 'BLOCK' if c in uncollected else 'EMPTY'
+    return obs
 
 
 # ---------------- 运行时 ----------------
@@ -210,36 +234,24 @@ def explore(walls, entry, ex, order, blocks, *,
     dt = 1.0 / ctrl_hz
     scan_every = max(1, round(ctrl_hz / scan_hz))
     lag = 1 + math.ceil(proc_ms * 1e-3 * ctrl_hz)
+    task_mode = len(blocks) > 0
 
     world = World(walls, blocks)
-    nav = StreamNav(entry, order=order, n=N, dphi_deg=dphi_deg, gate=gate)
+    nav = StreamNav(entry, order=order, n=N, dphi_deg=dphi_deg, gate=gate,
+                    task_mode=task_mode)
     planner = MotionPlanner(v_cruise=v_cruise, a_acc=a_acc, a_dec=a_dec)
     executor = MotionExecutor(Pose2D((entry[0] + 0.5) * C, (entry[1] + 0.5) * C,
                                      TH['N']), a_acc=a_acc, a_dec=a_dec)
     detector = GridEventDetector(n=N)
 
-    st = {'time': 0.0, 'dist': 0.0, 'got': 0, 'arcs': 0,
-          'grabs': 0, 'violations': 0, 'enters': 0, 'wait_ticks': 0}
+    st = {'time': 0.0, 'dist': 0.0, 'got': 0, 'arcs': 0, 'grabs': 0,
+          'violations': 0, 'enters': 0, 'wait_ticks': 0, 'mismatch': 0}
 
-    # 起始: 机器人从场外经入口边进入 entry 格 (入口约定: 底边 S 开口, 朝向 N)
-    nav.on_entered(entry, 'S', ts=0.0)
-
-    def _entry_side_of(pose):
-        """入口边判定 —— 只来自离散拓扑, 禁止几何猜测 (规范 §9 / 对齐定案):
-        1) 真实 EnteredCell 事件 (visit.latest_entered_from) —— 唯一真值;
-        2) 无 visit 时不猜: 由 TraversalMap 已走拓扑找唯一相邻已走格
-           (prev_cell → cur_cell 的离散拓扑关系), 这是"地图已知道的事"。
-        禁止: body yaw / 固定 'S' / 边中点重合猜测。"""
-        cell = _cell_of(pose)
-        v = nav.visits.get(cell)
-        if v is not None:
-            return v.latest_entered_from
-        for d, dv in DIRV.items():
-            nb = (cell[0] + dv[0], cell[1] + dv[1])
-            if 0 <= nb[0] < N and 0 <= nb[1] < N and \
-                    nav.traversal.is_walked(nb, OPP[d]):
-                return d               # 唯一相邻已走格所在的方向 = 来向
-        return None                    # 真无拓扑依据: 上层按未识别处理
+    # 规划游标 (拓扑真相; 车位姿只服务物理层)
+    cursor = (None, entry)
+    planned_cells = [entry]          # 计划将进入的格序列 (一致性校验用)
+    last_def_cell = entry            # last_unambiguous_cell (GPT 定案: 不失忆)
+    nav.on_entered(entry, None, ts=0.0)   # 根 commit (入口边界 = 来向)
 
     def finish():
         """收尾: 未确认统计 + 真值对账 + 返航路线装载."""
@@ -259,25 +271,18 @@ def explore(walls, entry, ex, order, blocks, *,
                         wrong += 1               # 有答案但答错 (canonical 对账)
         st['unresolved'] = unres // 2
         st['wrong_edges'] = wrong
-        p = executor.pose
-        hr = nav.home_route(_cell_of(p))
+        hr = nav.home_route(cursor[1])
         if hr is None:
             st['aborted'] = True              # 无出口候选: FAILED
             return st
-        seg, exc, edir = hr
-        executor.set_plan(planner.compile_home(nav, p, _cell_of(p),
-                                               _entry_side_of(p), seg, edir))
+        path, edir = hr
+        executor.set_plan(planner.compile_home(nav, executor.pose, path, edir))
         st['_finishing'] = True
         return None
 
-    def _cell_of(pose):
-        return (min(max(int(pose.x // C), 0), N - 1),
-                min(max(int(pose.y // C), 0), N - 1))
-
     # 初始观测
     nav.observe(*sense_from(world, executor.pose, dphi_deg=dphi_deg))
-    for bc in camera_from(world, executor.pose, cam_range):
-        nav.set_block_seen(bc, True)
+    nav.observe_blocks(block_observe_from(world, executor.pose, cam_range))
 
     pending = []
     tick = 0
@@ -299,12 +304,25 @@ def explore(walls, entry, ex, order, blocks, *,
                      near_segs(world.wall_segs, new_pose.x, new_pose.y)):
             st['violations'] += 1
 
-        # 3-4. 几何跨越事件 → 离散状态 (唯一通道)
+        # 3-4. 几何跨越事件 → 离散状态 (唯一通道; 只 commit/verify)
         for ev in detector.detect(prev_pose, new_pose, timestamp=st['time']):
             if 0 <= ev.to_cell[0] < N and 0 <= ev.to_cell[1] < N:
                 nav.on_crossed(ev.from_cell, ev.direction, ts=ev.timestamp)
-                nav.on_entered(ev.to_cell, OPP[ev.direction], ts=ev.timestamp)
+                nav.on_entered(ev.to_cell, ev.from_cell, ts=ev.timestamp)
                 st['enters'] += 1
+                # 一致性校验: 实际进入格必须符合计划序列 (返航段跳过: 计划已切换)
+                if not st.get('_finishing'):
+                    if len(planned_cells) >= 2 and ev.to_cell == planned_cells[1]:
+                        planned_cells.pop(0)
+                    elif ev.to_cell != planned_cells[0]:
+                        st['mismatch'] += 1   # TOPOLOGY_EXECUTION_MISMATCH
+                # 入格收取 (GPT 定稿): 真实进入含方块格 → 时间暂停, 位姿不变
+                if nav.has_block(ev.to_cell):
+                    world.collect(ev.to_cell)
+                    nav.collect_block(ev.to_cell)
+                    st['got'] += 1
+                    st['grabs'] += 1
+                    st['time'] += t_grab
             # 场外 to_cell: 仅返航冲出口时发生, 无需登记
 
         st['dist'] += math.hypot(new_pose.x - prev_pose.x, new_pose.y - prev_pose.y)
@@ -313,66 +331,69 @@ def explore(walls, entry, ex, order, blocks, *,
         if st.get('_finishing') and executor.idle:
             return st
 
-        # 5-6. 观测 (延迟队列; 同一 pose)
+        # 5-6. 观测 (延迟队列; 同一 pose). 车恰在格线上时需消解 floor 歧义:
+        #  - 停在 cursor 边界中点 (等待态)     → 按计划进入格观测
+        #  - 链中途接缝 tick (仅 1 tick, 车在动) → last_unambiguous (前一格帧,
+        #    关联到的都是真实墙, 无害; 严禁用远处 cursor 帧 —— 会错关联出幻开放)
+        uc = unambiguous_cell(new_pose)
+        if uc is not None:
+            last_def_cell = uc
+            cell_hint = uc
+        else:
+            pcell = cursor[1]
+            pprev = cursor[0]
+            cx, cy = (pcell[0] + 0.5) * C, (pcell[1] + 0.5) * C
+            if pprev is not None:
+                m_in = (cx - (pcell[0] - pprev[0]) * 0.2,
+                        cy - (pcell[1] - pprev[1]) * 0.2)
+            else:
+                m_in = (cx, cy - 0.2)          # 根: 入口边界中点
+            if (abs(new_pose.x - m_in[0]) < 1e-6 and
+                    abs(new_pose.y - m_in[1]) < 1e-6):
+                cell_hint = pcell
+            else:
+                cell_hint = last_def_cell
         if tick % scan_every == 0:
-            pending.append((tick + lag, sense_from(world, new_pose, dphi_deg=dphi_deg),
-                            camera_from(world, new_pose, cam_range)))
+            pending.append((tick + lag,
+                            sense_from(world, new_pose, dphi_deg=dphi_deg,
+                                       cell_hint=cell_hint),
+                            block_observe_from(world, new_pose, cam_range,
+                                               cell_hint=cell_hint)))
         due = [p for p in pending if p[0] <= tick]
         pending = [p for p in pending if p[0] > tick]
-        for _, frame, cbs in due:
+        for _, frame, bobs in due:
             nav.observe(*frame)
-            for bc in cbs:
-                if not nav.has_block(bc):
-                    # 新看见未收方块: 若当前链编译时它还不可见, 链会直接穿过
-                    # 该格不停 (方块在链编译后才进入视野) → 清队列重规划,
-                    # 车将在该格抓取点停下。ARC 中途禁清 (直线弦会切内角)。
-                    if not (executor.queue and executor.queue[0].kind == 'ARC'):
-                        executor.clear()
-                nav.set_block_seen(bc, True)
+            nav.observe_blocks(bobs)
 
-        # 7. 迟分类 (当前格 CellMark 完成 → 岔路局部状态机建立)
-        cur_cell = _cell_of(new_pose)
-        nav.refresh_branch(cur_cell)
+        # 7. 迟分类 commit (依据 visit 真父; 绝不重复登记)
+        for cell in list(nav.visits.cells):
+            nav.refresh_branch(cell)
 
-        # 早停 (仅在决策点): 任务完成 且 出口候选【可达】→ 回家;
-        # 不可达 → 继续探索 (believed-exit 尚未连通, 继续走, 连通后自然回家)
-        # 任务完成 = blocks 模式收齐方块 | fullinfo 模式全图每条边已解析
-        done = (len(blocks) > 0 and nav.got >= len(blocks)) or \
-               (len(blocks) == 0 and nav.all_resolved())
+        # 早停 (仅在决策点): 任务完成 且 出口候选可达 → 回家
+        # blocks: 收齐 | 活动前沿清空 (剩余支路全被证明为空死枝)
+        # fullinfo: 全图每条边已解析
+        if task_mode:
+            done = nav.got >= len(blocks) or not nav.active_frontier()
+        else:
+            done = nav.all_resolved()
         if executor.idle and done:
-            if nav.home_route(cur_cell) is None:
+            if nav.home_route(cursor[1]) is None:
                 pass                                 # 出口未连通: 继续探索
             else:
                 r = finish()
                 if r is not None:
                     return r
 
-        # 8. 空闲 → 规划 (CellAction → 模板编译; 未知格蹭入后 STOP 等扫描)
+        # 8. 空闲 → 图递推编链 (cursor 续航, 不从 Pose 反推)
         if executor.idle:
-            # 抓取检查: 到达目标格且有方块
-            entry_side = _entry_side_of(executor.pose)
-            if nav.has_block(cur_cell):
-                world.collect(cur_cell)
-                nav.set_block_collected(cur_cell)
-                nav.got += 1
-                st['got'] += 1
-                st['grabs'] += 1
-                st['time'] += t_grab
-            prims = planner.compile_chain(nav, executor.pose, cur_cell, entry_side) \
-                if entry_side is not None else []
-            if not prims:
-                # 无拓扑依据 (不应发生): 原地停车等待, 不猜测入口边
-                from m3pro_nav.motion_primitive import MotionPrimitive
-                prims = [MotionPrimitive(
-                    kind='STOP', start_pose=Pose2D(executor.pose.x, executor.pose.y,
-                                                   executor.pose.yaw),
-                    p0=(executor.pose.x, executor.pose.y),
-                    yaw0=executor.pose.yaw, duration=0.2, meta={'wait': cur_cell})]
-            if prims and prims[0].kind == 'STOP':
-                st['wait_ticks'] += 1
+            prims, terminal, seq = planner.compile_chain(nav, executor.pose, cursor)
+            cursor = terminal
+            planned_cells = seq
             for pm in prims:
                 if pm.kind == 'ARC':
                     st['arcs'] += 1
+            if prims and prims[0].kind == 'STOP':
+                st['wait_ticks'] += 1
             executor.set_plan(prims)
 
     return st

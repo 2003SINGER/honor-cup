@@ -136,11 +136,19 @@ class EdgeMap:
     def to_json(self):
         return json.dumps({
             'n': self.n,
-            'beliefs': {'|'.join(map(str, (k[0], k[1], k[2], k[3]))): v
-                        for k, v in self._flat().items()},
-            'walked': ['|'.join(map(str, k)) for k in self.walked],
+            'beliefs': self._flat(),
+            'walked': [self._flat_key(k) for k in self.walked],
             'contradictions': self.contradictions,
         })
+
+    def _flat_key(self, k):
+        if k[0] == 'B':
+            return f"B|{k[1][0]}|{k[1][1]}|{k[2]}"
+        return f"I|{k[0][0]}|{k[0][1]}|{k[1]}"
+
+    def _parse_key(self, s):
+        t, x, y, dd = s.split('|')
+        return self.edge_key((int(x), int(y)), dd)
 
     def _flat(self):
         """canonical key → 统一 4 元组 (I:x,y,d / B:x,y,d)"""
@@ -160,9 +168,6 @@ class EdgeMap:
             t, x, y, dd = k.split('|')
             key = self.edge_key((int(x), int(y)), dd)
             self.beliefs[key] = v
-        self.walked = set()
-        for k in d['walked']:
-            t, x, y, dd = k.split('|')
-            self.walked.add(self.edge_key((int(x), int(y)), dd))
+        self.walked = {self._parse_key(k) for k in d['walked']}
         self.contradictions = d.get('contradictions', 0)
         return self

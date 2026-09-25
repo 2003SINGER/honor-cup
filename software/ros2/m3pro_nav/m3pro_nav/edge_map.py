@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-"""EdgeMap —— 墙几何事实的唯一 owner (规范 §2/§3).
+"""EdgeMap + TraversalMap —— 规范 §2/§3 的物理分离实现.
 
-EdgeBelief: signed score, 每帧更新(可撤销), 真迟滞状态机.
-Traversal (walked) 数据也存这里, 但语义独立: walked=物理事实, 传感器矛盾只记诊断.
-canonical key: 同一物理边只有一份 belief."""
+EdgeMap: 墙几何事实唯一 owner, 三层事实模型:
+  hard    : WALKED (物理事实) / BOUNDARY (场地边界几何) —— 不可被传感器投票推翻
+  soft    : SENSOR signed score (可撤销, 真迟滞 ±T_CONFIRM/±T_FLIP)
+  derived : TREE_INFERENCE —— 每次从 base 事实重算 (前提撤销 → derived 自动撤销)
+TraversalMap: WALKED/NOT_WALKED —— R3 起 crossed-edge 事件的唯一写入目标.
+
+同一条物理边 canonical key 只有一行."""
 
 import json
 
@@ -14,28 +18,73 @@ DIRS = ('N', 'E', 'S', 'W')
 UNKNOWN, WALL, OPEN = 'UNKNOWN', 'WALL', 'OPEN'
 P_SENSOR, P_WALKED, P_BOUNDARY, P_TREE = 'SENSOR', 'WALKED', 'BOUNDARY', 'TREE_INFERENCE'
 
-T_CONFIRM = 2      # UNKNOWN → 确认阈值 (2 帧一致, 或近距 1 帧满幅度)
-T_FLIP = 4         # 已确认状态翻转阈值 (真实参与翻转条件)
+T_CONFIRM = 2
+T_FLIP = 4
 
 
-class EdgeMap:
+class TraversalMap:
+    """WALKED/NOT_WALKED 唯一 owner (R3: crossed-edge 事件写入)."""
+
     def __init__(self, n):
         self.n = n
-        self.beliefs = {}          # key -> {'score','state','prov'}
-        self.walked = set()        # canonical keys (物理事实, R3 起由 crossed-edge 事件驱动)
-        self.contradictions = 0    # 传感器 vs walked 矛盾 (诊断信号)
+        self.walked = set()            # canonical keys
 
-    # ---- canonical key ----
     def edge_key(self, c, d):
         nb = (c[0] + DIRV[d][0], c[1] + DIRV[d][1])
         if not (0 <= nb[0] < self.n and 0 <= nb[1] < self.n):
             return ('B', c, d)
         return (c, d) if c <= nb else (nb, OPP[d])
 
-    def _walked(self, c, d):
+    def mark_crossed(self, c, d):
+        self.walked.add(self.edge_key(c, d))
+
+    def is_walked(self, c, d):
         return self.edge_key(c, d) in self.walked
 
-    # ---- 观测摄入 (每帧都更新, 已确认状态也更新 —— 可撤销的前提) ----
+    def neighbors_walked(self, c):
+        out = []
+        for d in DIRS:
+            nb = (c[0] + DIRV[d][0], c[1] + DIRV[d][1])
+            if self.is_walked(c, d) or \
+               (0 <= nb[0] < self.n and 0 <= nb[1] < self.n and
+                self.edge_key(nb, OPP[d]) in self.walked):
+                out.append(d)
+        return out
+
+    def to_json(self):
+        return {'walked': [self._fk(k) for k in self.walked]}
+
+    def from_json(self, d):
+        self.walked = {self._pk(k) for k in d['walked']}
+
+    def _fk(self, k):
+        if k[0] == 'B':
+            return f"B|{k[1][0]}|{k[1][1]}|{k[2]}"
+        return f"I|{k[0][0]}|{k[0][1]}|{k[1]}"
+
+    def _pk(self, s):
+        t, x, y, dd = s.split('|')
+        return self.edge_key((int(x), int(y)), dd)
+
+
+class EdgeMap:
+    """墙几何事实: hard(WALKED/BOUNDARY) > derived(TREE) > soft(SENSOR)."""
+
+    def __init__(self, n):
+        self.n = n
+        self.soft = {}                 # key -> {'score','state'} (SENSOR, 可撤销)
+        self.hard = {}                 # key -> (state, prov)  (WALKED/BOUNDARY)
+        self.derived = {}              # key -> WALL (TREE, 每帧重算)
+        self.contradictions = 0
+
+    # ---- key (TraversalMap 同构, 独立实现避免互相依赖) ----
+    def edge_key(self, c, d):
+        nb = (c[0] + DIRV[d][0], c[1] + DIRV[d][1])
+        if not (0 <= nb[0] < self.n and 0 <= nb[1] < self.n):
+            return ('B', c, d)
+        return (c, d) if c <= nb else (nb, OPP[d])
+
+    # ---- 观测 (soft, 每帧都更新) ----
     def observe_wall(self, c, d, dist=1.0, confirm_near=0.6):
         return self._observe(c, d, +1, dist, confirm_near)
 
@@ -44,130 +93,103 @@ class EdgeMap:
 
     def _observe(self, c, d, sign, dist, confirm_near):
         key = self.edge_key(c, d)
-        bel = self.beliefs.setdefault(key, {'score': 0.0, 'state': UNKNOWN, 'prov': P_SENSOR})
-        if key in self.walked:
-            if sign > 0:                       # 传感器说墙, 车走过 → 矛盾诊断
-                self.contradictions += 1
-            bel['state'], bel['score'], bel['prov'] = OPEN, -float(T_FLIP), P_WALKED
-            return False
+        bel = self.soft.setdefault(key, {'score': 0.0, 'state': UNKNOWN})
         mag = float(T_CONFIRM) if dist < confirm_near else 1.0
         bel['score'] += sign * mag
         old = bel['state']
-        bel['state'] = self._transition(old, bel['score'])
-        if bel['state'] != old:
-            bel['prov'] = P_SENSOR
-            return True
-        return False
+        s = bel['score']
+        if bel['state'] == UNKNOWN:
+            if s >= T_CONFIRM:
+                bel['state'] = WALL
+            elif s <= -T_CONFIRM:
+                bel['state'] = OPEN
+        elif bel['state'] == WALL:
+            if s <= -T_FLIP:
+                bel['state'] = OPEN
+        elif bel['state'] == OPEN:
+            if s >= T_FLIP:
+                bel['state'] = WALL
+        return bel['state'] != old
 
-    @staticmethod
-    def _transition(state, score):
-        """真迟滞: 确认 ±T_CONFIRM, 翻转需越过 ±T_FLIP (通用分支不许吃掉 T_FLIP)"""
-        if state == UNKNOWN:
-            if score >= T_CONFIRM:
-                return WALL
-            if score <= -T_CONFIRM:
-                return OPEN
-        elif state == WALL:
-            if score <= -T_FLIP:
-                return OPEN
-        elif state == OPEN:
-            if score >= T_FLIP:
-                return WALL
-        return state
+    # ---- hard 事实 ----
+    def set_boundary(self, c, d, state):
+        """场地边界几何 (hard): state=WALL(普通外墙) 或 OPEN(入口/出口边)"""
+        self.hard[self.edge_key(c, d)] = (state, P_BOUNDARY)
 
-    # ---- walked / 推理 写入 ----
-    def mark_walked(self, c, d):
+    def walked(self, c, d, traversal):
+        """查询: 该边是否被走过 (hard OPEN)"""
+        return traversal.is_walked(c, d)
+
+    # ---- 查询 (effective state) ----
+    def state(self, c, d, traversal=None):
         key = self.edge_key(c, d)
-        if key not in self.walked:
-            self.walked.add(key)
-        bel = self.beliefs.setdefault(key, {'score': 0.0, 'state': UNKNOWN, 'prov': P_SENSOR})
-        bel['state'], bel['score'], bel['prov'] = OPEN, -float(T_FLIP), P_WALKED
+        if traversal is not None and traversal.is_walked(c, d):
+            return OPEN                              # hard
+        if key in self.hard:
+            return self.hard[key][0]                 # hard (BOUNDARY)
+        if key in self.derived:
+            return self.derived[key]                 # derived (TREE)
+        bel = self.soft.get(key)
+        return bel['state'] if bel else UNKNOWN      # soft
 
-    def infer_wall(self, c, d):
-        """TreeInference 结论写入 (provenance=TREE_INFERENCE)"""
+    def provenance(self, c, d, traversal=None):
         key = self.edge_key(c, d)
-        if key in self.walked:
-            return False                       # 推理与物理事实矛盾 → 调用方应告警
-        bel = self.beliefs.setdefault(key, {'score': 0.0, 'state': UNKNOWN, 'prov': P_SENSOR})
-        if bel['state'] != WALL:
-            bel['state'], bel['score'], bel['prov'] = WALL, float(T_CONFIRM), P_TREE
-            return True
-        return False
+        if traversal is not None and traversal.is_walked(c, d):
+            return P_WALKED
+        if key in self.hard:
+            return self.hard[key][1]
+        if key in self.derived:
+            return P_TREE
+        bel = self.soft.get(key)
+        return bel['prov'] if 'prov' in (bel or {}) else (P_SENSOR if bel else None)
 
-    # ---- 查询 ----
-    def state(self, c, d):
-        bel = self.beliefs.get(self.edge_key(c, d))
-        return bel['state'] if bel else UNKNOWN
+    def is_wall(self, c, d, traversal=None):
+        return self.state(c, d, traversal) == WALL
 
-    def provenance(self, c, d):
-        bel = self.beliefs.get(self.edge_key(c, d))
-        return bel['prov'] if bel else None
+    def is_open(self, c, d, traversal=None):
+        return self.state(c, d, traversal) == OPEN
 
-    def is_wall(self, c, d):
-        return self.state(c, d) == WALL
+    def resolved(self, c, d, traversal=None):
+        return self.state(c, d, traversal) != UNKNOWN
 
-    def is_open(self, c, d):
-        return self.state(c, d) == OPEN
+    def cell_classified(self, c, traversal=None):
+        return all(self.resolved(c, d, traversal) for d in DIRS)
 
-    def openings(self, c):
-        """已确认 OPEN 的方向 (规范 §5: CellMark 的 openings)"""
-        return tuple(d for d in DIRS if self.is_open(c, d))
+    def frontier(self, c, traversal):
+        """OPEN 且未走过 (规范定义; belief 撤销 → 自动消失)"""
+        return tuple(d for d in DIRS
+                     if self.is_open(c, d, traversal) and not traversal.is_walked(c, d))
 
-    def frontier(self, c):
-        """规范定义: OPEN 且未走过 (belief 撤销 → frontier 自动消失, 无 stale seen)"""
-        return tuple(d for d in DIRS if self.is_open(c, d) and not self._walked(c, d))
-
-    def resolved(self, c, d):
-        return self.state(c, d) != UNKNOWN
-
-    def cell_classified(self, c):
-        return all(self.resolved(c, d) for d in DIRS)
-
-    def all_resolved(self):
+    def all_resolved(self, traversal=None):
         for i in range(self.n):
             for j in range(self.n):
                 for d in DIRS:
                     nb = (i + DIRV[d][0], j + DIRV[d][1])
-                    if 0 <= nb[0] < self.n and 0 <= nb[1] < self.n and                              not self.resolved((i, j), d):
+                    if 0 <= nb[0] < self.n and 0 <= nb[1] < self.n and \
+                            not self.resolved((i, j), d, traversal):
                         return False
         return True
 
     # ---- 持久化 ----
-    def to_json(self):
-        return json.dumps({
-            'n': self.n,
-            'beliefs': self._flat(),
-            'walked': [self._flat_key(k) for k in self.walked],
-            'contradictions': self.contradictions,
-        })
-
-    def _flat_key(self, k):
+    def _fk(self, k):
         if k[0] == 'B':
             return f"B|{k[1][0]}|{k[1][1]}|{k[2]}"
         return f"I|{k[0][0]}|{k[0][1]}|{k[1]}"
 
-    def _parse_key(self, s):
+    def _pk(self, s):
         t, x, y, dd = s.split('|')
         return self.edge_key((int(x), int(y)), dd)
 
-    def _flat(self):
-        """canonical key → 统一 4 元组 (I:x,y,d / B:x,y,d)"""
-        out = {}
-        for k, v in self.beliefs.items():
-            if k[0] == 'B':
-                out[f"B|{k[1][0]}|{k[1][1]}|{k[2]}"] = v
-            else:
-                out[f"I|{k[0][0]}|{k[0][1]}|{k[1]}"] = v
-        return out
+    def to_json(self):
+        return {
+            'n': self.n,
+            'soft': {self._fk(k): v for k, v in self.soft.items()},
+            'hard': {self._fk(k): v for k, v in self.hard.items()},
+        }
 
-    def from_json(self, s):
-        d = json.loads(s)
+    def from_json(self, d):
         self.n = d['n']
-        self.beliefs = {}
-        for k, v in d['beliefs'].items():
-            t, x, y, dd = k.split('|')
-            key = self.edge_key((int(x), int(y)), dd)
-            self.beliefs[key] = v
-        self.walked = {self._parse_key(k) for k in d['walked']}
-        self.contradictions = d.get('contradictions', 0)
+        self.soft = {self._pk(k): v for k, v in d['soft'].items()}
+        self.hard = {self._pk(k): tuple(v) for k, v in d['hard'].items()}
+        self.derived = {}
         return self

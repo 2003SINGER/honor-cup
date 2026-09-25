@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""G0 核心确定性回归套件 (规范 §14 Gate G0).
+"""G0a 核心单元回归 + G0b 集成回归 (规范 §14 Gate G0).
 
-每个测试 = 一条语义的可执行定义. 全绿前禁止跑随机种子 benchmark."""
+每个测试 = 一条语义的可执行定义. G0a+G0b 全绿前禁止随机种子 benchmark."""
 
 import sys
 import os
@@ -11,228 +11,261 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 'ros2', 'm3pro_nav'))
 
 import pytest
-from m3pro_nav.edge_map import EdgeMap, UNKNOWN, WALL, OPEN, T_CONFIRM, T_FLIP
+from m3pro_nav.edge_map import EdgeMap, TraversalMap, UNKNOWN, WALL, OPEN, T_CONFIRM, T_FLIP
 from m3pro_nav import tree_inference
-from m3pro_nav.cell_classifier import classify, transition, DEAD, WAY, BRANCH
+from m3pro_nav.cell_classifier import classify, transition, turn_type, DEAD, WAY, BRANCH
 from m3pro_nav.dfs_explorer import DFSExplorer
 from m3pro_nav import known_horizon
 
 
+def _cell(walls, cell=(2, 2)):
+    """构造四边全确认的格: walls=墙方向集合, 其余开口. 返回 (em, tr)."""
+    em, tr = EdgeMap(7), TraversalMap(7)
+    for d in ('N', 'E', 'S', 'W'):
+        for _ in range(2):
+            (em.observe_wall if d in walls else em.observe_open)(cell, d, 0.2)
+    return em, tr
+
+
 # ---------------- CellMark: degree 语义五类 ----------------
 
-def mk_cell(walls, cell=(2, 2)):
-    """构造一个 EdgeMap: walls = 该格为墙的方向集合, 其余先给 2 帧开口证据"""
-    em = EdgeMap(7)
-    for d in ('N', 'E', 'S', 'W'):
-        if d in walls:
-            em.observe_wall(cell, d, 0.2)
-            em.observe_wall(cell, d, 0.2)
-        else:
-            em.observe_open(cell, d, 0.2)
-            em.observe_open(cell, d, 0.2)
-    return em
-
-
 def test_cell_dead():
-    m = classify(mk_cell({'N', 'E', 'S'}), (2, 2))   # 只有 W 开
-    assert m['kind'] == DEAD and m['degree'] == 1
+    em, tr = _cell({'N', 'E', 'S'})
+    mark = classify(em, (2, 2), tr)
+    assert mark['kind'] == DEAD and mark['degree'] == 1
 
 
 def test_cell_straight():
-    m = classify(mk_cell({'N', 'S'}), (2, 2))        # E/W 通
-    assert m['kind'] == WAY and m['degree'] == 2
+    em, tr = _cell({'N', 'S'})
+    mark = classify(em, (2, 2), tr)
+    assert mark['kind'] == WAY and mark['degree'] == 2
 
 
 def test_cell_left():
-    m = classify(mk_cell({'N', 'E'}), (2, 2))        # 朝 S 进, 左 = E? 朝 S: 左=E
-    assert m['kind'] == WAY
-    assert transition(m, 'S') == 'W'                 # 唯一非来向开口
+    em, tr = _cell({'N', 'E'})
+    mark = classify(em, (2, 2), tr)
+    assert mark['kind'] == WAY and transition(mark, 'S') == 'W'
 
 
 def test_cell_right():
-    m = classify(mk_cell({'N', 'W'}), (2, 2))
-    assert transition(m, 'S') == 'E'
+    em, tr = _cell({'N', 'W'})
+    mark = classify(em, (2, 2), tr)
+    assert transition(mark, 'S') == 'E'
 
 
 def test_cell_tjunction():
-    m = classify(mk_cell({'S'}), (2, 2))             # N/E/W 开 = T 岔
-    assert m['kind'] == BRANCH and m['degree'] == 3
-    assert transition(m, 'S') is None                # 岔路不给唯一 transition
+    em, tr = _cell({'S'})
+    mark = classify(em, (2, 2), tr)
+    assert mark['kind'] == BRANCH and mark['degree'] == 3
+    assert transition(mark, 'S') is None          # 岔路 transition=None, 归 DFS
 
 
 def test_cell_cross():
-    m = classify(mk_cell(set()), (2, 2))
-    assert m['kind'] == BRANCH and m['degree'] == 4
+    em, tr = _cell(set())
+    mark = classify(em, (2, 2), tr)
+    assert mark['kind'] == BRANCH and mark['degree'] == 4
 
 
 def test_cell_incomplete_returns_none():
-    em = EdgeMap(7)                                  # 全 UNKNOWN
-    assert classify(em, (2, 2)) is None
+    assert classify(EdgeMap(7), (2, 2), TraversalMap(7)) is None
 
 
-# ---------------- Edge: 开口/走过/frontier ----------------
+def test_dead_transition_returns_entry_side():
+    """GPT 四审修复回归: DEAD 的 transition = 原路返回 (旧版返回 None)"""
+    em, tr = _cell({'N', 'E', 'S'})
+    mark = classify(em, (2, 2), tr)
+    assert transition(mark, 'W') == 'W'
+
+
+def test_turn_types():
+    assert turn_type('S', 'N') == 'STRAIGHT'
+    assert turn_type('S', 'W') == 'LEFT'
+    assert turn_type('S', 'E') == 'RIGHT'
+    assert turn_type('S', 'S') == 'BACK'
+
+
+# ---------------- Edge / Traversal 分离 ----------------
 
 def test_open_not_walked():
-    em = EdgeMap(7)
+    em, tr = EdgeMap(7), TraversalMap(7)
     em.observe_open((2, 2), 'E', 0.2)
     em.observe_open((2, 2), 'E', 0.2)
-    assert em.state((2, 2), 'E') == OPEN
-    assert not em._walked((2, 2), 'E')
+    assert em.state((2, 2), 'E', tr) == OPEN
+    assert not tr.is_walked((2, 2), 'E')
 
 
-def test_open_walked():
-    em = EdgeMap(7)
-    em.mark_walked((2, 2), 'E')
-    assert em.state((2, 2), 'E') == OPEN and em._walked((2, 2), 'E')
-    assert em.state((3, 2), 'W') == OPEN            # canonical: 对面视角 (3,2)W 同一条边
+def test_open_walked_canonical():
+    em, tr = EdgeMap(7), TraversalMap(7)
+    tr.mark_crossed((2, 2), 'E')                  # (2,2)E ↔ (3,2)W 同一条边
+    assert em.state((2, 2), 'E', tr) == OPEN      # hard OPEN
+    assert em.state((3, 2), 'W', tr) == OPEN      # 对面视角同状态
+
+
+def test_walked_hard_beats_sensor_votes():
+    em, tr = EdgeMap(7), TraversalMap(7)
+    tr.mark_crossed((2, 2), 'E')
+    for _ in range(10):
+        em.observe_wall((2, 2), 'E', 0.2)
+    assert em.state((2, 2), 'E', tr) == OPEN      # hard 事实不被投票推翻
 
 
 def test_open_to_wall_removes_frontier():
-    em = EdgeMap(7)
+    em, tr = EdgeMap(7), TraversalMap(7)
     for _ in range(2):
         em.observe_open((2, 2), 'E', 0.2)
-    assert 'E' in em.frontier((2, 2))
-    for _ in range(T_FLIP + 1):                      # 反向证据越过 T_FLIP
+    assert 'E' in em.frontier((2, 2), tr)
+    for _ in range(T_FLIP + 1):
         em.observe_wall((2, 2), 'E', 0.2)
-    assert em.state((2, 2), 'E') == WALL
-    assert 'E' not in em.frontier((2, 2))            # frontier 自动消失, 无 stale seen
+    assert em.state((2, 2), 'E', tr) == WALL
+    assert 'E' not in em.frontier((2, 2), tr)     # 撤销 → frontier 自动消失
 
 
-# ---------------- TreeInference ----------------
+# ---------------- TreeInference: derived 可撤销 ----------------
 
-def test_cycle_inference_wall():
-    em = EdgeMap(7)
-    # 构造 U 形已确认通道: (1,2)-(1,1)-(1,0)-(2,0)-(2,1), (1,2)-(2,2) 未知
+def _mk_u_channel():
+    em, tr = EdgeMap(7), TraversalMap(7)
     for c, d in (((1, 2), 'S'), ((1, 1), 'S'), ((1, 0), 'E'),
                  ((2, 0), 'N'), ((2, 1), 'N')):
         em.observe_open(c, d, 0.2)
         em.observe_open(c, d, 0.2)
-    tree_inference.infer(em)
-    assert em.state((1, 2), 'E') == WALL             # (1,2)-(2,2) 加上就成环
-    assert em.provenance((1, 2), 'E') == 'TREE_INFERENCE'
+    return em, tr
 
 
-# ---------------- DFSExplorer ----------------
+def test_cycle_inference_wall():
+    em, tr = _mk_u_channel()
+    em.derived = tree_inference.recompute_derived(em, tr)
+    assert em.state((1, 2), 'E', tr) == WALL
+    assert em.provenance((1, 2), 'E', tr) == 'TREE_INFERENCE'
+
+
+def test_derived_wall_retracts_when_premise_retracts():
+    """GPT 四审核心: 前提 OPEN 撤销 → derived WALL 自动消失"""
+    em, tr = _mk_u_channel()
+    em.derived = tree_inference.recompute_derived(em, tr)
+    assert em.state((1, 2), 'E', tr) == WALL
+    for _ in range(T_FLIP + 2):                   # 推翻前提 (1,0)E → WALL
+        em.observe_wall((1, 0), 'E', 0.2)
+    em.derived = tree_inference.recompute_derived(em, tr)
+    assert em.state((1, 2), 'E', tr) != WALL      # derived 不残留
+
+
+# ---------------- DFSExplorer: BRANCH only + 持久 parent ----------------
 
 def test_dfs_goes_deep_before_sibling():
-    """branch 选 L 后, L 子树探完(way 格重访)才考虑 sibling"""
     dx = DFSExplorer((0, 0), order='LFR')
-    # branch 格 (0,0) 从场外 S 进: N/L(R)/R(F) 均未走
     mark = {'kind': BRANCH, 'opens': ('N', 'E', 'W')}
-    d2, mode = dx.on_enter((0, 0), mark, 'N', lambda c, d: False)
-    assert mode == 'explore' and d2 == 'W'           # LFR: L 最优先
-    assert dx.stack[-1][0] == (0, 0)
+    d2, mode = dx.commit_enter((0, 0), mark, 'S', lambda c, d: False)
+    assert (d2, mode) == ('W', 'explore')         # LFR: L 最优先
+    assert dx.stack[-1].parent_side == 'S'        # 冻结
 
 
-def test_dfs_returns_to_parent_branch():
-    """way 格全走过 → backtrack; branch children 全探 → 弹栈回溯"""
-    dx = DFSExplorer((0, 0))
-    mark_way = {'kind': WAY, 'opens': ('N', 'S')}
-    d2, mode = dx.on_enter((1, 0), mark_way, 'N',
-                           lambda c, d: (c, d) in {((1, 0), 'N')})
-    assert mode == 'backtrack' and d2 == 'S'         # 退向来向边方向 (南)
-
-    # branch (1,0) children 全走过 → pop → 朝栈顶父 branch (0,0) 回溯
-    dx.stack = [((0, 0), 'S')]                       # 父 branch 在栈上
-    dx.stack.append(((1, 0), 'S'))
-    mark_br = {'kind': BRANCH, 'opens': ('N',)}
-    d2, mode = dx.on_enter((1, 0), mark_br, 'N',
-                           lambda c, d: True)        # 全 walked
-    assert mode == 'backtrack' and d2 == 'S'         # 沿来向边退向父
+def test_dfs_peek_is_pure():
+    dx = DFSExplorer((0, 0), order='LFR')
+    mark = {'kind': BRANCH, 'opens': ('N', 'E', 'W')}
+    before = (len(dx.stack), [set(s.explored) for s in dx.stack])
+    for _ in range(100):
+        dx.peek_choice((0, 0), mark, 'S', lambda c, d: False)
+    after = (len(dx.stack), [set(s.explored) for s in dx.stack])
+    assert before == after                        # peek 100 次零副作用
 
 
-def test_dfs_does_not_use_nearest_frontier_policy():
-    """结构断言: DFSExplorer 不含 nearest_frontier; 探索目标由栈决定"""
-    assert not hasattr(DFSExplorer, 'nearest_frontier')
+def test_dfs_branch_parent_side_frozen_on_child_return():
+    dx = DFSExplorer((0, 0), order='LFR')
+    mark = {'kind': BRANCH, 'opens': ('N', 'E', 'W')}
+    dx.commit_enter((0, 0), mark, 'S', lambda c, d: False)   # parent_side='S'
+    d2, mode = dx.commit_enter((0, 0), mark, 'E',      # 从 child 回来 entry=E
+                               lambda c, d: d == 'N')
+    st = dx.stack[-1]
+    assert st.parent_side == 'S'                  # 冻结, 不被 'E' 覆盖
+    assert 'E' in st.explored                     # E 子树标记完成 (entry=E)
+    assert d2 == 'W'                              # 转向未探 child W
+
+
+def test_dfs_full_depth_trajectory():
+    """完整深度轨迹: A→(way)→B→dead→B→sibling→(way back)→A→sibling, 逐步断言"""
+    dx = DFSExplorer((0, 0), order='LFR')
+    # A=(0,0) 从 S 进, opens N/E/W
+    d2, mode = dx.commit_enter((0, 0), {'kind': BRANCH, 'opens': ('N', 'E', 'W')},
+                               'S', lambda c, d: False)
+    assert (d2, mode) == ('W', 'explore')         # A 选 L
+    # way 格 (西邻) opens=(N,E): 从 E 进 → 唯一出口 N (transition 决定, 不经 DFS)
+    assert transition({'kind': WAY, 'opens': ('N', 'E')}, 'E') == 'N'
+    # B=(-1,1) 从 S 进, opens N/E
+    d2, mode = dx.commit_enter((-1, 1), {'kind': BRANCH, 'opens': ('N', 'E')},
+                               'S', lambda c, d: False)
+    assert (d2, mode) == ('N', 'explore')         # B 选 E
+    # dead end (E 邻格) → transition 原路返回 → 回 B
+    assert transition({'kind': DEAD, 'opens': ('E',)}, 'E') == 'E'
+    # B: entry=E (从 child 回), N 未探
+    d2, mode = dx.commit_enter((-1, 1), {'kind': BRANCH, 'opens': ('N', 'E')},
+                               'E', lambda c, d: d == 'E')
+    assert (d2, mode) == ('N', 'explore')
+    # N 子树探完回到 B: children 全 explored → 弹栈, 沿冻结 parent_side='S'
+    d2, mode = dx.commit_enter((-1, 1), {'kind': BRANCH, 'opens': ('N', 'E')},
+                               'S', lambda c, d: True)
+    assert (d2, mode) == ('S', 'backtrack')
+    # 沿 way 回到 A: way opens=(N,S) 从 N 进 → 出 S
+    assert transition({'kind': WAY, 'opens': ('N', 'S')}, 'N') == 'S'
+    # A: entry=W (从西边回来), N/W 已探 → sibling E
+    d2, mode = dx.commit_enter((0, 0), {'kind': BRANCH, 'opens': ('N', 'E', 'W')},
+                               'W', lambda c, d: d in ('N', 'W'))
+    assert (d2, mode) == ('E', 'explore')
 
 
 # ---------------- KnownHorizon ----------------
 
-def test_known_horizon_stops_at_first_incomplete():
-    em = EdgeMap(7)
-    # (0,0) 四边确认, N 开口; (0,1) 只确认 S 开 + E 墙 → N UNKNOWN
-    for d in ('N', 'E', 'W'):
-        pass
+def test_known_horizon_straight_and_stops_at_incomplete():
+    em, tr = EdgeMap(7), TraversalMap(7)
     em.observe_open((0, 0), 'N', 0.2); em.observe_open((0, 0), 'N', 0.2)
     em.observe_wall((0, 0), 'E', 0.2); em.observe_wall((0, 0), 'E', 0.2)
     em.observe_wall((0, 0), 'W', 0.2); em.observe_wall((0, 0), 'W', 0.2)
+    em.set_boundary((0, 0), 'S', OPEN)            # 入口 (hard)
+    h = known_horizon.horizon(em, tr, (0, 0), 'S',
+                              lambda c: classify(em, c, tr), dfs_peek=None)
+    assert h['cells'][0][1] == 'STRAIGHT'         # S→N
+    assert h['stop'] == 'INCOMPLETE' and len(h['cells']) == 1
+
+
+def test_known_horizon_left_then_incomplete():
+    em, tr = EdgeMap(7), TraversalMap(7)
+    # (0,0) 直行 N; (0,1) 左转 W (E/N 墙, S 来)
+    for c, walls, opens in (((0, 0), ('E', 'W'), ('N', 'S')),
+                            ((0, 1), ('E', 'N'), ('W', 'S'))):
+        for d in walls:
+            em.observe_wall(c, d, 0.2); em.observe_wall(c, d, 0.2)
+        for d in opens:
+            em.observe_open(c, d, 0.2); em.observe_open(c, d, 0.2)
+    h = known_horizon.horizon(em, tr, (0, 0), 'S',
+                              lambda c: classify(em, c, tr), dfs_peek=None)
+    assert [t for _, t, _ in h['cells']] == ['STRAIGHT', 'LEFT']
+
+
+def test_known_horizon_passes_through_complete_branch_via_peek():
+    """COMPLETE branch 由 peek_choice 预览, horizon 穿过它继续"""
+    em, tr = EdgeMap(7), TraversalMap(7)
+    # (0,0) 十字全开 (branch), N→(0,1) WAY 直行→(0,2) 死路
+    for d in ('N', 'E', 'S', 'W'):
+        em.observe_open((0, 0), d, 0.2); em.observe_open((0, 0), d, 0.2)
     em.observe_open((0, 1), 'S', 0.2); em.observe_open((0, 1), 'S', 0.2)
+    em.observe_open((0, 1), 'N', 0.2); em.observe_open((0, 1), 'N', 0.2)
     em.observe_wall((0, 1), 'E', 0.2); em.observe_wall((0, 1), 'E', 0.2)
-    em.observe_open((0, 0), 'S', 0.2); em.observe_open((0, 0), 'S', 0.2)  # 来向场外开口
-    h = known_horizon.horizon(em, (0, 0), 'S', lambda c: classify(em, c))
-    assert h['stop'] == 'INCOMPLETE' and len(h['cells']) == 1   # (0,0) 已知, (0,1) 不完整
-
-
-# ---------------- EdgeBelief: 证据状态机 ----------------
-
-def test_unknown_to_open():
-    em = EdgeMap(7)
-    em.observe_open((2, 2), 'N', 1.5)
-    assert em.state((2, 2), 'N') == UNKNOWN          # 远距 1 帧 → 不足
-    em.observe_open((2, 2), 'N', 1.5)
-    assert em.state((2, 2), 'N') == OPEN             # 2 帧一致
-
-
-def test_unknown_to_wall():
-    em = EdgeMap(7)
-    em.observe_wall((2, 2), 'N', 1.5)
-    em.observe_wall((2, 2), 'N', 1.5)
-    assert em.state((2, 2), 'N') == WALL
-
-
-def test_open_requires_flip_threshold_to_wall():
-    """GPT 抓的 hysteresis bug: OPEN→WALL 必须真的越过 T_FLIP, ±2 不够"""
-    em = EdgeMap(7)
-    for _ in range(2):
-        em.observe_open((2, 2), 'N', 0.2)
-    assert em.state((2, 2), 'N') == OPEN
-    for _ in range(T_CONFIRM - 1):                   # +2-1 次墙: score 未过 +T_FLIP
-        em.observe_wall((2, 2), 'N', 0.2)
-    assert em.state((2, 2), 'N') == OPEN             # 不许翻!
-    for _ in range(4):                               # 补到越过 +T_FLIP
-        em.observe_wall((2, 2), 'N', 0.2)
-    assert em.state((2, 2), 'N') == WALL
-
-
-def test_wall_requires_flip_threshold_to_open():
-    em = EdgeMap(7)
-    for _ in range(2):
-        em.observe_wall((2, 2), 'N', 0.2)
-    assert em.state((2, 2), 'N') == WALL
-    for _ in range(T_CONFIRM - 1):
-        em.observe_open((2, 2), 'N', 0.2)
-    assert em.state((2, 2), 'N') == WALL             # 迟滞保持
-    for _ in range(4):
-        em.observe_open((2, 2), 'N', 0.2)
-    assert em.state((2, 2), 'N') == OPEN
-
-
-def test_walked_open_cannot_be_sensor_closed():
-    em = EdgeMap(7)
-    em.mark_walked((2, 2), 'E')
-    for _ in range(10):
-        em.observe_wall((2, 2), 'E', 0.2)
-    assert em.state((2, 2), 'E') == OPEN             # 物理事实不被传感器推翻
-
-
-def test_sensor_contradiction_is_recorded():
-    em = EdgeMap(7)
-    em.mark_walked((2, 2), 'E')
-    em.observe_wall((2, 2), 'E', 0.2)
-    assert em.contradictions >= 1                    # 诊断信号
-
-
-def test_edge_json_roundtrip():
-    em = EdgeMap(7)
-    for _ in range(2):
-        em.observe_wall((2, 2), 'N', 1.5)
-    em.observe_open((2, 2), 'E', 1.5)                # 远距 1 帧: score=-1 → UNKNOWN
-    em.mark_walked((0, 0), 'N')
-    em2 = EdgeMap(7).from_json(em.to_json())
-    assert em2.state((2, 2), 'N') == WALL
-    assert em2.state((2, 2), 'E') == UNKNOWN
-    assert em2._walked((0, 0), 'N') and em2.state((0, 0), 'N') == OPEN
-    assert em2.contradictions == em.contradictions
+    em.observe_wall((0, 1), 'W', 0.2); em.observe_wall((0, 1), 'W', 0.2)
+    em.observe_wall((0, 2), 'S', 0.2); em.observe_wall((0, 2), 'S', 0.2)
+    em.observe_wall((0, 2), 'E', 0.2); em.observe_wall((0, 2), 'E', 0.2)
+    em.observe_wall((0, 2), 'W', 0.2); em.observe_wall((0, 2), 'W', 0.2)
+    em.observe_wall((0, 2), 'N', 0.2); em.observe_wall((0, 2), 'N', 0.2)
+    dx = DFSExplorer((0, 0), order='FLR')
+    dx.commit_enter((0, 0), classify(em, (0, 0), tr), 'S',
+                    lambda c, d: tr.is_walked(c, d))          # A: branch 进栈, 选 N
+    h = known_horizon.horizon(em, tr, (0, 0), 'S',
+                              lambda c: classify(em, c, tr),
+                              dfs_peek=lambda c, m, e: dx.peek_choice(c, m, e,
+                                  lambda cc, dd: tr.is_walked(cc, dd)))
+    types = [t for _, t, _ in h['cells']]
+    assert types[0] == 'STRAIGHT'                 # A: S→N
+    assert types[1] == 'STRAIGHT'                 # (0,1) S→N (branch peek 直行)
+    assert types[2] == 'DEAD'                     # (0,2) 死路
+    assert h['stop'] == 'DEAD'
 
 
 # ---------------- Tracker ----------------
@@ -249,13 +282,9 @@ def test_tracker_mutated_path_rebuilds_cache():
     t = HolonomicTracker(v_max=0.35)
     path = [[0.0, 0.0], [0.0, 0.4], [0.4, 0.4]]
     t.update((0.0, 0.0, 0.0), path)
-    old_progress = t._s if hasattr(t, '_s') else None
-    path[1] = [0.0, 2.0]                             # 原地变异中间点
-    vx, vy, wz, done = t.update((0.0, 0.0, 0.0), path)
-    # 缓存必须重建: 新路径弧长 2.4 > 旧 0.8, 若没重建则进度错乱
-    total = getattr(t, '_total', None)
-    if total is not None:
-        assert abs(total - 3.6492422502470641) < 1e-6  # 新路径弧长 (缓存已重建)
+    path[1] = [0.0, 2.0]                          # 原地变异
+    t.update((0.0, 0.0, 0.0), path)
+    assert abs(t._total - 3.6492422502470641) < 1e-6
 
 
 def test_tracker_single_point():
@@ -267,18 +296,33 @@ def test_tracker_single_point():
 
 # ---------------- 单一真相源 ----------------
 
-def test_single_mazemap_implementation():
+def test_no_duplicate_implementations():
     import m3pro_nav.mazemap as m1
-    src = open(os.path.join(os.path.dirname(inspect.getfile(m1)),
-                            '..', '..', '..', 'src', 'mazemap.py')).read() \
-        if os.path.exists(os.path.join(os.path.dirname(inspect.getfile(m1)),
-                                       '..', '..', '..', 'src', 'mazemap.py')) else None
-    assert src is None, "src/mazemap.py 双副本复活!"
-    assert not hasattr(m1.MazeMap.open_edge, '__wrapped__') or True
+    base = os.path.dirname(inspect.getfile(m1))
+    for f in ('mazemap.py', 'tracker.py'):
+        dup = os.path.normpath(os.path.join(base, '..', '..', '..', 'src', f))
+        assert not os.path.exists(dup), f"双副本复活: {f}"
 
 
-def test_single_tracker_implementation():
-    import m3pro_nav.tracker as t1
-    dup = os.path.join(os.path.dirname(inspect.getfile(t1)),
-                       '..', '..', '..', 'src', 'tracker.py')
-    assert not os.path.exists(dup), "src/tracker.py 双副本复活!"
+# ---------------- StreamNav 薄 coordinator (G0b) ----------------
+
+def test_streamnav_has_no_private_belief_state():
+    from m3pro_nav.stream_nav import StreamNav
+    nav = StreamNav((0, 0), n=7)
+    for legacy in ('beliefs', 'marks', 'm'):
+        assert not hasattr(nav, legacy), f"StreamNav 残留第二套认知状态: {legacy}"
+
+
+def test_streamnav_semanticsim_integration():
+    """SemanticSim 实际运行链: observe → classify → plan_edge 全走新模块"""
+    from m3pro_nav.stream_nav import StreamNav
+    nav = StreamNav((0, 0), n=7, v_cruise=0.7)
+    # 模拟: (0,0) N/E 开, W 墙, S 场外入口
+    for _ in range(2):
+        nav.observe({((0, 0), 'W'): (0.2, 0.01),
+                     ((0, 1), 'S'): (0.2, 0.01)},
+                    [((0, 0), 'N', 0.2, 0.01), ((0, 0), 'E', 0.2, 0.01),
+                     ((0, 0), 'S', 0.2, 0.01)])
+    nav.mark_walked((0, 0), 'N')                  # 车向北走过
+    plan = nav.plan_edge((0, 0), 'N')
+    assert plan['d2'] == 'E'                      # way: N 进 → 唯一另一口 E

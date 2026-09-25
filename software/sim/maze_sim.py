@@ -380,6 +380,11 @@ def explore_stream(walls, entry, ex, order, blocks, *,
                     assume_tree=assume_tree)
     wall_segs = world.wall_segs
 
+    def walk_edge(cell_, d_):
+        """进格: 登记 walked (TraversalMap) 并返回邻格"""
+        nav.mark_walked(cell_, d_)
+        return (cell_[0] + DIRV[d_][0], cell_[1] + DIRV[d_][1])
+
     st = {'time': 0.0, 'dist': 0.0, 'got': 0, 'arcs': 0, 'spins': 0,
           'grabs': 0, 'violations': 0, 'sched_t': 0.0, 'obs_new': 0,
           'mark_hit': 0, 'enters': 0}
@@ -387,7 +392,7 @@ def explore_stream(walls, entry, ex, order, blocks, *,
     # ---- 离散簿记 + 连续位姿 ----
     cell, heading, o, v = entry, 'N', 0.0, 0.0
     world.cell, world.heading, world.o = cell, heading, o
-    nav.m.touch(cell)
+    
     e_lat, th_err = 0.0, 0.0                        # 横向误差 / 航向误差 (OU)
     px, py = cell[0] * C + P, cell[1] * C + P       # 连续中心
     th = TH['N']
@@ -434,18 +439,18 @@ def explore_stream(walls, entry, ex, order, blocks, *,
         while q:
             cc = q.pop(0)
             for d, dv in DIRV.items():
-                if nav.m.nodes.get(cc, {}).get('edges', {}).get(d) == 'walked':
+                if nav.traversal.is_walked(cc, d):
                     nb = (cc[0] + dv[0], cc[1] + dv[1])
                     if nb not in reach:
                         reach.add(nb)
                         q.append(nb)
         if exc in reach:
-            return nav.m.path_between(cell, exc), 0.0
+            return nav.route_between(cell, exc), 0.0
         for d, dv in DIRV.items():
             nb = (exc[0] + dv[0], exc[1] + dv[1])
             if nb in reach and 0 <= nb[0] < N and 0 <= nb[1] < N and \
-               nav.m.nodes.get(nb, {}).get('edges', {}).get(OPP[d]) in ('seen', 'walked'):
-                return nav.m.path_between(cell, nb), 0.6
+               nav.is_open(nb, OPP[d]) or nav.traversal.is_walked(nb, OPP[d]):
+                return nav.route_between(cell, nb), 0.6
         return None, 0.0
 
     def speed_run(path_dirs):
@@ -567,7 +572,7 @@ def explore_stream(walls, entry, ex, order, blocks, *,
         # ---- 速度调度 (视界) ----
         seg_end, seg_vend = plan['end_o'], plan['v_end']
         far = plan['far']
-        if nav.marks.get(far) is None and not nav.cell_classified(far):
+        if nav.mark(far) is None and not nav.cell_classified(far):
             cap = math.sqrt(max(0.0, 2 * a_dec * max(0.0, 0.4 - o - 0.05)))
             if v > cap:
                 v = cap
@@ -593,7 +598,7 @@ def explore_stream(walls, entry, ex, order, blocks, *,
                 cell, heading, o, v = tgt_cell, tgt_hdg, 0.15, v
                 world.cell, world.heading = cell, heading
                 st['enters'] += 1
-                st['mark_hit'] += cell in nav.marks
+                st['mark_hit'] += nav.mark(cell) is not None
             else:
                 cut = (p_in, th_in, p_out, th_out, tgt_cell, tgt_hdg, s)
             continue
@@ -613,7 +618,7 @@ def explore_stream(walls, entry, ex, order, blocks, *,
                 if not (0 <= _nb[0] < N and 0 <= _nb[1] < N):
                     st['violations'] += 50                 # 边角兜底(已知问题见 TODO)
                     return finish()
-                farc = nav.m.walk_edge(cell, heading)
+                farc = walk_edge(cell, heading)
                 world.collect(farc)
                 nav.set_block_collected(farc)
                 nav.got += 1
@@ -621,7 +626,7 @@ def explore_stream(walls, entry, ex, order, blocks, *,
                 st['grabs'] += 1
                 st['time'] += t_grab
                 st['enters'] += 1
-                st['mark_hit'] += farc in nav.marks
+                st['mark_hit'] += nav.mark(farc) is not None
                 cell, o, v, plan = farc, 0.0, 0.0, None
                 world.cell = cell
                 continue
@@ -630,14 +635,14 @@ def explore_stream(walls, entry, ex, order, blocks, *,
                 # 45° 斜切: 入弯点 = 走廊交点(farc中心)前 0.15, 出弯点 = 交点后沿 d3 0.15
                 # 斜线长 0.2121m, 距内角 0.177m (车侧缘余量 6.9cm)
                 e_lat *= 0.1                             # 切弯前对中
-                farc = nav.m.walk_edge(cell, heading)    # 走到 far (登记)
+                farc = walk_edge(cell, heading)    # 走到 far (登记)
                 st['enters'] += 1
-                st['mark_hit'] += farc in nav.marks
+                st['mark_hit'] += nav.mark(farc) is not None
                 d3v = DIRV[plan['d3']]
                 d2v = DIRV[heading]
                 fc = ((farc[0] + 0.5) * C, (farc[1] + 0.5) * C)
                 p_out = (fc[0] + d3v[0] * 0.15, fc[1] + d3v[1] * 0.15)
-                tgt_cell = nav.m.walk_edge(farc, plan['d3'])
+                tgt_cell = walk_edge(farc, plan['d3'])
                 cut = ((px, py), th, p_out, TH[plan['d3']], tgt_cell, plan['d3'], 0.2121)
                 st['arcs'] += 1
                 heading = plan['d3']
@@ -661,9 +666,9 @@ def explore_stream(walls, entry, ex, order, blocks, *,
                 world.heading = heading
                 plan = None
                 continue
-            nxtc = nav.m.walk_edge(cell, heading)
+            nxtc = walk_edge(cell, heading)
             st['enters'] += 1
-            st['mark_hit'] += nxtc in nav.marks
+            st['mark_hit'] += nav.mark(nxtc) is not None
             cell, o, v, plan = nxtc, 0.0, v, None
             world.cell = cell
 

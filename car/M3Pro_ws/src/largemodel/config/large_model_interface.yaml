@@ -31,8 +31,8 @@ CUID : 'IN7dAbz1thDJKVhLdypkpB6sDVG86xeG'                                       
 
 #------------------------------------------------------国外用户配置选项International version configuration options--------------------------------------------
 
-decision_AI_api_key : "app-E7cPag5diUJSo4VmRLQXCJoB"                   #dify决策大模型应用API_KEY
-execution_AI_api_key : "app-2DomQwAo3VdUhjf6qiR9NPmP"                  #dify执行大模型应用API_KEY
+decision_AI_api_key : ""                   #dify决策大模型应用API_KEY
+execution_AI_api_key : ""                  #dify执行大模型应用API_KEY
 
 #--------------------------------------------------------系统配置（无特殊请勿修改）System configuration (Please do not modify unless otherwise specified)-----------------------------------
 #本地tts模型配置Local tts model configuration

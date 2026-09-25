@@ -15,7 +15,6 @@ setup(
     install_requires=['setuptools'],
     entry_points={
         'console_scripts': [
-            'decision = m3pro_nav.decision_node:main',
         ],
     },
 )

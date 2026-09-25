@@ -89,7 +89,7 @@ class MotionExecutor:
         return used
 
     def _advance_arc(self, prim, dt) -> float:
-        """四分之一圆弧平移: yaw0 字段存起始极角, yaw1 孫带符号角跨度,
+        """四分之一圆弧平移: yaw0 字段存起始极角, yaw1 存带符号角跨度,
         p0 字段存圆心, meta['r'] 存半径. 速度矢量 = 切向, 模长恒 v_arc."""
         remaining = prim.length - prim.progress
         self.v = max(0.0, min(self.v + self.a_acc * dt, prim.v_max))
@@ -105,5 +105,5 @@ class MotionExecutor:
         r = prim.meta['r']
         self.pose.x = prim.p0[0] + r * math.cos(ang)
         self.pose.y = prim.p0[1] + r * math.sin(ang)
-        self.pose.yaw = prim.start_pose.yaw            # 车身朝向不变
+        # body yaw 不由 primitive 修改 (姿态保持环职责, executor 只积分位置)
         return used

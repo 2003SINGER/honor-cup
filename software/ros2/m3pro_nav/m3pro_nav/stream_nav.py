@@ -182,9 +182,11 @@ class StreamNav:
     def resolve_exit(self, cell, entry_side):
         """CellAction 查表: 该格从 entry_side 进 → 从哪条边出.
         WAY/DEAD 纯查表; BRANCH 读局部状态 (未进过 → 纯 preview, 零副作用).
-        返回 exit_side | None (CellMark 未完成 → WAIT)."""
+        entry_side 非本格 OPEN → None (绝不从墙里进)."""
         mark = self.mark(cell)
         if mark is None:
+            return None
+        if entry_side not in mark['opens']:
             return None
         if mark['kind'] == 'WAY':
             return _transition(mark, entry_side)

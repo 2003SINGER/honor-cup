@@ -1,35 +1,32 @@
-# TODO —— 进度真相板 (2026-09-25, 原始设计对齐后)
+# TODO —— 进度真相板 (2026-09-25 晚, Tier A 运行时修复后)
 
 > 唯一进度真相. 完成项打 ✅ 留证据; 数字必须带 Gate 级别, failures>0 即 INVALID.
 > 旧真相板（R3 运动层时代）已归档：`docs/decisions/2026-09-25-旧TODO-R3真相板.md`。
 
 ## 当前状态一句话
 
-设计真相已重写（`docs/design/算法规范.md`，依据用户原始方案 + 2026-09-25
-GPT 对齐对话）；代码按新架构重构进行中（WIP `386a067`），存在一个已知
-P0 死锁，Gate 未跑。
+设计真相已按原始方案定稿；Tier A 运行时三连根因修复完成（P0 等待死锁 /
+折返死循环 / 出口格切角碰撞），fullinfo 50/50 + blocks 50/50 冒烟全绿，
+100/1000 seed Gate 见下。
 
 ## ✅ 本轮完成
 
-- ✅ 文档审计：README / 旧算法规范 / 旧 TODO 全部按新架构重写或归档
-  （Rejected after requirement re-alignment），旧文本不再误导后续实现
-- ✅ GPT 对话存档入库：`docs/decisions/2026-09-25-原始设计对齐-GPT对话存档.md`
-- ✅ 运动层重构（WIP `386a067`）：STRAIGHT/ARC/REVERSE/STOP 四原语；
-  R=0.2 固定模板；body yaw 恒定（executor 只积分位置）；REVERSE 倒穿父边；
-  抓取停格中心；事件检测支持"格线停靠后离线=真实跨越"
-- ✅ StreamNav 去 DFS：branch 局部状态机（parent/children/next），
-  runtime 接 compile_chain / compile_home，旧 dfs_explorer / known_horizon /
-  move_intent 删除
+- ✅ 文档重写对齐（README / 算法规范 / TODO；旧文档归档 Rejected after re-alignment）
+- ✅ 运动层重构：STRAIGHT/ARC/REVERSE/STOP，R=0.2 固定模板，body yaw 恒定
+- ✅ P0 死锁修复：STOP 前向格内蹭 NUDGE=0.1m → 离线跨越事件触发 → visit 建立
+- ✅ 折返死循环修复：refresh_branch 不再重复登记 visit（visit_count=709 污染根因）
+- ✅ 出口格切角碰撞修复：compile_home 出口格走同一套模板，禁止弦线切角
+- ✅ 边界守卫恢复：探索永不冲出场地（边界出口 → 折返；进出皆边界 → 停车）
+- ✅ entry_side 只来自真实事件/已走拓扑，禁止几何猜测（审查定案落实）
+- ✅ 结构清理：mazemap __main__ 演示块删除；旧 decision_node ROS 骨架归档
+- ✅ tests 按新架构重写 33 例（Gate A/B/D/E/G/H/J/K + 结构/依赖方向）全绿
 
 ## 🔜 下一步（按序）
 
-1. **P0 解死锁**：STOP 落点内移进邻格（符合规范 §11 WAIT 位置），
-   或事件检测支持"到达即进入"语义 → seed0 起全 seed 冒烟
-2. P1 tests 按 Gate A–L 重写（旧 DFS/MoveIntent 测试已失效）
-3. P1 Gate M：100 seeds fullinfo + 100 blocks → 0 abort/0 collision/
-   0 wrong_edges → 再 1000
-4. P2 定位前端 Tier B 实装（连续可信遮罩 + 已确认墙校正 + 防自证，规范 §8/§9）
-5. P2 速度控制实装（v_max = √(2·a_dec·(d_unknown−margin))，规范 §10）
+1. Gate M：100 seeds 双模式（进行中）→ 全绿后 1000 seeds → TAG tier-a-core-baseline
+2. Tier B：定位前端实装（连续可信遮罩 + 已确认墙校正 + 防自证，规范 §8/§9）
+   —— 只换 Observation Adapter，core 不准改（Gate M: Adapter Replacement）
+3. 速度控制实装（v_max = √(2·a_dec·(d_unknown−margin))，规范 §10）
 
 ## 验收纪律
 

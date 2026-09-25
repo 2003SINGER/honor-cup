@@ -314,21 +314,227 @@ def test_streamnav_has_no_private_belief_state():
 
 
 def test_streamnav_semanticsim_integration():
-    """SemanticSim 实际运行链: observe → classify → plan_edge 全走新模块"""
+    """运行链: on_entered → observe → plan_intent 全走新事件 API"""
     from m3pro_nav.stream_nav import StreamNav
     nav = StreamNav((0, 0), n=7, v_cruise=0.7)
-    # 模拟: (0,0) N/E 开, W 墙, S 场外入口
     for _ in range(2):
-        nav.observe({((0, 0), 'W'): (0.2, 0.01),
-                     ((0, 1), 'S'): (0.2, 0.01)},
+        nav.observe({((0, 0), 'W'): (0.2, 0.01)},
                     [((0, 0), 'N', 0.2, 0.01), ((0, 0), 'E', 0.2, 0.01),
                      ((0, 0), 'S', 0.2, 0.01)])
-    nav.mark_walked((0, 0), 'N')                  # 车向北走过
-    plan = nav.plan_edge((0, 0), 'N')
-    assert plan['d2'] == 'E'                      # way: N 进 → 唯一另一口 E
+    nav.on_entered((0, 0), 'S')               # 机器人经 S 边进入 (朝 N)
+    nav.on_crossed((0, 0), 'N')               # 真实跨越 N 边
+    intent = nav.plan_intent((0, 0), 'S')
+    assert intent.next_edge == 'E'            # way: S 进 → 唯一另一口 E
+    assert intent.mode == 'EXPLORE'
 
 
-# ---------------- R2.5.1 验收 (GPT 四审复核 9 项) ----------------
+def test_coordinator_full_dfs_event_sequence():
+    """完整 DFS 轨迹全走事件 API (on_entered/on_crossed/plan_intent):
+    A branch → way → B branch → dead → B → B sibling → dead → B → way → A → A sibling"""
+    from m3pro_nav.stream_nav import StreamNav
+
+    nav = StreamNav((0, 0), n=7, order='LFR')
+
+    def set_cell(c, walls):
+        for _ in range(2):
+            for d in ('N', 'E', 'S', 'W'):
+                if d in walls:
+                    nav.edges.observe_wall(c, d, 0.2)
+                else:
+                    nav.edges.observe_open(c, d, 0.2)
+
+    set_cell((0, 0), {'W'})                  # A: opens N,E,S(boundary entry)
+    set_cell((0, 1), {'E', 'W'})             # way: opens S,N
+    set_cell((0, 2), {'W'})                  # B: opens S,E,N
+    set_cell((1, 2), {'N', 'E', 'S'})        # dead: opens W
+    set_cell((0, 3), {'N', 'E', 'W'})        # dead: opens S
+    # A: 进入即 commit (BRANCH, first_entered=S)
+    r = nav.on_entered((0, 0), 'S')
+    assert r is not None and r[0] == 'N'     # heading N: L 无 → F(N) 优先于 R(E)
+    assert nav.dfs.stack[-1].parent_side == 'S'
+    # → way (0,1)
+    nav.on_crossed((0, 0), 'N')
+    it = nav.plan_intent((0, 1), 'S')
+    assert it.next_edge == 'N' and it.mode == 'EXPLORE'
+    # → B (0,2): branch commit
+    nav.on_crossed((0, 1), 'N')
+    r = nav.on_entered((0, 2), 'S')
+    assert r[0] == 'N' and r[1] == 'explore'
+    assert nav.dfs.stack[-1].parent_side == 'S'
+    # → dead (0,3): 原路返回 S
+    nav.on_crossed((0, 2), 'N')
+    it = nav.plan_intent((0, 3), 'S')          # entry_side = 穿过的边 (S), 非行进方向
+    assert it.next_edge == 'S' and it.mode == 'BACKTRACK'
+    # 回 B: arrived=N ∈ children → 标记 explored; 转向未探 E
+    nav.on_crossed((0, 3), 'S')
+    r = nav.on_entered((0, 2), 'N')
+    assert r[0] == 'E' and r[1] == 'explore'
+    assert 'N' in nav.dfs.stack[-1].explored
+    # → dead (1,2): 原路返回 W
+    nav.on_crossed((0, 2), 'E')
+    it = nav.plan_intent((1, 2), 'W')          # entry_side = 穿过的边 (W)
+    assert it.next_edge == 'W' and it.mode == 'BACKTRACK'
+    # 回 B: arrived=E → children 全完成 → 弹栈归档, 沿冻结 parent_side=S
+    nav.on_crossed((1, 2), 'W')
+    r = nav.on_entered((0, 2), 'E')
+    assert r == ('S', 'backtrack')
+    assert nav.dfs.stack[-1].cell == (0, 0)
+    # → way (0,1) 重访: S 出
+    nav.on_crossed((0, 2), 'S')
+    it = nav.plan_intent((0, 1), 'N')
+    assert it.next_edge == 'S'
+    # 回 A: arrived=N 标记 explored; 未探 E
+    nav.on_crossed((0, 1), 'S')
+    r = nav.on_entered((0, 0), 'N')
+    assert r[0] == 'E' and r[1] == 'explore'
+    assert 'N' in nav.dfs.stack[-1].explored
+
+
+def test_sim_commits_dfs():
+    """结构验收 (R3): 旧运行时/兼容层必须死亡; 事件链必须存在"""
+    base = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'sim')
+    rt = open(os.path.join(base, 'runtime_v2.py')).read()
+    import re as _re
+    for banned in (r'walk_edge\(', r'mark_walked\(', r'world\.cell', r'far_cut',
+                   r'end_o', r'plan_edge\('):
+        assert not _re.search(banned, rt), f"runtime_v2 残留旧链调用: {banned}"
+    assert 'on_crossed' in rt and 'on_entered' in rt
+    ms = open(os.path.join(base, 'maze_sim.py')).read()
+    assert 'explore_stream' not in ms, "旧 explore_stream 复活"
+
+
+# ---------------- R3 Gate 1-3: 事件检测 / 位姿连续 / CUT90 ----------------
+
+def test_event_detector_four_directions():
+    from m3pro_nav.pose import Pose2D
+    from m3pro_nav.event_detector import GridEventDetector
+    det = GridEventDetector(n=7)
+    for d, (dx, dy) in (('E', (0.4, 0)), ('W', (-0.4, 0)),
+                        ('N', (0, 0.4)), ('S', (0, -0.4))):
+        prev = Pose2D(1.0, 1.0, 0.0)
+        cur = Pose2D(1.0 + dx, 1.0 + dy, 0.0)
+        evs = det.detect(prev, cur)
+        assert len(evs) == 1 and evs[0].direction == d, f"{d}: {evs}"
+
+
+def test_event_detector_no_phantom_and_order():
+    from m3pro_nav.pose import Pose2D
+    from m3pro_nav.event_detector import GridEventDetector
+    det = GridEventDetector(n=7)
+    assert det.detect(Pose2D(1.0, 1.0, 0.0), Pose2D(1.0, 1.0, 0.0)) == []
+    evs = det.detect(Pose2D(0.9, 1.0, 0.0), Pose2D(1.7, 1.0, 0.0))   # 跨两条 E 边
+    assert [e.direction for e in evs] == ['E', 'E']
+    assert evs[0].from_cell == (2, 2) and evs[1].from_cell == (3, 2)  # 按 t 排序
+
+
+def test_cut90_event_sequence():
+    """Gate 3 核心: 直行跨 A/B 恰一次 → cut 内零事件 → 后续直行跨 B/C 恰一次"""
+    from m3pro_nav.pose import Pose2D, C, TH
+    from m3pro_nav.motion_planner import MotionPlanner
+    from m3pro_nav.motion_executor import MotionExecutor
+    from m3pro_nav.event_detector import GridEventDetector
+    from m3pro_nav.move_intent import MoveIntent
+
+    A = (0, 0)
+    intent = MoveIntent(next_edge='E', mode='EXPLORE', target_cell=(1, 0),
+                        preferred_continuation='N', requires_stop=False)
+    planner = MotionPlanner()
+    pose = Pose2D((A[0] + 0.5) * C, (A[1] + 0.5) * C, TH['E'])
+    prims = planner.plan(pose, intent, far_kind='WAY')
+    assert [p.kind for p in prims] == ['STRAIGHT', 'CUT90']
+    ex = MotionExecutor(pose)
+    ex.set_plan(prims)
+    # 接上 cut 后的继续直行 (到下一格中心)
+    from m3pro_nav.motion_primitive import MotionPrimitive
+    nxt = MotionPrimitive(kind='STRAIGHT',
+                          start_pose=Pose2D(prims[-1].p1[0], prims[-1].p1[1], TH['N']),
+                          p0=prims[-1].p1,
+                          p1=(0.8, 0.6),                 # (1,1) 中心: 沿 N 继续直行
+                          yaw0=TH['N'], yaw1=TH['N'],
+                          length=0.3, v_max=0.7, v_end=0.7)
+    ex.queue.append(nxt)
+    det = GridEventDetector(n=7)
+    events = []
+    for _ in range(2000):
+        if ex.idle:
+            break
+        prev = ex.pose.copy()
+        cur = ex.step(0.02)
+        events += det.detect(prev, cur)
+    crosses = [(e.from_cell, e.direction) for e in events]
+    assert crosses == [((0, 0), 'E'), ((1, 0), 'N')], crosses   # cut 段零事件 ✓
+
+
+def test_pose_continuity_across_primitives():
+    """Gate 2: primitive 接缝零位姿跳变 (每 tick 位移 ≤ 可达距离+ε)"""
+    from m3pro_nav.pose import Pose2D, C, TH
+    from m3pro_nav.motion_planner import MotionPlanner
+    from m3pro_nav.motion_executor import MotionExecutor
+    from m3pro_nav.event_detector import GridEventDetector
+    from m3pro_nav.move_intent import MoveIntent
+    import math as _m
+    intent = MoveIntent(next_edge='E', mode='EXPLORE', target_cell=(1, 0),
+                        preferred_continuation='N', requires_stop=False)
+    planner = MotionPlanner()
+    pose = Pose2D(0.5 * C, 0.5 * C, TH['E'])
+    ex = MotionExecutor(pose)
+    ex.set_plan(planner.plan(pose, intent, far_kind='WAY'))
+    det = GridEventDetector(n=7)
+    max_step = 0.0
+    for _ in range(3000):
+        if ex.idle:
+            break
+        prev = ex.pose.copy()
+        cur = ex.step(0.02)
+        det.detect(prev, cur)
+        max_step = max(max_step, _m.hypot(cur.x - prev.x, cur.y - prev.y))
+    assert max_step <= 0.7 * 0.02 + 1e-9, max_step
+
+
+# ---------------- GPT 五审要求回归 ----------------
+
+def test_late_classified_branch_preserves_first_parent():
+    """迟分类 branch: 首访 INCOMPLETE(parent 冻结) → 分类完成 → 从 child 重访 parent 不变"""
+    from m3pro_nav.stream_nav import StreamNav
+    nav = StreamNav((0, 0), n=7)
+    nav.on_entered((0, 2), 'S')                       # 首访: mark None
+    assert nav.dfs._find_state((0, 2)) is None
+    # 观测使 (0,2) 变 COMPLETE BRANCH (opens N,E,S; W 墙)
+    for _ in range(2):
+        nav.edges.observe_open((0, 2), 'N', 0.2)
+        nav.edges.observe_open((0, 2), 'E', 0.2)
+        nav.edges.observe_open((0, 2), 'S', 0.2)
+        nav.edges.observe_wall((0, 2), 'W', 0.2)
+    r = nav.refresh_visit((0, 2))                     # 迟分类 commit
+    assert r is not None and r[1] == 'explore'
+    assert nav.dfs.stack[-1].parent_side == 'S'       # 真父方向
+    # 从 E child 子树重访: arrived=E 标 explored, parent 仍冻结 S
+    r = nav.on_entered((0, 2), 'E')
+    assert r[0] == 'N' and r[1] == 'explore'          # 未探 child N (LFR: F 优先)
+    st = nav.dfs.stack[-1]
+    assert st.parent_side == 'S' and 'E' in st.explored
+
+
+def test_planner_never_invents_continuation():
+    """deprecated adapter 已删: continuation 只来自 intent.preferred_continuation;
+    cont=None → 永不 CUT90 (哪怕 frontier 有场外开口)"""
+    from m3pro_nav.pose import Pose2D, TH, C
+    from m3pro_nav.motion_planner import MotionPlanner
+    from m3pro_nav.move_intent import MoveIntent
+    from m3pro_nav.stream_nav import StreamNav
+    planner = MotionPlanner()
+    pose = Pose2D(0.5 * C, 0.5 * C, TH['E'])
+    base = dict(mode='EXPLORE', target_cell=(1, 0), requires_stop=False)
+    prims = planner.plan(pose, MoveIntent(next_edge='E',
+                          preferred_continuation=None, **base), far_kind='WAY')
+    assert 'CUT90' not in [p.kind for p in prims]
+    prims = planner.plan(pose, MoveIntent(next_edge='E',
+                          preferred_continuation='N', **base), far_kind='WAY')
+    assert 'CUT90' in [p.kind for p in prims]
+    # 兼容层死亡: plan_edge / mark_walked / commit_cell 不存在
+    for gone in ('plan_edge', 'mark_walked', 'commit_cell'):
+        assert not hasattr(StreamNav, gone), f"兼容层复活: {gone}"
+
 
 def test_derived_independent_of_previous_cache():
     """预塞错误 derived 后重算 → 结果只由 base facts 决定 (无自举)"""
@@ -378,73 +584,3 @@ def test_move_intent_contract():
     assert mi.next_edge == 'E' and mi.mode == 'EXPLORE'
     assert not hasattr(mi, 'end_o') and not hasattr(mi, 'v_end')
     assert not hasattr(mi, 'turn_here') and not hasattr(mi, 'far_cut')
-
-
-def test_coordinator_full_dfs_event_sequence():
-    """完整 DFS 轨迹全走 StreamNav 公共 API (observe+crossed+commit_cell+plan_intent):
-    A branch → way → B branch → dead → B → B sibling → dead → B → way → A → A sibling"""
-    from m3pro_nav.stream_nav import StreamNav
-
-    nav = StreamNav((0, 0), n=7, order='LFR')
-
-    def set_cell(c, walls):
-        for _ in range(2):
-            for d in ('N', 'E', 'S', 'W'):
-                if d in walls:
-                    nav.edges.observe_wall(c, d, 0.2)
-                else:
-                    nav.edges.observe_open(c, d, 0.2)
-
-    set_cell((0, 0), {'W'})                  # A: opens N,E,S(boundary entry)
-    set_cell((0, 1), {'E', 'W'})             # way: opens S,N
-    set_cell((0, 2), {'W'})                  # B: opens S,E,N
-    set_cell((1, 2), {'N', 'E', 'S'})        # dead: opens W
-    set_cell((0, 3), {'N', 'E', 'W'})        # dead: opens S
-    # A 是 branch (opens N,E + S 场外) → commit
-    r = nav.commit_cell((0, 0), 'N')
-    assert r is not None and r[0] == 'N'     # LFR: F(N) 无 L 可选 → N? opens 无 W/L → N=F 优先
-    assert nav.dfs.stack[-1].parent_side == 'S'
-    # → way (0,1): S 进 N 出
-    nav.crossed((0, 0), 'N')
-    it = nav.plan_intent((0, 1), 'N')
-    assert isinstance(it, object) and it.next_edge == 'N' and it.mode == 'EXPLORE'
-    # → B (0,2): branch, commit (children=N,E; heading N → L 无, F=N 优先于 R=E)
-    nav.crossed((0, 1), 'N')
-    r = nav.commit_cell((0, 2), 'N')
-    assert r[0] == 'N' and r[1] == 'explore'
-    assert nav.dfs.stack[-1].parent_side == 'S'
-    # → dead (0,3): 原路返回 S
-    nav.crossed((0, 2), 'N')
-    it = nav.plan_intent((0, 3), 'N')
-    assert it.next_edge == 'S' and it.mode == 'BACKTRACK'
-    # 回 B: entry=N ∈ children → explored; 未探 E
-    nav.crossed((0, 3), 'S')
-    r = nav.commit_cell((0, 2), 'S')
-    assert r[0] == 'E' and r[1] == 'explore'
-    assert 'N' in nav.dfs.stack[-1].explored
-    # → dead (1,2): 原路返回 W
-    nav.crossed((0, 2), 'E')
-    it = nav.plan_intent((1, 2), 'E')
-    assert it.next_edge == 'W' and it.mode == 'BACKTRACK'
-    # 回 B: entry=E ∈ children → explored; children 全完成 → 弹栈沿冻结 parent_side=S
-    nav.crossed((1, 2), 'W')
-    r = nav.commit_cell((0, 2), 'W')
-    assert r == ('S', 'backtrack')
-    assert nav.dfs.stack[-1].cell == (0, 0)  # 栈顶回到 A
-    # → way (0,1) 重访: S 出
-    nav.crossed((0, 2), 'S')
-    it = nav.plan_intent((0, 1), 'S')
-    assert it.next_edge == 'S'
-    # 回 A: N ∈ children → explored; 未探 E
-    nav.crossed((0, 1), 'S')
-    r = nav.commit_cell((0, 0), 'S')
-    assert r[0] == 'E' and r[1] == 'explore'
-    assert 'N' in nav.dfs.stack[-1].explored
-
-
-def test_sim_commits_dfs():
-    """SemanticSim 真实进格路径必须调用 commit_cell (静态断言)"""
-    src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                            '..', 'sim', 'maze_sim.py')).read()
-    assert src.count('nav.commit_cell(') >= 3, \
-        f"sim 真实进格事件未接 DFS commit: {src.count('nav.commit_cell(')} 处"

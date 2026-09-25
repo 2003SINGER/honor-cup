@@ -31,27 +31,34 @@ Camera → BlockDetector → CollectorAdapter → 机械臂
 
 ## 当前阶段（2026-09-25）
 
-- **G0 核心确定性测试**进行中：EdgeMap/TraversalMap/TreeInference/CellClassifier/
-  DFSExplorer/KnownHorizon 已实现，deterministic pytest 已建（`software/tests/`）
-- **未解决的最大问题**：R3 运动执行层（Pose 唯一 owner + crossed-edge 事件）未建，
-  此前仿真的 far==cell/位姿漂移/148k violation 均源于此（详见 TODO 断点记录）
+- **R3 事件驱动运行时已落地**：Pose2D 唯一物理 owner + 几何跨越事件 +
+  MotionPlanner/Executor + CellVisit 迟分类；10/10 seeds 0 碰撞 0 未确认 0 中断
+- 下一步：KnownHorizon 调速 (P1-A) → 1000 seeds (P1-B) → Sim→Real 中间层 (P1-C)
 - 验收 Gate：G0 core tests → G1 SemanticSim 1000 seeds 0 fail → G2 SensorSim →
   G3 replay → G4 台架 → G5 一格 → G6 小迷宫 → G7 全程。**G5 之前不优化速度。**
 
 ## 仓库结构
 
 ```
-software/ros2/m3pro_nav/m3pro_nav/   唯一核心实现 (单一真相源)
-  ├─ edge_map.py        EdgeMap + TraversalMap (几何事实 ⊥ 行驶历史)
-  ├─ tree_inference.py  树结构公理闭包 (成环必墙; B/C/D 挂 flag)
-  ├─ cell_classifier.py CellMark / CellClassifier
-  ├─ dfs_explorer.py    BRANCH 调度 (nearest_frontier 探索策略已废除)
+software/ros2/m3pro_nav/m3pro_nav/   核心实现 (单一真相源)
+  ├─ edge_map.py        EdgeMap (hard/soft/derived 三层) + TraversalMap 分离
+  ├─ tree_inference.py  树公理闭包 (成环必墙, 纯 base 重算可撤销)
+  ├─ cell_classifier.py CellMark / CellClassifier / turn_type
+  ├─ dfs_explorer.py    BRANCH 调度 (BranchState parent 冻结 + peek/commit 两阶段)
   ├─ known_horizon.py   KnownHorizonPlanner
-  ├─ stream_nav.py      决策协调层 (beliefs/mark/plan_edge)
-  ├─ mazemap.py         拓扑 + path_between (RoutePlanner)
+  ├─ move_intent.py     MoveIntent (StreamNav 唯一输出契约)
+  ├─ pose.py            Pose2D/Twist2D (唯一物理真相的数据类型)
+  ├─ events.py          CrossedEdge / EnteredCell 事件
+  ├─ visits.py          CellVisit (entered_from 只来自真实进入事件)
+  ├─ event_detector.py  连续线段 → 跨格事件 (0漏/0重/0幻)
+  ├─ motion_primitive.py / motion_planner.py / motion_executor.py
+  │                     STRAIGHT/CUT90/SPIN/CREEP/STOP (只改 Pose, 不碰认知)
+  ├─ stream_nav.py      薄 coordinator: 事件→认知, plan_intent→MoveIntent
+  ├─ mazemap.py         path_between (RoutePlanner)
   └─ tracker.py         全向轨迹跟踪 (上车件, 未闭环)
-software/sim/maze_sim.py    Tier A SemanticSim (World 出 EdgeObservation)
-software/tests/             deterministic regression suite (G0)
+software/sim/runtime_v2.py  R3 事件驱动 SemanticSim (Pose 唯一 owner)
+software/sim/maze_sim.py    gen_maze/CLI/定位对照 (旧运行时已删)
+software/tests/             G0a+G0b+R3 Gates 41 例
 docs/design/算法规范.md      现行算法唯一规范
 docs/decisions/             历史/被否定方案 (arc -58% 已作废等)
 docs/官方资料总览.md         134 份官方 PDF 摘要

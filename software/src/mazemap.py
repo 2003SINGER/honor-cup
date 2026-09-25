@@ -52,7 +52,7 @@ class MazeMap:
     def open_edge(self, cell, d):
         """在 cell 看到朝 d 的分叉。通向边界外 → 标记出口。返回邻格坐标(界内)或 None。
            注意：不把 walked 降级成 seen（重复探测同一路口是常态）。"""
-        self.touch(cell)
+        # 注意: open_edge 是"远程观测到开口", 不算踏入 → 不 touch (visited 语义=车真进过)
         nb = (cell[0] + DIRS[d][0], cell[1] + DIRS[d][1])
         if not (0 <= nb[0] < self.n and 0 <= nb[1] < self.n):
             if cell != self.entry:          # 入口格的对外开口 = 来时的路，不是出口

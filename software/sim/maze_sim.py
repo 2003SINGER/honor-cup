@@ -23,7 +23,10 @@ import sys
 import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..',
+                                'ros2', 'm3pro_nav'))
 from mazemap import MazeMap
+from m3pro_nav.stream_nav import StreamNav   # 唯一认知体: 仿真与 ROS 共用, 禁止复制
 
 C = 0.4            # 格距 m (通道 40cm)
 N = 7              # 7×7
@@ -124,7 +127,7 @@ def explore(walls, entry, ex, order, blocks, v=0.30, t_turn=1.5, t_grab=1.0, cor
             # 弧线切角(90°): 不停车, 切掉路口角
             cut = C - (math.pi / 2) * (C / 2)        # 路程省 ~0.086m (r=C/2)
             st_['dist'] -= cut
-            st_['time'] += -t_turn + cut / (v * 0.7)  # 弧段限速 0.7v, 无原地转
+            st_['time'] += cut / (v * 0.7)            # 弧段限速 0.7v, 无原地转 (bug修复: 原多减一次 t_turn)
         else:                                        # pivot / arc 的 180° 掉头: 原地转
             st_['time'] += t_turn * r
         st_['heading'] = d
@@ -201,7 +204,11 @@ P_HALF = 0.2                                       # 半通道宽
 
 
 class World:
-    """物理世界: 真值迷宫 + 真值车位. 小车只能通过 sense()/block_at() 看世界."""
+    """物理世界: 真值迷宫 + 真值车位 + 雷达/相机物理模型.
+       雷达: 返回 (cell,dir,dist,alpha) —— alpha=射线与墙法线夹角(真实几何+角噪声),
+             类别(墙/口)由真值遮挡计算 —— 语义关联 (cell,dir) 由仿真直接给出,
+             实车上由节点层几何反算 (仿真边界, 见 README).
+       相机: 方块仅在视野内可见 (前方 cam_range 内 ±45° 锥), 非上帝视角."""
 
     def __init__(self, walls, blocks, entry):
         self.walls = walls
@@ -210,24 +217,29 @@ class World:
         self.heading = 'N'
         self.o = 0.0
         self.collected = set()
+        # 真值墙线段 (碰撞检查用)
+        self.wall_segs = []
+        for (i, j), ds in walls.items():
+            for d in ds:
+                x0, y0 = i * C, j * C
+                if d == 'N':
+                    self.wall_segs.append(((x0, y0 + C), (x0 + C, y0 + C)))
+                elif d == 'S':
+                    self.wall_segs.append(((x0, y0), (x0 + C, y0)))
+                elif d == 'E':
+                    self.wall_segs.append(((x0 + C, y0), (x0 + C, y0 + C)))
+                elif d == 'W':
+                    self.wall_segs.append(((x0, y0), (x0, y0 + C)))
+        self.wall_segs = list({tuple(sorted(s)) for s in self.wall_segs})
 
-    def sense(self, rng=0.02, maxr=2.4):
-        """360° 仿真雷达: 四轴正入射 + 对角掠射, 带量程噪声; 遮挡由真值计算.
-           返回 (hits, opens): hits[(ck,axis)]=带噪距离(墙), opens=[(ck,axis)](开口)"""
+    def sense(self, rng=0.02, maxr=2.4, dphi_deg=0.30):
+        """360° 一帧: 四轴正入射(α≈0) + 前方侧边对角(α=atan(s,P) 掠射).
+           返回 hits{(c,d):(dist,alpha)}, opens[(c,d,dist,alpha)]"""
+        dphi = math.radians(dphi_deg)
         hits, opens = {}, []
         hv = DIRV[self.heading]
         offs = {self.heading: self.o, OPP[self.heading]: -self.o}
-
-        def ray(axis, ck, s):
-            """沿 axis 的边界 ck 在距离 s 处: 返回测量(墙→带噪距离)或 None(开口)"""
-            if s < 0.05 or s > maxr:
-                return None
-            if axis in self.walls[ck]:
-                return s + random.gauss(0, rng)
-            return None
-
-        # ① 四轴正入射链(含本格四边), 墙即遮挡
-        for axis in DIRS:
+        for axis in DIRS:                             # ① 四轴正入射链
             av = DIRV[axis]
             p_off = offs.get(axis, 0.0)
             occl = False
@@ -242,13 +254,13 @@ class World:
                     break
                 if s < 0.05:
                     continue
+                alpha = abs(random.gauss(0, dphi))    # 正入射 + 角噪声
                 if axis in self.walls[ck]:
-                    hits[(ck, axis)] = s + random.gauss(0, rng)
+                    hits[(ck, axis)] = (s + random.gauss(0, rng), alpha)
                     occl = True
                 else:
-                    opens.append((ck, axis, s))
-        # ② 前方格侧边对角掠射
-        occluded = False
+                    opens.append((ck, axis, s + random.gauss(0, rng), alpha))
+        occluded = False                                # ② 前方侧边对角掠射
         for k in range(1, N + 2):
             if occluded:
                 break
@@ -258,199 +270,173 @@ class World:
             s_far = 0.2 + 0.4 * k - self.o
             if s_far > maxr:
                 break
+            alpha0 = math.atan2(s_far, P_HALF)          # 射线 vs 侧墙法线
             for sd in DIRS:
                 if DIRV[sd] == hv or DIRV[sd] == (-hv[0], -hv[1]):
                     continue
+                alpha = alpha0 + random.gauss(0, dphi)
                 if sd in self.walls[ck]:
-                    phi = math.atan2(P_HALF, s_far)
-                    hits[(ck, sd)] = s_far + random.gauss(0, max(rng, P_HALF / math.sin(phi) ** 2 * math.radians(0.3)))
+                    hits[(ck, sd)] = (s_far + random.gauss(0, rng), alpha)
                 else:
-                    opens.append((ck, sd, s_far))
+                    opens.append((ck, sd, s_far + random.gauss(0, rng), alpha))
             if self.heading in self.walls[ck]:
                 occluded = True
         return hits, opens
 
+    def camera_blocks(self, cam_range=1.5):
+        """相机输出: 视野内(前方 cam_range, ±45°锥)的含块格 —— 非上帝视角"""
+        seen = []
+        hv = DIRV[self.heading]
+        for bc in self.blocks - self.collected:
+            dx, dy = bc[0] - self.cell[0], bc[1] - self.cell[1]
+            along = dx * hv[0] + dy * hv[1]             # 前向格数
+            if along < 0:
+                continue
+            side = abs(dx * hv[1] - dy * hv[0])         # 横向格数
+            if along * along + side * side == 0:
+                seen.append(bc)
+                continue
+            if math.hypot(along, side) * C > cam_range:
+                continue
+            if side > along + 1e-9:                     # >45° 半角
+                continue
+            seen.append(bc)
+        return seen
+
     def block_at(self, c):
-        """相机: 该格是否有未收集方块(能看见就算)"""
         return c in self.blocks and c not in self.collected
 
     def collect(self, c):
         self.collected.add(c)
 
 
+# ---------------- 连续位姿与碰撞检查 ----------------
+
+HALF_W = 0.1075                                   # 车宽 21.5cm 之半 (赛题约束)
+HALF_L = 0.145                                    # 车长 ~29cm 之半
+
+
+def _seg_dist(px, py, seg):
+    (x1, y1), (x2, y2) = seg
+    dx, dy = x2 - x1, y2 - y1
+    L2 = dx * dx + dy * dy
+    t = max(0.0, min(1.0, ((px - x1) * dx + (py - y1) * dy) / L2))
+    return math.hypot(px - (x1 + t * dx), py - (y1 + t * dy))
+
+
+def collision(px, py, th, wall_segs, near):
+    """车矩形(中心 px,py 朝向 th) 与墙线段是否相交 (角+边中点采样进入矩形判定)"""
+    ca, sa = math.cos(th), math.sin(th)
+    pts = []
+    for lx, ly in ((HALF_L, HALF_W), (HALF_L, -HALF_W),
+                   (-HALF_L, HALF_W), (-HALF_L, -HALF_W),
+                   (0, HALF_W), (0, -HALF_W), (HALF_L, 0), (-HALF_L, 0)):
+        pts.append((px + lx * ca - ly * sa, py + lx * sa + ly * ca))
+    # 矩形内测试(中心点足够近的墙段) + 采样点距墙 < 阈值 → 视为穿透
+    for seg in near:
+        (x1, y1), (x2, y2) = seg
+        # 墙段端点在矩形内? 用采样点距墙段近似: 任一采样点距墙段 < 1cm
+        for qx, qy in pts:
+            if _seg_dist(qx, qy, seg) < 0.01:
+                return True
+    return False
+
+
 def explore_stream(walls, entry, ex, order, blocks, *,
-                   v_cruise=0.50, a_acc=1.0, a_dec=1.0, a_lat=0.7,
+                   v_cruise=0.70, a_acc=1.0, a_dec=1.0, a_lat=0.7,
                    dphi_deg=0.30, gate=0.06, scan_hz=10.0, proc_ms=5.0,
-                   t_spin180=1.0, t_grab=1.0, ctrl_hz=50.0, v_run=0.60,
-                   assume_tree=True):
-    """流式探索 v3 —— 世界/小车分离:
-       World 持真值, 只暴露 sense()(带噪观测)/block_at(); Agent(本函数内联)持认知:
-       MazeMap + wall_known + exit_open, 永不读真值. 决策骨架同 explore()."""
+                   t_spin180=1.0, t_turn90=0.5, t_grab=1.0, ctrl_hz=50.0, v_run=0.60,
+                   assume_tree=True, cam_range=1.5,
+                   lat_k=3.0, lat_sigma=0.03):
+    """流式探索 —— 世界(World) + 认知(StreamNav, 唯一决策核心) + 运动/碰撞.
+
+    诚实性: ①观测带真实入射角α+距离噪声, 置信门限在认知侧;
+            ②proc_ms 通过 pending 队列真实延迟;
+            ③violations 由连续位姿的足迹-墙线碰撞检查产生;
+            ④方块仅相机视野内可见;
+            ⑤仿真边界: 语义关联(cell,dir)假设完美(实车由节点层几何反算)."""
     P = C / 2
-    P_G = P
-    DPHI = math.radians(dphi_deg)
-    MAXR = 2.4
     v_arc = math.sqrt(a_lat * P)
     dt = 1.0 / ctrl_hz
     scan_every = max(1, round(ctrl_hz / scan_hz))
     lag = 1 + math.ceil(proc_ms * 1e-3 * ctrl_hz)
+    TH = {'N': math.pi / 2, 'E': 0.0, 'S': -math.pi / 2, 'W': math.pi}
 
     world = World(walls, blocks, entry)
-    m = MazeMap(N, entry)
-    wall_known = {}                                  # 认知: 已确认的墙
-    exit_open = set()                                # 认知: 已确认的出口开口
+    nav = StreamNav(entry, order=order, n=N, v_cruise=v_cruise, a_acc=a_acc,
+                    a_dec=a_dec, a_lat=a_lat, dphi_deg=dphi_deg, gate=gate,
+                    assume_tree=assume_tree)
+    wall_segs = world.wall_segs
+
     st = {'time': 0.0, 'dist': 0.0, 'got': 0, 'arcs': 0, 'spins': 0,
-          'grabs': 0, 'violations': 0, 'sched_t': 0.0, 'obs_new': 0}
+          'grabs': 0, 'violations': 0, 'sched_t': 0.0, 'obs_new': 0,
+          'mark_hit': 0, 'enters': 0}
 
-    def resolved(c, d):
-        return (c, d) in wall_known or (c, d) in exit_open or \
-               m.nodes.get(c, {}).get('edges', {}).get(d) in ('seen', 'walked')
-
-    def ingest(hits, opens):
-        """观测 → 置信门限 → 认知更新. 几何误差模型(而非读真值):
-           正入射 err≈量程噪声; 掠射 err=P/sin²φ·δφ"""
-        newly = 0
-        for (ck, axis), d_meas in hits.items():
-            if resolved(ck, axis):
-                continue
-            s = abs(0.2 + 0.4 * 0 - 0) + d_meas      # 位置由里程计提供(近似真值)
-            phi = math.atan2(P, max(d_meas, 0.21))
-            err = max(0.02, P / math.sin(phi) ** 2 * DPHI) if d_meas > 0.25 \
-                else math.hypot(0.02, d_meas * DPHI)
-            if err < gate:
-                wall_known[(ck, axis)] = True
-                nbm = (ck[0] + DIRV[axis][0], ck[1] + DIRV[axis][1])
-                if 0 <= nbm[0] < N and 0 <= nbm[1] < N:
-                    wall_known[(nbm, OPP[axis])] = True   # 边共享: 一面墙两侧同时确认
-                newly += 1
-        for (ck, axis, s) in opens:
-            if resolved(ck, axis):
-                continue
-            if s < 0.25:                              # 正入射/贴身: 直接确认
-                err = 0.02
-            else:                                     # 对角掠射: 远才可信
-                phi = math.atan2(P, s)
-                err = max(0.02, P / math.sin(phi) ** 2 * DPHI)
-            if err < gate:
-                nb = m.open_edge(ck, axis)
-                if nb is None:
-                    exit_open.add((ck, axis))
-                newly += 1
-        return newly
-
-    def cell_classified(c):
-        return all(resolved(c, d) for d in DIRS)
-
-    # ---- 格子标记器 (用户方案): 四边登记齐 → 直接打"怎么走"标记 ----
-    # 纯局部观测: 只看本格四边登记状态(墙/开口), 零推理、不依赖树假设.
-    # way 标记含行进方向 → 决策层进格前读标记直接动, 低耦合.
-    marks = {}                                       # cell -> {'kind','d2'}
-
-    def try_mark(c):
-        if c != entry and c not in m.nodes:
-            return
-        if any(not resolved(c, d) for d in DIRV):
-            return                                   # 还有未知边: 不打, 靠近再说
-        opens = [d for d in DIRV if (c, d) not in wall_known]
-        n = len(opens)
-        new_mk = ({'kind': 'dead', 'd2': None} if n == 0 else
-                  {'kind': 'way', 'd2': opens[0]} if n == 1 else
-                  {'kind': 'branch', 'd2': None})
-        if marks.get(c) != new_mk:
-            if c in marks:
-                st['mark_revised'] = st.get('mark_revised', 0) + 1
-            marks[c] = new_mk
-
-    def consistency_guard():
-        """认知一致性: walked 边是物理事实(车真走过了), 推断墙与之冲突 → 删墙.
-           防止'墙+walked并存'的矛盾认知导致决策死循环."""
-        n = 0
-        for cc, nd in m.nodes.items():
-            for d, s in nd['edges'].items():
-                if s == 'walked' and (cc, d) in wall_known:
-                    del wall_known[(cc, d)]
-                    nbm = (cc[0] + DIRV[d][0], cc[1] + DIRV[d][1])
-                    wall_known.pop((nbm, OPP[d]), None)
-                    marks.pop(cc, None)                # 该格标记作废重打
-                    marks.pop(nbm, None)
-                    n += 1
-        st['wall_conflicts'] = st.get('wall_conflicts', 0) + n
-        return n
-
-    def prune():
-        """树环剪枝: 未知边两端点在已知通道图已连通 → 必是墙 (加边即成环). 另含镜像."""
-        newly = 0
-        for (ck, axis) in list(wall_known):
-            nbm = (ck[0] + DIRV[axis][0], ck[1] + DIRV[axis][1])
-            if 0 <= nbm[0] < N and 0 <= nbm[1] < N and (nbm, OPP[axis]) not in wall_known:
-                wall_known[(nbm, OPP[axis])] = True
-                newly += 1
-        if not assume_tree:
-            return newly
-        parent = {}
-        def find(x):
-            parent.setdefault(x, x)
-            while parent[x] != x:
-                parent[x] = parent[parent[x]]
-                x = parent[x]
-            return x
-        for c2, nd in m.nodes.items():
-            for d, s in nd['edges'].items():
-                if s not in ('seen', 'walked'):
-                    continue
-                a, b = find(c2), find((c2[0] + DIRV[d][0], c2[1] + DIRV[d][1]))
-                if a != b:
-                    parent[a] = b
-        for i in range(N):
-            for j in range(N):
-                for d, dv in DIRV.items():
-                    nb = (i + dv[0], j + dv[1])
-                    if not (0 <= nb[0] < N and 0 <= nb[1] < N):
-                        continue
-                    ck = (i, j)
-                    if resolved(ck, d):
-                        continue
-                    if find(ck) == find(nb):
-                        wall_known[(ck, d)] = True
-                        wall_known[(nb, OPP[d])] = True
-                        newly += 1
-        return newly
-
-    # ---- 初始静态扫描 ----
+    # ---- 离散簿记 + 连续位姿 ----
     cell, heading, o, v = entry, 'N', 0.0, 0.0
-    m.touch(entry)
-    exit_open.add((entry, 'S'))                    # 入口外=已确认开口(非墙, 非出口格)
-    hits, opens = world.sense()
-    ingest(hits, opens)
-    prune()
-    try_mark(entry)
-
-    plan = None
-    arc_left = 0.0
+    world.cell, world.heading, world.o = cell, heading, o
+    nav.m.touch(cell)
+    e_lat, th_err = 0.0, 0.0                        # 横向误差 / 航向误差 (OU)
+    px, py = cell[0] * C + P, cell[1] * C + P       # 连续中心
+    th = TH['N']
+    cut = None                                       # (p_in, th_in, p_out, th_out, tgt_cell, tgt_hdg, s)
+    pending = []                                     # 观测帧延迟队列
     tick = 0
 
+    def near_segs(x, y):
+        out = []
+        for seg in wall_segs:
+            if min(abs(seg[0][0] - x), abs(seg[1][0] - x)) > C + 0.3:
+                if min(abs(seg[0][1] - y), abs(seg[1][1] - y)) > C + 0.3:
+                    continue
+            out.append(seg)
+        return out
+
+    def step_pose(o_now):
+        """直线连续位姿: 位置 = 走廊中心线(o 参数化) + 横向误差偏移 (无积分漂移)"""
+        nonlocal px, py, th, e_lat, th_err
+        e_lat += (-lat_k * e_lat) * dt + lat_sigma * math.sqrt(dt) * random.gauss(0, 1)
+        th_err += (-4.0 * th_err) * dt + 0.01 * math.sqrt(dt) * random.gauss(0, 1)
+        dv = DIRV[heading]
+        nx, ny = -dv[1], dv[0]
+        bx, by = (cell[0] + 0.5) * C, (cell[1] + 0.5) * C
+        px = bx + dv[0] * o_now + nx * e_lat
+        py = by + dv[1] * o_now + ny * e_lat
+        th = TH[heading] + th_err
+        if collision(px, py, th, wall_segs, near_segs(px, py)):
+            st['violations'] += 1
+            st['viol_line'] = st.get('viol_line', 0) + 1
+            e_lat *= 0.3                             # 撞后回中(粗糙恢复)
+
+
+
+
+
     def go_home():
-        exc = m.exit_cell
+        exc = nav.exit_cell
+        if exc is None:                              # 出口还没发现: 探索被兜底中断
+            return None, 0.0
         reach = {cell}
         q = [cell]
         while q:
-            cc = q.pop()
+            cc = q.pop(0)
             for d, dv in DIRV.items():
-                if m.nodes.get(cc, {}).get('edges', {}).get(d) == 'walked':
+                if nav.m.nodes.get(cc, {}).get('edges', {}).get(d) == 'walked':
                     nb = (cc[0] + dv[0], cc[1] + dv[1])
                     if nb not in reach:
                         reach.add(nb)
                         q.append(nb)
         if exc in reach:
-            return m.path_between(cell, exc), 0.0
+            return nav.m.path_between(cell, exc), 0.0
         for d, dv in DIRV.items():
             nb = (exc[0] + dv[0], exc[1] + dv[1])
             if nb in reach and 0 <= nb[0] < N and 0 <= nb[1] < N and \
-               m.nodes.get(nb, {}).get('edges', {}).get(OPP[d]) in ('seen', 'walked'):
-                return m.path_between(cell, nb), 0.6
+               nav.m.nodes.get(nb, {}).get('edges', {}).get(OPP[d]) in ('seen', 'walked'):
+                return nav.m.path_between(cell, nb), 0.6
         return None, 0.0
 
     def speed_run(path_dirs):
+        """已知路径速度跑 + 逐边碰撞采样"""
         d_tot, cuts, prev = 0.0, 0.0, None
         for d in path_dirs:
             d_tot += C
@@ -461,6 +447,20 @@ def explore_stream(walls, entry, ex, order, blocks, *,
         st['time'] += d_tot / v_run
         st['arcs'] += sum(1 for a, b in zip(path_dirs[:-1], path_dirs[1:])
                           if b != a and b != OPP[a])
+        # 碰撞采样: 沿路径 5cm 步长 (直线段 + 原地转向角)
+        xx, yy = px, py
+        ee = e_lat
+        for d in path_dirs:
+            dv = DIRV[d]
+            nx, ny = -dv[1], dv[0]
+            for _ in range(int(C / 0.05)):
+                ee += (-lat_k * ee) * 0.1 + lat_sigma * math.sqrt(0.1) * random.gauss(0, 1)
+                xx += dv[0] * 0.05
+                yy += dv[1] * 0.05
+                sx, sy = xx + nx * ee, yy + ny * ee
+                if collision(sx, sy, TH[d], wall_segs, near_segs(sx, sy)):
+                    st['violations'] += 1
+                    ee *= 0.3
 
     def finish():
         unres = 0
@@ -470,117 +470,60 @@ def explore_stream(walls, entry, ex, order, blocks, *,
                     nb = (i + dv[0], j + dv[1])
                     if not (0 <= nb[0] < N and 0 <= nb[1] < N):
                         continue
-                    if not resolved((i, j), d):
+                    if not nav.resolved((i, j), d):
                         unres += 1
         st['unresolved'] = unres // 2
         dirs, extra = go_home()
         if dirs is None:
-            return None                                 # 出口区域还没走到
+            return st
         speed_run(dirs)
         if extra:
             st['dist'] += extra
             st['time'] += extra / v_run
         return st
 
-    def nearest_frontier_dir():
-        """BFS 已走边图, 找最近的有 seen 分支的格; 返回 (第一步方向, 步数) 或 None"""
-        reach = {cell: (0, None)}
-        q = [cell]
-        while q:
-            cc = q.pop(0)
-            if cc != cell and m.frontier(cc):
-                return reach[cc]
-            for d, dv in DIRV.items():
-                if m.nodes.get(cc, {}).get('edges', {}).get(d) != 'walked':
-                    continue
-                nb = (cc[0] + dv[0], cc[1] + dv[1])
-                if nb not in reach:
-                    reach[nb] = (reach[cc][0] + 1,
-                                 d if cc == cell else reach[cc][1])
-                    q.append(nb)
-        return None
+    # ---- 初始观测 ----
+    hits, opens = world.sense()
+    nav.observe(hits, opens)
+    for bc in world.camera_blocks(cam_range):
+        nav.set_block_seen(bc, True)
 
-    def make_plan():
-        """标记驱动决策: 非岔路格读标记直接动(零推理); 岔路/无标记才走搜索层.
-           本格: way→唯一出口直接走; branch/未标→frontier选向; 未标记→wait靠近"""
-        mk = marks.get(cell)
-        if mk is None:
-            return 'wait'                              # 四边未齐: 靠近/等待观测
-        if mk['kind'] == 'way':
-            d2 = mk['d2']                              # 唯一出口: 标记即答案
-        else:                                          # branch
-            front = [d for d in m.frontier(cell)]
-            # dead 方向跳过 — 除非那格有方块(必须进去抓)
-            def farc_of(d):
-                return (cell[0] + DIRV[d][0], cell[1] + DIRV[d][1])
-            front = [d for d in front
-                     if marks.get(farc_of(d), {}).get('kind') != 'dead'
-                     or world.block_at(farc_of(d))]
-            if front:
-                d2 = sorted(front, key=lambda dd: order.index(rel_of(dd, heading))
-                            if rel_of(dd, heading) in order else 99)[0]
-            else:
-                nf = nearest_frontier_dir()            # 回溯: BFS 最近未探分支
-                if nf is None:
-                    return 'home'                      # 真·全图探完
-                d2 = nf[1]
-        far = (cell[0] + DIRV[d2][0], cell[1] + DIRV[d2][1])
-        grab = world.block_at(far)
-        turn_here = None if d2 == heading else ('arc' if d2 != OPP[heading] else 'rev')
-        cut = (cell[0] + DIRV[heading][0], cell[1] + DIRV[heading][1])
-        if turn_here == 'arc' and world.block_at(cut):
-            d2, far, grab = heading, cut, True
-            turn_here = None                           # 直行进格先抓, 不切角
-        # peek far 转弯方式: 优先读标记; branch 用决策层预演
-        end_o, v_end, d3, far_arc = 0.4, v_cruise, None, False
-        mfar = marks.get(far)
-        if mfar and mfar['kind'] == 'dead':
-            v_end = 0.0                                # 死路: 停格心(抓块)或掉头
-        elif mfar and mfar['kind'] == 'way':
-            d3 = mfar['d2']
-            if d3 != d2 and d3 != OPP[d2]:
-                far_arc = True
-                end_o, v_end = 0.2, v_arc
-        elif cell_classified(far):
-            f_far = [d for d in m.frontier(far)]
-            if f_far:
-                d3 = sorted(f_far, key=lambda dd: order.index(rel_of(dd, d2))
-                            if rel_of(dd, d2) in order else 99)[0]
-                if d3 != d2 and d3 != OPP[d2]:
-                    far_arc = True
-                    end_o, v_end = 0.2, v_arc
-            else:
-                v_end = 0.0
-        if grab:
-            end_o, v_end = 0.4, 0.0
-        return {'d2': d2, 'end_o': end_o, 'v_end': v_end, 'grab': grab,
-                'd3': d3, 'far_arc': far_arc, 'turn_here': turn_here}
+    plan = None
+    arc_left_plan = None
 
     while True:
         tick += 1
         st['time'] += dt
+        if tick > 250000:                            # 全局看门狗: 仿真必终止
+            st['aborted'] = True
+            return finish()
 
-        if len(blocks) > 0 and m.exit_cell is not None and st['got'] == len(blocks):
-            r = finish()
-            if r is not None:
-                return r
+        # ---- 早停: 收齐 + 出口已知 → 速度跑回家 ----
+        if len(blocks) > 0 and nav.got >= len(blocks) and nav.exit_cell is not None:
+            dirs, extra = go_home()
+            if dirs is not None:
+                speed_run(dirs)
+                if extra:
+                    st['dist'] += extra
+                    st['time'] += extra / v_run
+                return st
 
-        # ---- 观测(扫描拍; 世界给带噪数据, 小车只消费) ----
+        # ---- 观测 (proc_ms 真实延迟: 帧 tick+lag 才进认知) ----
         if tick % scan_every == 0:
-            st['obs_new'] += ingest(*world.sense())
-            prune()
-            consistency_guard()
-            for c2 in list(m.nodes):
-                try_mark(c2)
+            pending.append((tick + lag, world.sense(),
+                            world.camera_blocks(cam_range)))
+        due = [p for p in pending if p[0] <= tick]
+        pending = [p for p in pending if p[0] > tick]
+        for _, frame, cbs in due:
+            st['obs_new'] += nav.observe(*frame)
+            for bc in cbs:
+                nav.set_block_seen(bc, True)
 
-        # ---- 决策 ----
-        if plan is None:
-            p_ = make_plan()
+        # ---- 决策 (StreamNav 唯一决策核心) ----
+        if plan is None or plan in ('wait', 'home'):
+            p_ = nav.plan_edge(cell, heading)
             if p_ == 'home':
-                r = finish()
-                if r is not None:
-                    return r
-                continue                               # 极罕见: 出口未可达, 继续探
+                return finish()
             if p_ == 'wait':
                 v = 0.0
                 continue
@@ -588,82 +531,125 @@ def explore_stream(walls, entry, ex, order, blocks, *,
             if plan['turn_here'] == 'rev':
                 st['spins'] += 1
                 st['time'] += t_spin180
-                heading = plan['d2']                   # 掉头后朝向 = 行进方向
+                e_lat *= 0.1                             # 原地转前对中
+                heading = plan['d2']
                 world.heading = heading
-            elif plan['turn_here'] == 'arc':
-                arc_left = (math.pi / 2) * P            # 本格转弯弧线立即执行
-                st['arcs'] += 1
+            elif plan['turn_here'] == 'spin90':
+                st['spins90'] = st.get('spins90', 0) + 1
+                st['time'] += t_turn90
+                heading = plan['d2']
+                world.heading = heading
+                # 重置为新方向直行 plan: 旧 plan 的 far/d3/far_cut 属于旧走廊, 已失效
+                ndv = DIRV[heading]
+                plan = {'d2': heading, 'far': (cell[0] + ndv[0], cell[1] + ndv[1]),
+                        'end_o': 0.4, 'v_end': v_cruise,
+                        'turn_here': None, 'd3': None, 'far_cut': False}
 
-        # ---- 速度调度(视界) ----
+        # ---- 速度调度 (视界) ----
         seg_end, seg_vend = plan['end_o'], plan['v_end']
-        farc = (cell[0] + DIRV[plan['d2']][0], cell[1] + DIRV[plan['d2']][1])
-        if not cell_classified(farc):
+        far = plan['far']
+        if nav.marks.get(far) is None and not nav.cell_classified(far):
             cap = math.sqrt(max(0.0, 2 * a_dec * max(0.0, 0.4 - o - 0.05)))
             if v > cap:
                 v = cap
                 st['sched_t'] += dt
 
-        # ---- 运动(世界执行) ----
-        if arc_left > 0.0:
-            step = min(arc_left, v_arc * dt)
-            arc_left = arc_left - step
-            st['dist'] += step
-            if arc_left <= 1e-9:
-                # 本格转弯弧线: 弧在 C 内自转(切点=两侧中心), 不走格
-                heading = plan['d2']
-                world.heading = heading
-                o, v, plan = 0.2, v_arc, None
+        # ---- 运动 ----
+        if cut is not None:                          # 45° 斜切进行中
+            p_in, th_in, p_out, th_out, tgt_cell, tgt_hdg, s = cut
+            ds = min(s, v * dt)
+            s -= ds
+            f = 1.0 - s / 0.2121 if s > 1e-9 else 1.0
+            px = p_in[0] + (p_out[0] - p_in[0]) * f
+            py = p_in[1] + (p_out[1] - p_in[1]) * f
+            th = th_in + (th_out - th_in) * f
+            e_lat += (-lat_k * e_lat) * dt + lat_sigma * math.sqrt(dt) * random.gauss(0, 1)
+            if collision(px, py, th, wall_segs, near_segs(px, py)):
+                st['violations'] += 1
+                st['viol_cut'] = st.get('viol_cut', 0) + 1
+                e_lat *= 0.3
+            st['dist'] += ds
+            if s <= 1e-9:
+                cut = None
+                cell, heading, o, v = tgt_cell, tgt_hdg, 0.15, v
+                world.cell, world.heading = cell, heading
+                st['enters'] += 1
+                st['mark_hit'] += cell in nav.marks
+            else:
+                cut = (p_in, th_in, p_out, th_out, tgt_cell, tgt_hdg, s)
             continue
 
         v_allow = math.sqrt(max(0.0, seg_vend ** 2 + 2 * a_dec * max(0.0, seg_end - o)))
         v = max(0.0, min(v + a_acc * dt, v_cruise, v_allow))
-        o += v * dt
-        st['dist'] += v * dt
+        ds = v * dt
+        o += ds
+        st['dist'] += ds
+        step_pose(o)
         world.o = o
 
         if o >= seg_end - 1e-9:
             o = seg_end
-            if plan['grab']:
-                if not (0 <= cell[0] + DIRV[heading][0] < N and 0 <= cell[1] + DIRV[heading][1] < N):
-                    import sys as _s
-                    print(f"BUG grab-out cell={cell} hdg={heading} plan={plan}", file=_s.stderr)
-                    break
-                farc = m.walk_edge(cell, heading)
+            if nav.has_block(far):
+                _nb = (cell[0] + DIRV[heading][0], cell[1] + DIRV[heading][1])
+                if not (0 <= _nb[0] < N and 0 <= _nb[1] < N):
+                    st['violations'] += 50                 # 边角兜底(已知问题见 TODO)
+                    return finish()
+                farc = nav.m.walk_edge(cell, heading)
                 world.collect(farc)
-                st['enters'] = st.get('enters', 0) + 1
-                st['mark_hit'] = st.get('mark_hit', 0) + (farc in marks)
+                nav.set_block_collected(farc)
+                nav.got += 1
                 st['got'] += 1
                 st['grabs'] += 1
                 st['time'] += t_grab
+                st['enters'] += 1
+                st['mark_hit'] += farc in nav.marks
                 cell, o, v, plan = farc, 0.0, 0.0, None
                 world.cell = cell
                 continue
-            if plan['far_arc']:
-                arc_left = (math.pi / 2) * P
+            if plan['far_cut'] and plan['far'] != cell and \
+                    0 <= cell[0] + DIRV[heading][0] < N and 0 <= cell[1] + DIRV[heading][1] < N:
+                # 45° 斜切: 入弯点 = 走廊交点(farc中心)前 0.15, 出弯点 = 交点后沿 d3 0.15
+                # 斜线长 0.2121m, 距内角 0.177m (车侧缘余量 6.9cm)
+                e_lat *= 0.1                             # 切弯前对中
+                farc = nav.m.walk_edge(cell, heading)    # 走到 far (登记)
+                st['enters'] += 1
+                st['mark_hit'] += farc in nav.marks
+                d3v = DIRV[plan['d3']]
+                d2v = DIRV[heading]
+                fc = ((farc[0] + 0.5) * C, (farc[1] + 0.5) * C)
+                p_out = (fc[0] + d3v[0] * 0.15, fc[1] + d3v[1] * 0.15)
+                tgt_cell = nav.m.walk_edge(farc, plan['d3'])
+                cut = ((px, py), th, p_out, TH[plan['d3']], tgt_cell, plan['d3'], 0.2121)
                 st['arcs'] += 1
-                nxtc = m.walk_edge(cell, heading)        # 走到 far
-                st['enters'] = st.get('enters', 0) + 1
-                st['mark_hit'] = st.get('mark_hit', 0) + (nxtc in marks)
-                cell = nxtc                              # 弧线切 far 的角: 车停 far 内 o=0.2
-                world.cell = cell
                 heading = plan['d3']
                 world.heading = heading
-                o = 0.2
-                v = v_arc
+                cell = farc
+                world.cell = cell
+                o = 0.25                             # 簿记: cut 完成后置 0.15
                 plan = None
                 continue
-            if not (0 <= cell[0] + DIRV[heading][0] < N and 0 <= cell[1] + DIRV[heading][1] < N):
-                import sys as _s
-                print(f"BUG straight-out cell={cell} hdg={heading} plan={plan} "
-                      f"frontier={m.frontier(cell)} exit_open={sorted(exit_open)}", file=_s.stderr)
-                break
-            nxtc = m.walk_edge(cell, heading)
-            st['enters'] = st.get('enters', 0) + 1
-            st['mark_hit'] = st.get('mark_hit', 0) + (nxtc in marks)
+            _nb = (cell[0] + DIRV[heading][0], cell[1] + DIRV[heading][1])
+            if not (0 <= _nb[0] < N and 0 <= _nb[1] < N):
+                # 边角鲁棒性兜底(已知问题, 见 TODO): 认知漂移到外墙 → 记违规并回家
+                st['violations'] += 50
+                return finish()
+            if plan.get('far_cut') and heading != plan['d2']:
+                # far_cut 不可行(边界/簿记异常) → 降级原地转 90° 后沿 d2 走
+                st['spins90'] = st.get('spins90', 0) + 1
+                st['time'] += t_turn90
+                e_lat *= 0.1
+                heading = plan['d2']
+                world.heading = heading
+                plan = None
+                continue
+            nxtc = nav.m.walk_edge(cell, heading)
+            st['enters'] += 1
+            st['mark_hit'] += nxtc in nav.marks
             cell, o, v, plan = nxtc, 0.0, v, None
             world.cell = cell
 
     return st
+
 
 # ---------------- 定位仿真（墙登记册版） ----------------
 

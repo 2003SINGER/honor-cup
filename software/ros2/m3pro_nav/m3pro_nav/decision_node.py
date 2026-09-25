@@ -22,7 +22,8 @@ from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import LaserScan, Image
 
-from .mazemap import MazeMap          # 与仿真同一份数据结构
+from .mazemap import MazeMap
+from .stream_nav import StreamNav   # 决策核心 (待接线: observe/plan_edge)          # 与仿真同一份数据结构
 from .tracker import HolonomicTracker  # 与仿真同一份跟踪控制器
 
 ROS_DOMAIN_ID = 30

@@ -15,7 +15,7 @@
   5. sensor: sense_from (雷达) + block_observe_from (直线连通方块观测)
   6. nav.observe / nav.observe_blocks
   7. refresh_branch (迟分类 commit, 依据 visit 真父)
-  8. executor.idle → compile_chain(cursor) → 新 primitive 链
+  8. executor.idle → ActionHorizon.compile(cursor) → 新 primitive 链
 
 禁止: 从 Pose 反推规划拓扑 / NUDGE 蹭入 / 新方块清运动链 —— 见 tests 结构验收."""
 
@@ -30,8 +30,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
 from m3pro_nav.pose import Pose2D, C, DIRV, OPP, DIRS, TH, nearest_axis
 from m3pro_nav.stream_nav import StreamNav
 from m3pro_nav.motion_planner import MotionPlanner
+from m3pro_nav.action_horizon import ActionHorizon
 from m3pro_nav.motion_executor import MotionExecutor
 from m3pro_nav.event_detector import GridEventDetector
+from m3pro_nav.task_pruning import prove_empty_dead_branch
 
 OPEN_TRUTH = 'OPEN'
 N = 7
@@ -225,27 +227,32 @@ def block_observe_from(world, pose, cam_range=1.5, cell_hint=None):
 
 # ---------------- 运行时 ----------------
 
-def explore(walls, entry, ex, order, blocks, *,
+def explore(walls, entry, order, blocks, *, required_blocks,
             v_cruise=0.70, a_acc=1.0, a_dec=1.0,
             dphi_deg=0.30, gate=0.06, scan_hz=10.0, proc_ms=5.0,
             t_grab=1.0, ctrl_hz=50.0,
             cam_range=1.5):
     """事件驱动流式探索. 返回统计 dict (诚实性: aborted 标记 = FAILED, 非成功)."""
+    if required_blocks < 0:
+        raise ValueError('required_blocks must be nonnegative')
     dt = 1.0 / ctrl_hz
     scan_every = max(1, round(ctrl_hz / scan_hz))
     lag = 1 + math.ceil(proc_ms * 1e-3 * ctrl_hz)
-    task_mode = len(blocks) > 0
+    task_mode = required_blocks > 0
 
     world = World(walls, blocks)
     nav = StreamNav(entry, order=order, n=N, dphi_deg=dphi_deg, gate=gate,
                     task_mode=task_mode)
-    planner = MotionPlanner(v_cruise=v_cruise, a_acc=a_acc, a_dec=a_dec)
+    planner = MotionPlanner(v_cruise=v_cruise)
+    horizon = ActionHorizon(planner)
     executor = MotionExecutor(Pose2D((entry[0] + 0.5) * C, (entry[1] + 0.5) * C,
                                      TH['N']), a_acc=a_acc, a_dec=a_dec)
     detector = GridEventDetector(n=N)
 
     st = {'time': 0.0, 'dist': 0.0, 'got': 0, 'arcs': 0, 'grabs': 0,
-          'violations': 0, 'enters': 0, 'wait_ticks': 0, 'mismatch': 0}
+          'violations': 0, 'enters': 0, 'wait_ticks': 0,
+          'topology_mismatch': 0, 'false_prune': 0}
+    false_prune_cases = set()
 
     # 规划游标 (拓扑真相; 车位姿只服务物理层)
     cursor = (None, entry)
@@ -271,12 +278,22 @@ def explore(walls, entry, ex, order, blocks, *,
                         wrong += 1               # 有答案但答错 (canonical 对账)
         st['unresolved'] = unres // 2
         st['wrong_edges'] = wrong
+        # Derive final proof coverage without mutating navigation during a
+        # preview. Count only unvisited cells on a proved empty dead branch.
+        proved = set()
+        if task_mode:
+            for parent in nav.visits.cells:
+                for child in nav.open_neighbors(parent):
+                    proved.update(prove_empty_dead_branch(nav, parent, child))
+        saved = proved - set(nav.visits.cells)
+        st['pruned_cells_saved'] = len(saved)
+        st['pruned_distance_saved'] = round(2 * C * len(saved), 6)
         hr = nav.home_route(cursor[1])
         if hr is None:
             st['aborted'] = True              # 无出口候选: FAILED
             return st
         path, edir = hr
-        executor.set_plan(planner.compile_home(nav, executor.pose, path, edir))
+        executor.set_plan(planner.compile_home(executor.pose, cursor, path, edir))
         st['_finishing'] = True
         return None
 
@@ -315,7 +332,7 @@ def explore(walls, entry, ex, order, blocks, *,
                     if len(planned_cells) >= 2 and ev.to_cell == planned_cells[1]:
                         planned_cells.pop(0)
                     elif ev.to_cell != planned_cells[0]:
-                        st['mismatch'] += 1   # TOPOLOGY_EXECUTION_MISMATCH
+                        st['topology_mismatch'] += 1
                 # 入格收取 (GPT 定稿): 真实进入含方块格 → 时间暂停, 位姿不变
                 if nav.has_block(ev.to_cell):
                     world.collect(ev.to_cell)
@@ -369,11 +386,21 @@ def explore(walls, entry, ex, order, blocks, *,
         for cell in list(nav.visits.cells):
             nav.refresh_branch(cell)
 
+        # Tier A truth audit at each decision boundary, while the block may
+        # still be uncollected. A later map update cannot erase a bad proof.
+        if executor.idle and task_mode:
+            for parent in nav.visits.cells:
+                for child in nav.open_neighbors(parent):
+                    corridor = prove_empty_dead_branch(nav, parent, child)
+                    false_prune_cases.update(set(corridor) &
+                                             (world.blocks - world.collected))
+            st['false_prune'] = len(false_prune_cases)
+
         # 早停 (仅在决策点): 任务完成 且 出口候选可达 → 回家
         # blocks: 收齐 | 活动前沿清空 (剩余支路全被证明为空死枝)
         # fullinfo: 全图每条边已解析
         if task_mode:
-            done = nav.got >= len(blocks) or not nav.active_frontier()
+            done = nav.got >= required_blocks or not nav.active_frontier()
         else:
             done = nav.all_resolved()
         if executor.idle and done:
@@ -386,7 +413,7 @@ def explore(walls, entry, ex, order, blocks, *,
 
         # 8. 空闲 → 图递推编链 (cursor 续航, 不从 Pose 反推)
         if executor.idle:
-            prims, terminal, seq = planner.compile_chain(nav, executor.pose, cursor)
+            prims, terminal, seq = horizon.compile(nav, executor.pose, cursor)
             cursor = terminal
             planned_cells = seq
             for pm in prims:

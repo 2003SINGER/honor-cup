@@ -508,7 +508,9 @@ def cmd_stream(a):
             walls, entry, ex, _ = gen_maze(s)
             cells = [(i, j) for i in range(N) for j in range(N) if (i, j) not in (entry, ex)]
             blocks = set() if a.fullinfo else set(rnd.sample(cells, 8))
-            r = _v2_explore(walls, entry, ex, o_, blocks, v_cruise=a.vc,
+            r = _v2_explore(walls, entry, o_, blocks,
+                            required_blocks=0 if a.fullinfo else 8,
+                            v_cruise=a.vc,
                                dphi_deg=a.dphi, gate=a.gate, scan_hz=a.scan, proc_ms=a.proc)
             res.append(r)
         t = [r['time'] for r in res]

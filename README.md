@@ -30,8 +30,8 @@
 odom+IMU → Pose 预测 → 已确认墙校正位姿（防自证循环：新墙不得本帧自证）
 LaserScan → 连续可信遮罩 → 边离散归属(ABSTAIN 兜底) → EdgeMap
         → TreeInference(成环必墙, 可撤销) → CellMark(DEAD/WAY/BRANCH)
-        → CellAction(entry_side → exit_side)   ← 格子状态直接包含怎么走
-        → Action Horizon(向前逐格读动作, 遇 UNKNOWN 停)
+        → resolve_next(prev_cell, cell)   ← 局部图状态直接决定下一格
+        → Action Horizon(虚拟推进局部 DFS, 遇 UNKNOWN 停)
         → 固定模板 STRAIGHT / 左右1/4圆弧(R=0.2) / REVERSE / STOP
         → world-frame (vx,vy) + wz(yaw hold) → 麦轮逆解 → 四轮 PID
 ```
@@ -51,14 +51,17 @@ LaserScan → 连续可信遮罩 → 边离散归属(ABSTAIN 兜底) → EdgeMap
 - 不是不同弯道在线求复杂轨迹（只有一套固定模板）
 - 不存在 CREEP/蠕动探路（STOP 原地等扫描是异常边界情况，不是每格流程）
 
-## 当前阶段（2026-09-25）
+## 当前阶段（2026-09-26）
 
 - 设计真相已按用户原始方案重新定稿（`docs/design/算法规范.md`），旧架构文档
   已归档至 `docs/decisions/`（Rejected after requirement re-alignment）
-- 代码按新架构重构进行中（`386a067` WIP）：运动层已换（STRAIGHT/ARC/REVERSE/STOP，
-  事件检测支持格线停靠语义），存在一个已知 P0 死锁（STOP 落点在格线中点），
-  详见算法规范 §15
-- 验收路线：Gate A–L（确定性）→ Gate M（100 seeds → 1000 seeds）
+- `a1d43aa` 是旧架构 Tier A 1000+1000 seeds 全绿的回归基线；
+  `8893956` 是拓扑游标与方块任务层的 WIP，随机 Gate 尚未通过。
+- 当前功能分支已修正固定模板的几何契约、计划内局部 DFS、方块任务剪枝
+  和速度接缝；51 项确定性测试及 Tier A 随机 Gate 双模式各 1000 seed
+  已通过。准确指标与未验收边界见 [TODO](TODO.md)。
+- 本轮验收依照用户方案 §24：确定性 A–G → 随机 H（双模式各 100 seed，
+  然后各 1000 seed）；规范 §13 的实车/感知 Gate 留待对应阶段。
 
 ## 仓库结构
 
@@ -66,15 +69,16 @@ LaserScan → 连续可信遮罩 → 边离散归属(ABSTAIN 兜底) → EdgeMap
 software/ros2/m3pro_nav/m3pro_nav/   核心实现 (单一真相源)
   ├─ edge_map.py        EdgeMap (hard/soft/derived) + TraversalMap 分离
   ├─ tree_inference.py  树公理闭包 (成环必墙, 纯 base 重算可撤销)
-  ├─ cell_classifier.py CellMark / resolve_exit 查表 / turn_type
+  ├─ cell_classifier.py CellMark 分类与局部墙状态
   ├─ pose.py            Pose2D (唯一物理真相的数据类型)
   ├─ events.py / visits.py / event_detector.py   几何事件链
+  ├─ action_horizon.py  计划内局部 DFS overlay 与滚动动作链
   ├─ motion_primitive.py / motion_planner.py / motion_executor.py
   │                     固定模板 STRAIGHT/ARC/REVERSE/STOP (只改位置, 不改 yaw)
-  ├─ stream_nav.py      薄 coordinator: 事件→认知, BRANCH 局部状态机
+  ├─ stream_nav.py      薄 coordinator: 图递推, BRANCH 局部 DFS, 任务剪枝
   ├─ mazemap.py / tracker.py   路径 BFS / 全向跟踪 (上车件)
 software/sim/           runtime_v2 事件驱动 SemanticSim + gate harness
-software/tests/         Gate 测试 (重构中, 待按新规范重写)
+software/tests/         确定性几何、拓扑和任务语义 Gate 测试
 docs/design/            现行设计文档 (算法规范 = 唯一设计真相)
 docs/decisions/         历史/已否决方案存档 (Rejected after re-alignment)
 docs/官方资料总览.md     134 份官方 PDF 摘要

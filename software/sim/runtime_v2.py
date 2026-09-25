@@ -322,6 +322,12 @@ def explore(walls, entry, ex, order, blocks, *,
         for _, frame, cbs in due:
             nav.observe(*frame)
             for bc in cbs:
+                if not nav.has_block(bc):
+                    # 新看见未收方块: 若当前链编译时它还不可见, 链会直接穿过
+                    # 该格不停 (方块在链编译后才进入视野) → 清队列重规划,
+                    # 车将在该格抓取点停下。ARC 中途禁清 (直线弦会切内角)。
+                    if not (executor.queue and executor.queue[0].kind == 'ARC'):
+                        executor.clear()
                 nav.set_block_seen(bc, True)
 
         # 7. 迟分类 (当前格 CellMark 完成 → 岔路局部状态机建立)

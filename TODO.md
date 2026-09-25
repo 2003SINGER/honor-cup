@@ -5,9 +5,10 @@
 
 ## 当前状态一句话
 
-设计真相已按原始方案定稿；Tier A 运行时三连根因修复完成（P0 等待死锁 /
-折返死循环 / 出口格切角碰撞），fullinfo 50/50 + blocks 50/50 冒烟全绿，
-100/1000 seed Gate 见下。
+**Tier A clean baseline 达成（TAG `tier-a-core-baseline`）**：设计真相定稿 +
+运行时四连根因修复 + 33 例 Gate 测试全绿 + **Gate M 1000/1000 fullinfo
+(avg 158.8s) + 1000/1000 blocks (avg 166.7s, 8/8 全收) 双模式全绿**
+（0 abort / 0 collision / 0 unresolved* / 0 wrong_edges）。
 
 ## ✅ 本轮完成
 
@@ -18,18 +19,21 @@
 - ✅ 出口格切角碰撞修复：compile_home 出口格走同一套模板，禁止弦线切角
 - ✅ 边界守卫恢复：探索永不冲出场地（边界出口 → 折返；进出皆边界 → 停车）
 - ✅ entry_side 只来自真实事件/已走拓扑，禁止几何猜测（审查定案落实）
-- ✅ 结构清理：mazemap __main__ 演示块删除；旧 decision_node ROS 骨架归档
+- ✅ 漏收方块修复：链编译后才进入视野的方块 → 清队列重规划（ARC 中途禁清）
+- ✅ 结构清理：mazemap 演示块删除；旧 decision_node ROS 骨架归档
 - ✅ tests 按新架构重写 33 例（Gate A/B/D/E/G/H/J/K + 结构/依赖方向）全绿
+- ✅ Gate M：100 fullinfo + 100 blocks 全绿 → **1000 fullinfo + 1000 blocks 全绿**
 
 ## 🔜 下一步（按序）
 
-1. Gate M：100 seeds 双模式（进行中）→ 全绿后 1000 seeds → TAG tier-a-core-baseline
-2. Tier B：定位前端实装（连续可信遮罩 + 已确认墙校正 + 防自证，规范 §8/§9）
-   —— 只换 Observation Adapter，core 不准改（Gate M: Adapter Replacement）
-3. 速度控制实装（v_max = √(2·a_dec·(d_unknown−margin))，规范 §10）
+1. Tier B：定位前端实装（连续可信遮罩 + 已确认墙校正 + 防自证，规范 §8/§9）
+   —— 只换 Observation Adapter，core 不准改（Adapter Replacement 测试守门）
+2. 速度控制实装（v_max = √(2·a_dec·(d_unknown−margin))，规范 §10）
+3. 实车适配层（RealObservationAdapter / RealMotionAdapter），官方 car/ 不污染
 
 ## 验收纪律
 
 - Gate A–L（确定性）全绿前禁止 Gate M；Gate M 100 全绿前禁止 1000
 - 运行时出现 SPIN/CUT90/CREEP/全局 DFS stack 即结构 FAIL（结构测试断言）
 - "SemanticSim 已验证" ≠ "实车已验证"
+- (*fullinfo 模式 unresolved=0；blocks 模式允许未探区域，已下结论边全对)

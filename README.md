@@ -1,179 +1,68 @@
-# 英才杯 2026 · 高年级组 A 题 — M3 Pro 二维迷宫自主探索与目标收集
+# 英才杯 A 题 —— 7×7 树形迷宫探索与方块收集
 
-> 一句话：在未知迷宫里，让 M3 Pro 自主找到并带走 8 个彩色方块，用时 + 罚时最短者胜。
+## 一句话算法
 
----
+> 系统通过雷达、已有墙地图和树结构约束，持续把车辆前方的 UNKNOWN cells 转化为
+> COMPLETE CellMarks；COMPLETE 区域立即按已知路径执行；DFS 只负责 BRANCH 的分支
+> 顺序；车辆速度由 Known Horizon 与运动 commit deadline 动态决定。
+> （规范全文：[docs/design/算法规范.md](docs/design/算法规范.md)）
 
-## 状态板（2026-09-25）
+## 硬件与比赛约束
 
-| 项 | 值 |
-|---|---|
-| 报名截止 | **2026-09-30 23:59**（剩 5 天） |
-| 作品提交 | **2026-11-09 20:00**（剩 45 天） |
-| 当前阶段 | 决策核心 StreamNav v2（入射角证据+标记器+碰撞检查）已落地；**P0 = 流式探索边角鲁棒性**（30 种子 4/30 中断，见 TODO），其后才是传感器接线 |
-| 最大风险 | 迷宫与罚时规则现场公布 → 算法不能硬编码地图 |
+- Yahboom M3 Pro（麦克纳姆轮）+ Jetson Orin NX + 2×YDLIDAR T-mini Plus（360°，±20mm）+
+  DCW2 双目结构光相机（装于机械臂 arm4）+ 机械臂夹爪
+- 迷宫 7×7 树形，格距 0.4m，通道 0.4m，车宽约束 21.5cm
+- 报名截止 2026-09-30；作品提交 2026-11-09
+- 官方资料 134 份 PDF 已全量通读：`docs/官方资料总览.md`
 
----
-
-## 演进史（方案是长出来的，不是一次画出来的）
-
-每一轮都有实测数据或新证据驱动，记录在此防止"当时的为什么"丢失：
-
-| 阶段 | 方案 | 为什么变 |
-|---|---|---|
-| 09-16~21 | 首版方案：相机巡线为主轴 | 官方有 follow_line 课程，起点最低 |
-| 09-21 | 加红外阵列辅助巡线 → **09-23 取消** | 发现相机视野约束可软件缓解，不加硬件 |
-| 09-22 | 车端全链路打通（通讯/里程计/IMU/双雷达/TF） | 底层不实测，上层全是空中楼阁 |
-| 09-22 | 134 份官方 PDF 全量通读 | 每次翻文档都发现没读过的信息 |
-| 09-23 | 弧线过弯量化：pivot→arc 省 58% 用时 | 停-转-走是巡线思维，位置环解锁后不必停 |
-| 09-23 | 深度增强巡线：线像素→米制横向偏差 | DCW2 精度 <1%@1m，比雷达横向更准 |
-| 09-23 | 发现相机装在机械臂上（URDF 实锤） | 外参不稳定 → 停放姿态+TF 实时查+自标定 |
-| 09-24 | 全向跟踪控制器 tracker.py | 麦轮边走边转，仿真 8 种子全过 |
-| 09-24 | 雷达实测 T-mini Plus ±20mm 全量程恒定 | 仿真的 4cm 假设收紧到 2cm |
-| 09-24 | 定位选型：EKF+马氏门限（弃 AMCL，对称环境退化） | 7×7 树形迷宫高度对称 |
-| 09-24 | **流式探索**：视野内=已知直接跑，视界调速 | 用户提出：探索不该有"停下来想"的阶段 |
-| 09-24 | 剪枝：边共享 + 树环性质（连通必墙） | 远处的格子不用过去就知道墙 |
-| 09-25 | 世界/小车分离仿真 + StreamNav 上车核心 | 场所与小车不分 → 观测模型全是真值泄漏 |
-| 09-25 | **入射角置信模型** err=D·δα/cos²α (GPT 审计驱动) | 距离阈值判掠射是错的: 正入射再远也准, 关键是射线与墙法线夹角 |
-| 09-25 | **弧线 → 45° 斜切弯** | r=0.2 圆弧让 29cm 车头探过内角墙 3.7cm (碰撞检查实测) — 旧的 -58% 结论含计时 bug, 作废 |
-
-**被否掉的路**（同样重要）：底置红外阵列（硬件冗余）、flood-fill 引导探索（目标未知不适用）、
-AMCL 主定位（对称环境退化）、无剪枝全遍历（树环性质白白浪费）。
-
----
-
-## 硬约束（背下来）
-
-- 车及附加装置横向宽度 **≤ 21.5 cm**，最大高度 **≤ 55 cm**
-- 通道宽 40 cm，车宽 21.5 cm → **单侧余量 9.25 cm**
-- 不得损毁挡板，**损毁即本轮无效**
-- 方块不得含电路、不得与车通信；须随车带到出口才计分
-- 全程自主，单车，不得更换队员
-
----
-
-## 车端环境（2026-09-22 全链路打通 ✅ 实测）
-
-| 已验证 | 结果 |
-|---|---|
-| 通讯代理 + 底层板挂载 | `/cmd_vel` `/odom_raw` `/imu/data_raw` `/arm6_joints` |
-| 轮式里程计 | **1.0 ≈ 1 m**，准 |
-| IMU | 正常（±π 角度环绕是数学现象，不是故障） |
-| 双雷达 + 融合 | `/scan0` + `/scan1` → `/scan_multi`（7.2 Hz） |
-| TF 树 | 完整（base_link / 两个 laser frame / imu_frame） |
-| 相机 + 机械臂解算 | `/rgb` 等，随车自启 |
-
-**一键工具（车上 `~/m3.sh`，源码 `software/tools/m3.sh`）**：
-
-```bash
-ssh car "bash ~/m3.sh up"      # 一键启动/修复全部服务（幂等，失败自动打印原因）
-ssh car "bash ~/m3.sh check"   # 看状态
-ssh car "bash ~/m3.sh arm"     # 机械臂回竖直
-```
-
-**开机流程**：重启 → 桌面登录 → 自动弹窗跑 `m3.sh boot`（校时 + 全部服务），跑完按回车关窗。
-**每次重启后注意**：车端时钟会漂，boot 里已做 NTP 校时；车没外网时需在 Mac 手动校时。
-
-操作手册与全部踩坑记录：`docs/车端启动与操作.md`、`docs/车端实测记录.md`。
-
----
-
-## 项目结构
+## 系统数据流（目标架构）
 
 ```
-honor cup/
-├── README.md                 ← 你在这里
-├── TODO.md                   ← 下一步动作（唯一进度真相）
-├── docs/
-│   ├── rules/                ← 权威赛务信息（不臆造，只录事实）
-│   │   ├── 赛题解读.md        ← 技术决策依据，先读这个
-│   │   └── 赛程与提交.md      ← 时间节点、提交物、队伍
-│   ├── design/               ← 方案设计（分模块）
-│   ├── architecture/         ← 软件架构、模块与数据流
-│   ├── reports/              ← 《设计报告》正文源（最终交付物之一）
-│   └── meetings/             ← 队内讨论记录
-├── hardware/                 ← 机械改装、BOM、尺寸校核
-├── software/
-│   ├── src/                  ← 车载算法代码
-│   ├── sim/                  ← 迷宫仿真（先在仿真里跑通，再上实物）
-│   └── tools/                ← 标定、录包、调试脚本
-├── field/                    ← 自建场地参数与复现方案
-└── resources/                ← 原始 pdf/docx/xlsx（只读归档）
+odom+IMU → Pose 预测 → 用已确认墙做 GridLocalizer 修正 (防自证循环)
+LaserScan → EdgeObserver → EdgeObservation
+       → EdgeMap(WALL/OPEN/UNKNOWN + provenance)
+       → TreeInference (成环必墙等公理闭包)
+       → CellClassifier → CellMark (COMPLETE 即"怎么走"已知)
+       → DFSExplorer (仅 BRANCH 分支调度) + KnownHorizonPlanner (速度)
+       → MoveIntent → MotionPlanner → MotionExecutor(唯一权威 Pose)
+       → Tracker → SafetySupervisor → /cmd_vel
+Camera → BlockDetector → CollectorAdapter → 机械臂
 ```
 
----
+## 当前阶段（2026-09-25）
+
+- **G0 核心确定性测试**进行中：EdgeMap/TraversalMap/TreeInference/CellClassifier/
+  DFSExplorer/KnownHorizon 已实现，deterministic pytest 已建（`software/tests/`）
+- **未解决的最大问题**：R3 运动执行层（Pose 唯一 owner + crossed-edge 事件）未建，
+  此前仿真的 far==cell/位姿漂移/148k violation 均源于此（详见 TODO 断点记录）
+- 验收 Gate：G0 core tests → G1 SemanticSim 1000 seeds 0 fail → G2 SensorSim →
+  G3 replay → G4 台架 → G5 一格 → G6 小迷宫 → G7 全程。**G5 之前不优化速度。**
+
+## 仓库结构
+
+```
+software/ros2/m3pro_nav/m3pro_nav/   唯一核心实现 (单一真相源)
+  ├─ edge_map.py        EdgeMap + TraversalMap (几何事实 ⊥ 行驶历史)
+  ├─ tree_inference.py  树结构公理闭包 (成环必墙; B/C/D 挂 flag)
+  ├─ cell_classifier.py CellMark / CellClassifier
+  ├─ dfs_explorer.py    BRANCH 调度 (nearest_frontier 探索策略已废除)
+  ├─ known_horizon.py   KnownHorizonPlanner
+  ├─ stream_nav.py      决策协调层 (beliefs/mark/plan_edge)
+  ├─ mazemap.py         拓扑 + path_between (RoutePlanner)
+  └─ tracker.py         全向轨迹跟踪 (上车件, 未闭环)
+software/sim/maze_sim.py    Tier A SemanticSim (World 出 EdgeObservation)
+software/tests/             deterministic regression suite (G0)
+docs/design/算法规范.md      现行算法唯一规范
+docs/decisions/             历史/被否定方案 (arc -58% 已作废等)
+docs/官方资料总览.md         134 份官方 PDF 摘要
+TODO.md                     唯一进度真相板 (P0-R0~R5 / P1 / P2)
+```
 
 ## 阅读顺序
 
-1. `docs/rules/赛题解读.md` — 硬约束与计分，做任何方案前必读
-2. `docs/rules/赛程与提交.md` — 时间与交付物
-3. `TODO.md` — 现在该干什么
-4. `docs/车端启动与操作.md` — 每次用车前查这个
-5. `docs/design/总体方案.md` — 方案成型后写在这里
+算法规范 → TODO（当前断点）→ tests（语义的可执行定义）→ stream_nav → maze_sim。
 
----
+## 状态标注约定
 
-## 设计第一原则
-
-> **迷宫现场公布、罚时规则现场公布。**
-> 因此系统必须是"在线自主"的：现场感知 → 增量建树 → 动态决策。
-> 任何依赖预先输入地图、预先调好路径的做法，都是把 54 天赌在一条假设上。
-
----
-
-## 平台（已确认随箱提供，不用买）
-
-M3 Pro + **Jetson Orin NX**（箱内 3 块板选一）· 顶部 RGB-D 相机 · 双 TOF 雷达 ·
-6 自由度机械臂 · 麦克纳姆轮全向底盘 · 编码器 + IMU · STM32 底层控制。
-详见 `hardware/平台硬件.md`（含可信度分层）。
-
-> **A 题那一箱就全了** —— 这道题是**完整平台上的二次开发题**，不是硬件搭建题。
-> 时间是"拿到车 → 跑通官方 demo → 写算法"，不是"先花三周造机器人"。
-
----
-
-## 官方已经给了什么（2026-09-16 实读源码，非推断）
-
-**结论：底层几乎全有，别重复造轮子。** 详见 `docs/官方例程盘点.md`。
-
-| 能力 | 官方实现 | 位置 |
-|---|---|---|
-| 视觉巡线 | `follow_line` 节点（HSV + 二值化 + PID） | `M3Pro_demo/follow_line.py` |
-| **红绿蓝黄四色识别** | 内置四色 HSV，支持现场重新标定 | `M3Pro_demo/color_recognize.py` |
-| 机械臂抓取 | `grasp_desktop` | `M3Pro_demo` |
-| **巡线+夹取联动** | `巡线清障`：沿线走、雷达遇障停车、下爪夹取、继续前进 | `4.机械臂与三维空间夹取/15.巡线清障/` |
-| 雷达避障 / 双雷达融合 | `/scan0` + `/scan1` 订阅、`ira_laser_tools` 融合 | `follow_line.py`、`M3Pro_ws` |
-| 建图导航 | slam_toolbox / cartographer / Nav2 / 路网导航 | `2.激光雷达`、`5.路网规划导航` |
-
-> ⚠️ **2026-09-21 实车实测改判**：顶部相机俯角看不到车前近处地面 → 视觉巡线有先天视野缺陷，
-> **2026-09-23 决策：不加红外阵列**，巡线回归官方视觉方案（`follow_line`）+ 雷达定位。
-> 相机视野特性（看前方不看正下方）作为已知约束接受，缓解靠调俯角/ROI/参数整定。
-> 但 `follow_line` 仍要先跑通——它是巡线 PID 和接口的现成参照。
-
-**官方没给、必须自己写**：在线迷宫探索与决策、多目标收集与携带策略、罚时权衡、完整比赛状态机。
-
----
-
-## 技术路线（草案，待实车验证后定稿）
-
-```
-官方 follow_line      → 巡线（先跑通，照抄改造）
-官方 color_recognize  → 认四色（用现成 HSV，现场标定）
-自建上层              → 探索决策 / 建拓扑树 / DFS / 收放策略 / 状态机
-```
-
-基线（先跑通，再优化）：
-`跑通官方巡线 → 跑通色块分拣 → 跑通巡线清障 → 加上层探索与决策`
-
-工作量（早前估计，待验证）：`算法/ROS/电控 60% · 视觉 20% · 调参联调 15% · 机械 5~20%`。
-
----
-
-## 队伍
-
-| 角色 | 姓名 | 学院 |
-|---|---|---|
-| 队长 | 段华湘海 | 英才实验学院 |
-| 队员 | 陈霖 | 英才实验学院 |
-
-> 来源：`resources/高年级组A题.xlsx` 第 1 行。**未经本人确认，如有出入立即更正。**
+"SemanticSim 已验证" ≠ "实车已验证"。性能数字必须带 Tier 级别与 failures 计数，
+failures>0 即 INVALID。

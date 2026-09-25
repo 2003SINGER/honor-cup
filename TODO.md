@@ -1,46 +1,49 @@
-# TODO
+# TODO —— 真相板（按 GPT 三审令重排, 2026-09-25）
 
-> 真相板: 这里是唯一进度真相. 完成项不删, 打 ✅ 并留证据.
+## 本轮范围（GPT 指令：第一轮只做 R0+R1+R2, 停在 R3 前）
 
-## 🔴 P0 — 流式探索边角鲁棒性专修 (GPT 二审后仍未收敛, 当前第一优先)
+### ✅ P0-R0 文档与契约冻结 (本轮)
+- [x] docs/design/算法规范.md —— 现行算法唯一规范 (15 章 + ownership 表 + Gates)
+- [x] 旧方案移入 docs/decisions/
+- [x] README 重写 (高层 + 一句话算法 + 数据流 + Gate)
+- [x] TODO 重排为本结构; 明确 state owner 唯一答案
 
-v3 证据层 (signed score + canonical 边 key + topology/navigation 分离) 落地后实测 (09-25):
-- ✅ far peek 已可触发 (exit_given_entry 纯拓扑, far 未踏入也解析)
-- ✅ 碰撞检查升级 Liang-Barsky 精确求交 (viol_cut=0)
-- ❌ seed0/1 撞 5000s watchdog; violations 66~148076 (蠕行/cut 接缝仍有几何错误)
-- ❌ 30 种子统计仍不可作为结论
-断点现场: seed0 (2,6)N far==cell 切弯簿记、seed1 viol 148k (蠕行+cut 混合段位姿漂移)
-下一刀: 修 far_cut 簿记 (预计算 walk 与实际 cut 完成的双登记) → 每修一个 seed 固化 regression test
+### ✅ P0-R1 Core deterministic model (本轮)
+- [x] edge_map.py: EdgeMap (WALL/OPEN/UNKNOWN + provenance) + TraversalMap (walked) 分离
+- [x] tree_inference.py: 规则 A 成环必墙 (规则 B/C/D 挂 assume_tree flag)
+- [x] cell_classifier.py: CellMark (complete/degree/kind/transition)
+- [x] dfs_explorer.py: 只管 BRANCH 调度 (stack), nearest_frontier 探索策略废除
+- [x] known_horizon.py: 沿意图链展开到第一个 INCOMPLETE
+- [ ] StreamNav 收敛为薄协调层 (委托上述模块) —— 部分完成: marks/beliefs 已委托
 
-30 种子仿真 (v3 架构, 2026-09-25) 暴露: 全信息模式 4/30 中断 (看门狗兜底),
-violation 均值 31 (大部分是出界兜底 +50 计费, 非真实擦碰). 根因群:
-- frontier/BFS 收尾语义: seen 边的远端格未 visited 时 frontier 判定 (open_edge 不再 touch 后语义变化)
-- way/branch 重访路径的 BFS 导航死角
-- cut 完成接缝的位姿不连续 (viol_line 尾部 ~9 次)
-- ✅ 已修: way_forward 弯后来向错位 / spin90 旧 plan 残留 / far==cell 切弯 / 出界兜底必终止
-验收: 100 种子 0 中断, violations 全部来自真实擦碰模型 (无 +50 兜底计费)
+### ✅ P0-R2 EdgeBelief (本轮)
+- [x] hysteresis 真语义: WALL 只在 score≤−T_FLIP 翻 OPEN, 反之亦然 (修复通用分支吃掉 T_FLIP)
+- [x] canonical key 序列化修复 (普通边 k[2] 越界 bug)
+- [x] provenance 字段
+- [x] deterministic tests (tests/test_core.py, 21 例)
 
-## 🟠 P1 — Sim→Real 接线
+### 🔴 P0-R3 Motion execution layer (下一轮, 未经 R0-R2 审查不得开工)
+- [ ] Pose2D 唯一权威位姿 (SensorSim/碰撞/可视化只读它)
+- [ ] MotionPrimitive 契约: STRAIGHT/CUT90/SPIN90/TURN180/CREEP_OBSERVE/STOP
+      (preconditions/commit_point/cancel_deadline/progress/done/events)
+- [ ] crossed-edge 事件驱动 TraversalMap (废除 sim 手工 walk_edge 预登记)
+- [ ] cut 完成只产生 A→B 一个 crossed_edge (修复超前一整格的双 walk)
+- [ ] 迟到 CellMark: 已过 commit point → 禁止 cut → 制动 STOP/SPIN90
 
-- [ ] /scan + 定位 → (cell,dir,dist,α) 几何反算 → StreamNav.observe()  ← 唯一大 ⛔
-- [ ] 实测 δφ/gate/σ_range 回填 (d_conf 曲线: 掠射误差 vs 距离/入射角)
-- [ ] 相机方块检测 → set_block_seen() (视野模型已在仿真: 1.5m ±45°)
-- [ ] decision_node 实例化 StreamNav (import 已加, 节点回调用 ⛔)
-- [ ] tracker 上车闭环 (cmd_vel → 轮速)
+### 🔴 P0-R4 CREEP_OBSERVE / Known Horizon 接入速度规划
+### 🔴 P0-R5 失败 seed 固化 regression fixture → 30 → 100 → 1000 seeds
+      (watchdog/越界 = FAILED, 禁止 +50 计费与 finish() 兜底)
 
-## 🟡 P2 — 工程清理
+## P1 — Sim→Real 中间层 (R3 后)
+bringup+health_check / TF / base estimator / GridLocalizer(墙吸附, 防自证循环) /
+EdgeObserver(scan→edge association, ABSTAIN 语义) / MotionPlanner+Tracker /
+SafetySupervisor(任何 stale→停车) / block detector+CollectorAdapter(统一接口)
+完整链 = launch→传感器健康→TF→pose→墙修正→EdgeObservation→StreamNav→MoveIntent→
+MotionPlanner→Executor→Tracker→SafetySupervisor→cmd_vel→方块→Collector
 
-- [ ] 双 mazemap/tracker 拷贝合并 (src/ 与 ros2 包内, 当前 SHA 相同但会漂移)
-- [ ] tests/ pytest 套件: degree 语义五类格 / 证据冲突双向 / json roundtrip /
-      tracker 变异路径 / 碰撞三场景 / 死路有块必进
-- [ ] FP/FN 压测: 方块检测误报漏报 + 墙口误判率
-- [ ] _dbg 临时文件清理纪律 (gitignore)
+## P2 — 速度/cut/剪枝收益/参数优化 (G5 之前禁止投入主要精力)
 
-## ✅ 已完成 (摘要)
-
-- ✅ 2026-09-25 GPT 审计修复: degree 语义错位(dead=1口,way=2口,branch≥3) /
-  入射角置信模型(err=D·δα/cos²α, 替代距离阈值) / 多帧证据确认+冲突撤销 /
-  arc 计时 bug(-58% 结论作废重测) / proc_ms 真实施加 / 连续位姿+足迹碰撞检查 /
-  StreamNav 唯一认知体(仿真内联副本已删) / has_block 视野化 / from_json / tracker 缓存 /
-  open_edge 不再污染 visited
-- ✅ 2026-09-24/25 流式探索架构: World/Agent 分离 + 格子标记器 + 一致性守卫 + 剪枝
+## 历史已完成
+- ✅ 09-25 一审修复: degree 语义/入射角置信/arc 计时作废/单一认知体
+- ✅ 09-25 二审修复: P0-A 单一真相(删双副本)/P0-C 部分可撤销/P0-D 碰撞检查引入
+- ✅ 09-25 三审 R0+R1+R2 (本轮, 见上)

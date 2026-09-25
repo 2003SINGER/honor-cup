@@ -500,7 +500,7 @@ def cmd_stream(a):
     orders = a.orders.split(',')
     print(f"流式探索 · {a.seeds} 种子 · 巡航 {a.vc} m/s · 弧线限速 √(0.7·0.2)={math.sqrt(0.7*0.2):.3f} m/s · "
           f"δφ={a.dphi}° · gate={a.gate}m · 扫描 {a.scan}Hz · 处理 {a.proc}ms\n")
-    print(f"{'顺序':<8}{'平均用时(s)':>10}{'最短':>7}{'最长':>7}{'平均路程':>9}{'平均速':>8}{'弧线':>6}{'掉头':>6}{'违规':>6}{'未确认':>7}{'标记命中':>8}")
+    print(f"{'顺序':<8}{'平均用时(s)':>10}{'最短':>7}{'最长':>7}{'平均路程':>9}{'平均速':>8}{'弧线':>6}{'等待':>6}{'违规':>6}{'未确认':>7}")
     for o_ in orders:
         res = []
         for s in range(a.seeds):
@@ -515,10 +515,10 @@ def cmd_stream(a):
         d = [r.get('dist', 0.0) for r in res]
         print(f"{o_:<8}{st.mean(t):>10.1f}{min(t):>7.1f}{max(t):>7.1f}{st.mean(d):>9.1f}"
               f"{st.mean(d) / st.mean(t):>8.2f}"
-              f"{st.mean([r['arcs'] for r in res]):>6.0f}{st.mean([r['spins'] for r in res]):>6.1f}"
+              f"{st.mean([r['arcs'] for r in res]):>6.0f}"
+              f"{st.mean([r['wait_ticks'] for r in res]):>6.0f}"
               f"{st.mean([r['violations'] for r in res]):>6.1f}"
-              f"{st.mean([r.get('unresolved', -1) for r in res]):>6.1f}"
-              f"{100 * st.mean([r.get('mark_hit', 0) / max(1, r.get('enters', 1)) for r in res]):>6.1f}%")
+              f"{st.mean([r.get('unresolved', -1) for r in res]):>6.1f}")
     print("\n对照(同迷宫): pivot@0.3 186.7s · holo@0.3 109.8s · arc@0.3 78.2s (30种子, explore 命令)")
     print("流式 = 观测置信建图+弧线提前承诺+视界调速+处理延迟; 违规>0 说明视界模型过于乐观")
 

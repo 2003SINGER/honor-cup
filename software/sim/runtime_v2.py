@@ -8,11 +8,11 @@
   1. executor.step(dt)               prev_pose → new_pose
   2. collision(world, new_pose)
   3. event_detector(prev, new)       → CrossedEdge 事件
-  4. dispatch: on_crossed / on_entered (TraversalMap / CellVisit / DFS commit)
+  4. dispatch: on_crossed / on_entered (TraversalMap / CellVisit / 岔路状态机)
   5. sensor(world, new_pose)         → 观测 (scan_hz + proc_ms 延迟队列)
   6. nav.observe()
-  7. refresh_visit(当前格)           → 迟分类 DFS commit
-  8. executor.idle → plan_intent + planner.plan → 新 primitive 链
+  7. refresh_branch(当前格)          → 迟分类岔路状态建立
+  8. executor.idle → compile_chain / compile_home → 新 primitive 链
 
 禁止出现: 预登记式过边、第二套位姿账本、兼容层决策——见 tests 结构验收."""
 
@@ -204,7 +204,7 @@ def camera_from(world, pose, cam_range=1.5):
 def explore(walls, entry, ex, order, blocks, *,
             v_cruise=0.70, a_acc=1.0, a_dec=1.0,
             dphi_deg=0.30, gate=0.06, scan_hz=10.0, proc_ms=5.0,
-            t_spin90=0.5, t_grab=1.0, ctrl_hz=50.0, v_run=0.60,
+            t_grab=1.0, ctrl_hz=50.0,
             cam_range=1.5):
     """事件驱动流式探索. 返回统计 dict (诚实性: aborted 标记 = FAILED, 非成功)."""
     dt = 1.0 / ctrl_hz
@@ -212,19 +212,21 @@ def explore(walls, entry, ex, order, blocks, *,
     lag = 1 + math.ceil(proc_ms * 1e-3 * ctrl_hz)
 
     world = World(walls, blocks)
-    nav = StreamNav(entry, order=order, n=N, v_cruise=v_cruise, a_acc=a_acc,
-                    a_dec=a_dec, dphi_deg=dphi_deg, gate=gate)
-    planner = MotionPlanner(v_cruise=v_cruise, a_acc=a_acc, a_dec=a_dec,
-                            t_spin90=t_spin90, v_run=v_run)
+    nav = StreamNav(entry, order=order, n=N, dphi_deg=dphi_deg, gate=gate)
+    planner = MotionPlanner(v_cruise=v_cruise, a_acc=a_acc, a_dec=a_dec)
     executor = MotionExecutor(Pose2D((entry[0] + 0.5) * C, (entry[1] + 0.5) * C,
                                      TH['N']), a_acc=a_acc, a_dec=a_dec)
     detector = GridEventDetector(n=N)
 
-    st = {'time': 0.0, 'dist': 0.0, 'got': 0, 'arcs': 0, 'spins': 0,
+    st = {'time': 0.0, 'dist': 0.0, 'got': 0, 'arcs': 0,
           'grabs': 0, 'violations': 0, 'enters': 0, 'wait_ticks': 0}
 
     # 起始: 机器人从场外经入口边进入 entry 格 (入口约定: 底边 S 开口, 朝向 N)
     nav.on_entered(entry, 'S', ts=0.0)
+
+    def _entry_side_of(pose):
+        v = nav.visits.get(_cell_of(pose))
+        return v.latest_entered_from if v else 'S'
 
     def finish():
         """收尾: 未确认统计 + 真值对账 + 返航路线装载."""
@@ -244,12 +246,14 @@ def explore(walls, entry, ex, order, blocks, *,
                         wrong += 1               # 有答案但答错 (canonical 对账)
         st['unresolved'] = unres // 2
         st['wrong_edges'] = wrong
-        hr = nav.home_route(_cell_of(executor.pose))
+        p = executor.pose
+        hr = nav.home_route(_cell_of(p))
         if hr is None:
             st['aborted'] = True              # 无出口候选: FAILED
             return st
         seg, exc, edir = hr
-        executor.set_plan(planner.plan_route(executor.pose, seg, exit_dir=edir))
+        executor.set_plan(planner.compile_home(nav, p, _cell_of(p),
+                                               _entry_side_of(p), seg, edir))
         st['_finishing'] = True
         return None
 
@@ -307,13 +311,16 @@ def explore(walls, entry, ex, order, blocks, *,
             for bc in cbs:
                 nav.set_block_seen(bc, True)
 
-        # 7. 迟分类 (当前格 CellMark 完成 → DFS commit)
+        # 7. 迟分类 (当前格 CellMark 完成 → 岔路局部状态机建立)
         cur_cell = _cell_of(new_pose)
-        nav.refresh_visit(cur_cell)
+        nav.refresh_branch(cur_cell)
 
-        # 早停 (仅在决策点): 方块收齐 且 出口候选【可达】→ 回家;
-        # 不可达 → 继续探索 ( believed-exit 尚未连通, DFS 继续走, 连通后自然回家)
-        if executor.idle and len(blocks) > 0 and nav.got >= len(blocks) and nav.exit_cells():
+        # 早停 (仅在决策点): 任务完成 且 出口候选【可达】→ 回家;
+        # 不可达 → 继续探索 (believed-exit 尚未连通, 继续走, 连通后自然回家)
+        # 任务完成 = blocks 模式收齐方块 | fullinfo 模式全图每条边已解析
+        done = (len(blocks) > 0 and nav.got >= len(blocks)) or \
+               (len(blocks) == 0 and nav.all_resolved())
+        if executor.idle and done:
             if nav.home_route(cur_cell) is None:
                 pass                                 # 出口未连通: 继续探索
             else:
@@ -321,7 +328,7 @@ def explore(walls, entry, ex, order, blocks, *,
                 if r is not None:
                     return r
 
-        # 8. 空闲 → 规划
+        # 8. 空闲 → 规划 (CellAction → 模板编译; 未知格边界中点 STOP)
         if executor.idle:
             # 抓取检查: 到达目标格且有方块
             visit = nav.visits.get(cur_cell)
@@ -333,23 +340,12 @@ def explore(walls, entry, ex, order, blocks, *,
                 st['got'] += 1
                 st['grabs'] += 1
                 st['time'] += t_grab
-            intent = nav.plan_intent(cur_cell, entry_side)
-            if intent == 'home':
-                r = finish()
-                if r is not None:
-                    return r
-                continue
-            prims = planner.plan(new_pose, intent,
-                                 far_kind=(nav.mark(intent.target_cell) or {}).get('kind')
-                                 if intent not in ('wait', 'home') else None)
-            if intent == 'wait':
+            prims = planner.compile_chain(nav, executor.pose, cur_cell, entry_side)
+            if prims and prims[0].kind == 'STOP':
                 st['wait_ticks'] += 1
-            else:
-                for pm in prims:
-                    if pm.kind == 'CUT90':
-                        st['arcs'] += 1
-                    elif pm.kind == 'SPIN':
-                        st['spins'] += 1
+            for pm in prims:
+                if pm.kind == 'ARC':
+                    st['arcs'] += 1
             executor.set_plan(prims)
 
     return st

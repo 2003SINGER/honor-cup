@@ -159,13 +159,25 @@ class StreamNav:
         return st['next']
 
     def refresh_branch(self, cell):
-        """迟分类: 车在格内观测使其变 COMPLETE BRANCH → 用首访 entered_from 建状态."""
+        """迟分类: 当前格 CellMark 完成为 BRANCH → 用首访 entered_from 建状态.
+        铁律: 只建 branch 状态, 绝不重复调用 on_entered —— visit 的
+        latest_entered_from 只能由真实 EnteredCell 事件更新, 否则回程
+        入口边会被首访方向永久覆盖 (2026-09-25 seed1 折返死循环根因)."""
         if cell in self.branch:
             return None
         visit = self.visits.get(cell)
         if visit is None:
             return None
-        return self.on_entered(cell, visit.first_entered_from)
+        mark = self.mark(cell)
+        if mark is None or mark['kind'] != 'BRANCH':
+            return None
+        parent = visit.first_entered_from
+        ch = [d for d in mark['opens']
+              if d != parent and not self.is_boundary(cell, d)]
+        ch.sort(key=lambda d: _order_rank(d, OPP[parent], self.order))
+        self.branch[cell] = {'parent': parent, 'children': tuple(ch),
+                             'done': set(), 'next': ch[0] if ch else parent}
+        return self.branch[cell]['next']
 
     def resolve_exit(self, cell, entry_side):
         """CellAction 查表: 该格从 entry_side 进 → 从哪条边出.

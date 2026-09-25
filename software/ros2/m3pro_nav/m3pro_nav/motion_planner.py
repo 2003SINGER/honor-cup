@@ -24,11 +24,12 @@ V_ARC = 0.45           # 弧内速度 (全局模板参数, 保守)
 V_CRUISE = 0.70
 V_CONNECT = 0.30       # 连接段/抓取段低速
 GRAB_V = 0.15
+NUDGE = 0.10           # 等扫描前向格内蹭入距离 (脱离格线, 触发离线跨越事件)
 
 
 class MotionPlanner:
     def __init__(self, v_cruise=V_CRUISE, v_arc=V_ARC, a_acc=1.0, a_dec=1.0,
-                 v_grab=GRAB_V, exit_len=0.6, horizon=10):
+                 v_grab=GRAB_V, exit_len=0.6, horizon=64):
         self.v_cruise = v_cruise
         self.v_arc = v_arc
         self.a_acc = a_acc
@@ -95,25 +96,36 @@ class MotionPlanner:
         for _ in range(self.horizon):
             mark = nav.mark(c)
             ex = nav.resolve_exit(c, e) if mark else None
+            m_in = ((c[0] + 0.5) * C + DIRV[e][0] * 0.2,
+                    (c[1] + 0.5) * C + DIRV[e][1] * 0.2)
             if ex is None:
-                # CellMark 未完成: 原地 STOP 等扫描 (velocity=0, 传感器继续)
-                # FIXME(WIP, 未解决): 若当前位置恰在格线中点(切点几何的常态),
-                #   STOP 后车不再离线 → 离线跨越事件永不触发 → visit=None →
-                #   entry_side 缺失 → transition 返回 None → 永久 wait 死锁。
-                #   修法方向: STOP 点内移到邻格中心一侧(≥5cm), 或检测器支持
-                #   "到达格线即算进入" 语义。见 2026-09-25 调试记录。
+                # CellMark 未完成: STOP 等扫描 (规范 §10/§11, 异常边界情况).
+                # 若车恰停在格线中点 (模板接缝的常态): 必须再向格内蹭 NUDGE
+                # 后停车 —— 否则车不离线 → 离线跨越事件不触发 → EnteredCell
+                # 缺失 → entry_side 拿不到 → 永久 wait (P0 死锁, 2026-09-25).
+                # 蹭的方向 = 行进方向 OPP[e] (已知, 无需 entry_side 之外的真相).
+                on_line = abs(cur.x - m_in[0]) < 1e-6 and abs(cur.y - m_in[1]) < 1e-6
+                if on_line:
+                    dv = DIRV[OPP[e]]
+                    p1 = (cur.x + dv[0] * NUDGE, cur.y + dv[1] * NUDGE)
+                    prims.append(MotionPrimitive(
+                        kind='STRAIGHT', start_pose=Pose2D(cur.x, cur.y, cur.yaw),
+                        p0=(cur.x, cur.y), p1=p1, yaw0=cur.yaw, yaw1=cur.yaw,
+                        length=NUDGE, v_max=V_CONNECT, v_end=0.0,
+                        meta={'nudge_into': c}))
+                    cur = Pose2D(p1[0], p1[1], cur.yaw)
                 prims.append(MotionPrimitive(
                     kind='STOP', start_pose=Pose2D(cur.x, cur.y, cur.yaw),
                     p0=(cur.x, cur.y), yaw0=cur.yaw, duration=0.2,
                     meta={'wait': c}))
                 break
-            if ex == e and nav.is_boundary(c, e):
-                break            # 入口格分支耗尽: 不倒车出场 (早停/返航接管)
+            if nav.is_boundary(c, ex):
+                if nav.is_boundary(c, e):
+                    break        # 进出皆边界 (入口格探索耗尽): 停车, 早停/返航接管
+                ex = e           # 探索永不冲出场: 边界出口 → 原路折返
             grab = nav.has_block(c)
             cell_prims, end_pt = self._cell_template(c, e, ex, grab, self.v_cruise)
             # 连接当前位姿 → 本格入口边中点 (模板几何锚点, 独立于 primitive 形式)
-            m_in = ((c[0] + 0.5) * C + DIRV[e][0] * 0.2,
-                    (c[1] + 0.5) * C + DIRV[e][1] * 0.2)
             if abs(cur.x - m_in[0]) > 1e-9 or abs(cur.y - m_in[1]) > 1e-9:
                 prims.append(MotionPrimitive(
                     kind='STRAIGHT', start_pose=Pose2D(cur.x, cur.y, cur.yaw),
@@ -154,21 +166,25 @@ class MotionPlanner:
             cur = Pose2D(end_pt[0], end_pt[1], cur.yaw)
             e = OPP[d]
             c = (c[0] + DIRV[d][0], c[1] + DIRV[d][1])
-        # 出场段: 沿出口边方向冲出
-        cx = (c[0] + 0.5) * C
-        cy = (c[1] + 0.5) * C
-        m_out = (cx + DIRV[exit_dir][0] * 0.2, cy + DIRV[exit_dir][1] * 0.2)
-        if abs(cur.x - m_out[0]) > 1e-9 or abs(cur.y - m_out[1]) > 1e-9:
+        # 出口格自身也走同一套模板 (entry→exit_dir); 禁止直线切角 ——
+        # 相邻边时弦线会扫过内角墙 (2026-09-25 seed7 碰撞根因)
+        cell_prims, end_pt = self._cell_template(c, e, exit_dir, False, self.v_cruise)
+        m_in = ((c[0] + 0.5) * C + DIRV[e][0] * 0.2,
+                (c[1] + 0.5) * C + DIRV[e][1] * 0.2)
+        if abs(cur.x - m_in[0]) > 1e-9 or abs(cur.y - m_in[1]) > 1e-9:
             prims.append(MotionPrimitive(
                 kind='STRAIGHT', start_pose=Pose2D(cur.x, cur.y, cur.yaw),
-                p0=(cur.x, cur.y), p1=m_out, yaw0=cur.yaw, yaw1=cur.yaw,
-                length=math.hypot(m_out[0] - cur.x, m_out[1] - cur.y),
+                p0=(cur.x, cur.y), p1=m_in, yaw0=cur.yaw, yaw1=cur.yaw,
+                length=math.hypot(m_in[0] - cur.x, m_in[1] - cur.y),
                 v_max=V_CONNECT, v_end=min(self.v_arc, V_CONNECT)))
+        prims += cell_prims
+        cur = Pose2D(end_pt[0], end_pt[1], cur.yaw)
+        # 出场段: 沿出口边方向冲出
         dv = DIRV[exit_dir]
         prims.append(MotionPrimitive(
-            kind='STRAIGHT', start_pose=Pose2D(m_out[0], m_out[1], cur.yaw),
-            p0=m_out, p1=(m_out[0] + dv[0] * self.exit_len,
-                          m_out[1] + dv[1] * self.exit_len),
+            kind='STRAIGHT', start_pose=Pose2D(cur.x, cur.y, cur.yaw),
+            p0=(cur.x, cur.y), p1=(cur.x + dv[0] * self.exit_len,
+                                   cur.y + dv[1] * self.exit_len),
             yaw0=cur.yaw, yaw1=cur.yaw,
             length=self.exit_len, v_max=0.6, v_end=0.6,
             meta={'route_exit': True}))

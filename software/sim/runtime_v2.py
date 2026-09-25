@@ -225,8 +225,21 @@ def explore(walls, entry, ex, order, blocks, *,
     nav.on_entered(entry, 'S', ts=0.0)
 
     def _entry_side_of(pose):
-        v = nav.visits.get(_cell_of(pose))
-        return v.latest_entered_from if v else 'S'
+        """入口边判定 —— 只来自离散拓扑, 禁止几何猜测 (规范 §9 / 对齐定案):
+        1) 真实 EnteredCell 事件 (visit.latest_entered_from) —— 唯一真值;
+        2) 无 visit 时不猜: 由 TraversalMap 已走拓扑找唯一相邻已走格
+           (prev_cell → cur_cell 的离散拓扑关系), 这是"地图已知道的事"。
+        禁止: body yaw / 固定 'S' / 边中点重合猜测。"""
+        cell = _cell_of(pose)
+        v = nav.visits.get(cell)
+        if v is not None:
+            return v.latest_entered_from
+        for d, dv in DIRV.items():
+            nb = (cell[0] + dv[0], cell[1] + dv[1])
+            if 0 <= nb[0] < N and 0 <= nb[1] < N and \
+                    nav.traversal.is_walked(nb, OPP[d]):
+                return d               # 唯一相邻已走格所在的方向 = 来向
+        return None                    # 真无拓扑依据: 上层按未识别处理
 
     def finish():
         """收尾: 未确认统计 + 真值对账 + 返航路线装载."""
@@ -328,11 +341,10 @@ def explore(walls, entry, ex, order, blocks, *,
                 if r is not None:
                     return r
 
-        # 8. 空闲 → 规划 (CellAction → 模板编译; 未知格边界中点 STOP)
+        # 8. 空闲 → 规划 (CellAction → 模板编译; 未知格蹭入后 STOP 等扫描)
         if executor.idle:
             # 抓取检查: 到达目标格且有方块
-            visit = nav.visits.get(cur_cell)
-            entry_side = visit.latest_entered_from if visit else 'S'
+            entry_side = _entry_side_of(executor.pose)
             if nav.has_block(cur_cell):
                 world.collect(cur_cell)
                 nav.set_block_collected(cur_cell)
@@ -340,7 +352,16 @@ def explore(walls, entry, ex, order, blocks, *,
                 st['got'] += 1
                 st['grabs'] += 1
                 st['time'] += t_grab
-            prims = planner.compile_chain(nav, executor.pose, cur_cell, entry_side)
+            prims = planner.compile_chain(nav, executor.pose, cur_cell, entry_side) \
+                if entry_side is not None else []
+            if not prims:
+                # 无拓扑依据 (不应发生): 原地停车等待, 不猜测入口边
+                from m3pro_nav.motion_primitive import MotionPrimitive
+                prims = [MotionPrimitive(
+                    kind='STOP', start_pose=Pose2D(executor.pose.x, executor.pose.y,
+                                                   executor.pose.yaw),
+                    p0=(executor.pose.x, executor.pose.y),
+                    yaw0=executor.pose.yaw, duration=0.2, meta={'wait': cur_cell})]
             if prims and prims[0].kind == 'STOP':
                 st['wait_ticks'] += 1
             for pm in prims:

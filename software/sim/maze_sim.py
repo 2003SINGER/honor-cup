@@ -22,11 +22,11 @@ import statistics as st
 import sys
 import os
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src'))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..',
                                 'ros2', 'm3pro_nav'))
-from mazemap import MazeMap
-from m3pro_nav.stream_nav import StreamNav   # 唯一认知体: 仿真与 ROS 共用, 禁止复制
+from m3pro_nav.mazemap import MazeMap        # 铁律: 单一真相源, 只 import m3pro_nav 包
+from m3pro_nav.stream_nav import StreamNav
+from m3pro_nav.tracker import HolonomicTracker
 
 C = 0.4            # 格距 m (通道 40cm)
 N = 7              # 7×7
@@ -316,29 +316,41 @@ HALF_W = 0.1075                                   # 车宽 21.5cm 之半 (赛题
 HALF_L = 0.145                                    # 车长 ~29cm 之半
 
 
-def _seg_dist(px, py, seg):
-    (x1, y1), (x2, y2) = seg
-    dx, dy = x2 - x1, y2 - y1
-    L2 = dx * dx + dy * dy
-    t = max(0.0, min(1.0, ((px - x1) * dx + (py - y1) * dy) / L2))
-    return math.hypot(px - (x1 + t * dx), py - (y1 + t * dy))
+def _seg_aabb(ax, ay, bx, by, hl, hw):
+    """Liang-Barsky: 线段 (a→b) vs AABB [-hl,hl]×[-hw,hw] 精确相交"""
+    dx, dy = bx - ax, by - ay
+    t0, t1 = 0.0, 1.0
+    for p, q in ((-dx, ax + hl), (dx, hl - ax), (-dy, ay + hw), (dy, hw - ay)):
+        if p == 0.0:
+            if q < 0.0:
+                return False
+        else:
+            r = q / p
+            if p < 0.0:
+                if r > t1:
+                    return False
+                if r > t0:
+                    t0 = r
+            else:
+                if r < t0:
+                    return False
+                if r < t1:
+                    t1 = r
+    return True
 
 
-def collision(px, py, th, wall_segs, near):
-    """车矩形(中心 px,py 朝向 th) 与墙线段是否相交 (角+边中点采样进入矩形判定)"""
+def collision(px, py, th, wall_segs, margin=0.005):
+    """车矩形(OBB) vs 墙线段精确求交: 墙段变换到车体系 → segment-AABB.
+       margin = footprint inflation (m), 参数不写死"""
     ca, sa = math.cos(th), math.sin(th)
-    pts = []
-    for lx, ly in ((HALF_L, HALF_W), (HALF_L, -HALF_W),
-                   (-HALF_L, HALF_W), (-HALF_L, -HALF_W),
-                   (0, HALF_W), (0, -HALF_W), (HALF_L, 0), (-HALF_L, 0)):
-        pts.append((px + lx * ca - ly * sa, py + lx * sa + ly * ca))
-    # 矩形内测试(中心点足够近的墙段) + 采样点距墙 < 阈值 → 视为穿透
-    for seg in near:
-        (x1, y1), (x2, y2) = seg
-        # 墙段端点在矩形内? 用采样点距墙段近似: 任一采样点距墙段 < 1cm
-        for qx, qy in pts:
-            if _seg_dist(qx, qy, seg) < 0.01:
-                return True
+    hl, hw = HALF_L + margin, HALF_W + margin
+    for (x1, y1), (x2, y2) in wall_segs:
+        dx1, dy1 = x1 - px, y1 - py
+        dx2, dy2 = x2 - px, y2 - py
+        ax, ay = dx1 * ca + dy1 * sa, -dx1 * sa + dy1 * ca   # 旋转到车体系
+        bx, by = dx2 * ca + dy2 * sa, -dx2 * sa + dy2 * ca
+        if _seg_aabb(ax, ay, bx, by, hl, hw):
+            return True
     return False
 
 
@@ -383,12 +395,13 @@ def explore_stream(walls, entry, ex, order, blocks, *,
     pending = []                                     # 观测帧延迟队列
     tick = 0
 
-    def near_segs(x, y):
+    def near_segs(x, y, r=0.8):
         out = []
         for seg in wall_segs:
-            if min(abs(seg[0][0] - x), abs(seg[1][0] - x)) > C + 0.3:
-                if min(abs(seg[0][1] - y), abs(seg[1][1] - y)) > C + 0.3:
-                    continue
+            sx0, sx1 = min(seg[0][0], seg[1][0]), max(seg[0][0], seg[1][0])
+            sy0, sy1 = min(seg[0][1], seg[1][1]), max(seg[0][1], seg[1][1])
+            if sx1 < x - r or sx0 > x + r or sy1 < y - r or sy0 > y + r:
+                continue                                # AND 包围盒: 两轴都远才丢
             out.append(seg)
         return out
 
@@ -403,7 +416,7 @@ def explore_stream(walls, entry, ex, order, blocks, *,
         px = bx + dv[0] * o_now + nx * e_lat
         py = by + dv[1] * o_now + ny * e_lat
         th = TH[heading] + th_err
-        if collision(px, py, th, wall_segs, near_segs(px, py)):
+        if collision(px, py, th, near_segs(px, py)):
             st['violations'] += 1
             st['viol_line'] = st.get('viol_line', 0) + 1
             e_lat *= 0.3                             # 撞后回中(粗糙恢复)
@@ -458,7 +471,7 @@ def explore_stream(walls, entry, ex, order, blocks, *,
                 xx += dv[0] * 0.05
                 yy += dv[1] * 0.05
                 sx, sy = xx + nx * ee, yy + ny * ee
-                if collision(sx, sy, TH[d], wall_segs, near_segs(sx, sy)):
+                if collision(sx, sy, TH[d], near_segs(sx, sy)):
                     st['violations'] += 1
                     ee *= 0.3
 
@@ -525,7 +538,13 @@ def explore_stream(walls, entry, ex, order, blocks, *,
             if p_ == 'home':
                 return finish()
             if p_ == 'wait':
-                v = 0.0
+                # 蠕行靠近 (d_conf 调度): 原地等观测几何不变永远等不到,
+                # 必须靠近到置信范围让远边过 α 门限. 上限 0.35 不越未确认边界.
+                v = min(0.05, math.sqrt(max(0.0, 2 * a_dec * max(0.0, 0.35 - o))))
+                o += v * dt
+                st['dist'] += v * dt
+                step_pose(o)
+                world.o = o
                 continue
             plan = p_
             if plan['turn_here'] == 'rev':
@@ -564,7 +583,7 @@ def explore_stream(walls, entry, ex, order, blocks, *,
             py = p_in[1] + (p_out[1] - p_in[1]) * f
             th = th_in + (th_out - th_in) * f
             e_lat += (-lat_k * e_lat) * dt + lat_sigma * math.sqrt(dt) * random.gauss(0, 1)
-            if collision(px, py, th, wall_segs, near_segs(px, py)):
+            if collision(px, py, th, near_segs(px, py)):
                 st['violations'] += 1
                 st['viol_cut'] = st.get('viol_cut', 0) + 1
                 e_lat *= 0.3

@@ -26,7 +26,7 @@ class HolonomicTracker:
         self.w_max = w_max          # 角速度上限 (rad/s)，官方底盘 4.2
         self.lookahead = lookahead  # 前视距离 (m)
         self.arrive = arrive        # 到达判定半径 (m)
-        self._path_id = None
+        self._path_fp = None                    # 路径内容指纹 (len+首尾+中点), 非 id()
         self._s = 0.0               # 路径进度（弧长，单调不减）
         self._seg = []              # 各段累计弧长
         self._total = 0.0
@@ -93,16 +93,19 @@ class HolonomicTracker:
 
     def update(self, pose, path):
         """pose = (x, y, θ) 世界系, θ 弧度; path = [(x,y), ...] 路径（含终点）.
-           同一条路径保持同一个 list 对象（进度按对象识别）。
+           路径按内容指纹识别: 原地变异 list 元素也会正确重建弧长缓存.
            返回 (vx, vy, wz, done)：vx=车体前方, vy=车体左方, wz=角速度"""
         x, y, th = pose
+        if not path:                                 # 空路径: 安全停, 绝不异常
+            return 0.0, 0.0, 0.0, True
+        fp = tuple(path)                             # 内容指纹: 任何点变异都会重建缓存
+        if fp != self._path_fp:
+            self._path_fp = fp
+            self._prepare(path)
         if len(path) < 2:
             d = math.hypot(path[-1][0] - x, path[-1][1] - y) if path else 0.0
             return 0.0, 0.0, 0.0, d < self.arrive
 
-        if id(path) != self._path_id:
-            self._path_id = id(path)
-            self._prepare(path)
 
         # ---- 进度投影（s 单调不减）----
         proj_d = self._project(path, x, y)

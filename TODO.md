@@ -2,7 +2,15 @@
 
 > 真相板: 这里是唯一进度真相. 完成项不删, 打 ✅ 并留证据.
 
-## 🔴 P0 — 流式探索边角鲁棒性专修 (下一步第一优先)
+## 🔴 P0 — 流式探索边角鲁棒性专修 (GPT 二审后仍未收敛, 当前第一优先)
+
+v3 证据层 (signed score + canonical 边 key + topology/navigation 分离) 落地后实测 (09-25):
+- ✅ far peek 已可触发 (exit_given_entry 纯拓扑, far 未踏入也解析)
+- ✅ 碰撞检查升级 Liang-Barsky 精确求交 (viol_cut=0)
+- ❌ seed0/1 撞 5000s watchdog; violations 66~148076 (蠕行/cut 接缝仍有几何错误)
+- ❌ 30 种子统计仍不可作为结论
+断点现场: seed0 (2,6)N far==cell 切弯簿记、seed1 viol 148k (蠕行+cut 混合段位姿漂移)
+下一刀: 修 far_cut 簿记 (预计算 walk 与实际 cut 完成的双登记) → 每修一个 seed 固化 regression test
 
 30 种子仿真 (v3 架构, 2026-09-25) 暴露: 全信息模式 4/30 中断 (看门狗兜底),
 violation 均值 31 (大部分是出界兜底 +50 计费, 非真实擦碰). 根因群:

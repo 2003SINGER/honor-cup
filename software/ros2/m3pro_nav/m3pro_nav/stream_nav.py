@@ -18,6 +18,7 @@ from .edge_map import (EdgeMap, TraversalMap, DIRV, OPP, DIRS,
 from . import tree_inference
 from .cell_classifier import classify as _classify, transition as _transition
 from .move_intent import MoveIntent
+from .visits import VisitRegistry
 
 C = 0.4
 P_HALF = 0.2
@@ -46,7 +47,7 @@ class StreamNav:
         self.blocks_seen = set()
         self.blocks_gone = set()
         self.got = 0
-        self._pending = {}                  # 迟分类 branch: cell -> 首访真实 parent_side (冻结用)
+        self.visits = VisitRegistry()       # CellVisit: entered_from 只来自 EnteredCell 事件
 
     # ---- 委托查询 ----
     def is_wall(self, c, d):
@@ -123,31 +124,38 @@ class StreamNav:
         # derived 纯重算 (前提撤销 → derived 自动消失)
         self.edges.derived = tree_inference.recompute_derived(self.edges, self.traversal)
 
-    # ---- 事件 (R3 契约: walked 只能由 crossed-edge 事件写入) ----
+    # ---- 事件 API (R3 契约: 离散状态只能由真实几何事件改变) ----
 
-    def crossed(self, cell, d):
-        """crossed-edge 事件: 连续轨迹真实跨越 cell 沿 d 的边界."""
-        self.traversal.mark_crossed(cell, d)
+    def on_crossed(self, from_cell, direction, ts=0.0):
+        """CrossedEdgeEvent → TraversalMap.walked (全系统唯一写入点)."""
+        self.traversal.mark_crossed(from_cell, direction)
 
-    def commit_cell(self, cell, heading):
-        """真实进格事件: branch → DFS commit_enter (BranchState 建立/沿用).
-        mark 未完成 (观测滞后) → 记录首访 parent_side 进 pending, 供 sound 延迟 commit.
-        返回 (d2, mode)|None"""
-        walked_fn = lambda c, d: self.traversal.is_walked(c, d)
+    def on_entered(self, cell, entered_from_side, ts=0.0):
+        """EnteredCellEvent → 建立/更新 CellVisit; 若该格是 COMPLETE BRANCH:
+        未 commit → 首次 commit (parent=first_entered_from);
+        已 commit → 仅标记 arrived child 已消费 (branch 得以正常弹栈)."""
+        visit = self.visits.on_entered(cell, entered_from_side, ts)
+        return self._process_branch(cell, visit)
+
+    def refresh_visit(self, cell):
+        """迟分类: 观测使格变 COMPLETE 后调用 (车仍在格内)."""
+        visit = self.visits.get(cell)
+        if visit is None:
+            return None
+        return self._process_branch(cell, visit)
+
+    def _process_branch(self, cell, visit):
         mark = self.mark(cell)
-        if mark is not None and cell in self._pending:
-            self._pending.pop(cell)              # 已分类: 无论 kind, pending 义务了结
-        if mark and mark['kind'] == 'BRANCH':
-            if cell in self._pending:
-                parent = self._pending.pop(cell)     # 首访记录的真实父方向
-                return self.dfs.commit_enter(cell, mark, parent, walked_fn,
-                                             arrived_side=OPP[heading])
-            return self.dfs.commit_enter(cell, mark, OPP[heading], walked_fn,
-                                         arrived_side=OPP[heading])
-        if mark is None and any(not self.resolved(cell, d) for d in DIRS) \
-                and any(self.traversal.is_walked(cell, d) for d in DIRS):
-            self._pending.setdefault(cell, OPP[heading])   # 首访来向 = 真实父方向
-        return None
+        if mark is None or mark['kind'] != 'BRANCH':
+            return None
+        first_commit = not visit.branch_committed
+        visit.branch_committed = True
+        return self.dfs.commit_enter(
+            cell, mark, visit.first_entered_from,
+            lambda c, d: self.traversal.is_walked(c, d),
+            arrived_side=visit.latest_entered_from,
+            forbidden=self._forbidden_dirs(cell)) if (first_commit or
+            self.dfs._find_state(cell) or cell in self.dfs.done) else None
 
     # ---- 纯拓扑预览 (MotionPlanner 用; 不 commit) ----
 
@@ -175,28 +183,9 @@ class StreamNav:
 
     # ---- 决策: 唯一输出 MoveIntent ----
 
-    def _nearest_pending(self, cell):
-        """walked 图 BFS → 最近的迟分类 pending 格 (回访补 DFS commit, 非 frontier 探索)"""
-        reach = {cell: None}
-        q = [cell]
-        while q:
-            cc = q.pop(0)
-            if cc != cell and cc in self._pending:
-                seg = []
-                cur = cc
-                while reach[cur] is not None:
-                    pc, pd = reach[cur]
-                    seg.append(pd)
-                    cur = pc
-                return list(reversed(seg))
-            for d, dv in DIRV.items():
-                if not self.traversal.is_walked(cc, d):
-                    continue
-                nb = (cc[0] + dv[0], cc[1] + dv[1])
-                if nb not in reach:
-                    reach[nb] = (cc, d)
-                    q.append(nb)
-        return None
+    def _forbidden_dirs(self, cell):
+        """不可探索方向: 场外出口边界 (出口由 home_route EXIT 流程走)"""
+        return frozenset(d for d in DIRS if self.is_boundary(cell, d))
 
     def _backtrack_step(self, cell):
         """DFS 决定回溯 → RoutePlanner 算到栈顶父 branch 的第一步.
@@ -204,19 +193,18 @@ class StreamNav:
         返回 d2 | 'wait' (有未确认区域暂不可达) | 'home' (栈空且全图确认)."""
         tgt = self.dfs.backtrack_target()
         if tgt is None:
-            seg = self._nearest_pending(cell)
-            if seg:
-                return seg[0]                        # 回访 pending 格, 进格事件即补 commit
+            # 栈空: 无未决 branch. 有未确认边 → 'wait' 不可达区域 (诊断), 否则 home
             return 'home' if self.all_resolved() else 'wait'
         seg = self.route_between(cell, tgt.cell)
         return seg[0] if seg else ('home' if self.all_resolved() else 'wait')
 
-    def plan_intent(self, cell, heading):
-        """标记驱动决策 → MoveIntent. 'wait'/'home' 为控制信号."""
+    def plan_intent(self, cell, entry_side):
+        """标记驱动决策 → MoveIntent. 'wait'/'home' 为控制信号.
+        entry_side 必须来自 CellVisit (真实进入事件), 禁止从当前 heading 反推."""
         mark = self.mark(cell)
         if mark is None:
             return 'wait'                        # 交 CREEP_OBSERVE (MotionPlanner)
-        entry_side = OPP[heading]
+        heading = OPP[entry_side]                # 探索排序用行进方向
 
         if mark['kind'] == 'WAY':
             d2 = _transition(mark, entry_side)
@@ -236,14 +224,11 @@ class StreamNav:
                 mode = 'EXPLORE'
 
         elif mark['kind'] == 'BRANCH':
-            if self.dfs._find_state(cell) is None:
-                # 分类迟到的当前格: 用首访记录的真实 parent 补 commit (真事件, 非 preview)
-                parent = self._pending.pop(cell, entry_side)
-                pk = self.dfs.commit_enter(cell, mark, parent,
-                                           lambda c, d: self.traversal.is_walked(c, d))
-            else:
-                pk = self.dfs.peek_choice(cell, mark, entry_side,
-                                          lambda c, d: self.traversal.is_walked(c, d))
+            # commit 只发生在 on_entered/refresh_visit (真实事件);
+            # plan_intent 对 branch 永远是纯 peek, 零副作用
+            pk = self.dfs.peek_choice(cell, mark, entry_side,
+                                      lambda c, d: self.traversal.is_walked(c, d),
+                                      forbidden=self._forbidden_dirs(cell))
             if pk is None:
                 return 'wait'
             d2, mode = pk
@@ -271,54 +256,19 @@ class StreamNav:
         return MoveIntent(next_edge=d2, mode=mode, target_cell=far,
                           preferred_continuation=cont, requires_stop=requires_stop)
 
-    # ---- DEPRECATED 兼容层 (R2.5.1: 旧调用方过渡用, R3 一律删除) ----
-
-    @property
-    def exit_cell(self):
-        """DEPRECATED: 派生出口候选 (每次从 EdgeMap 现算, 无旁路真相). R3 删."""
-        exits = self.exit_cells()
-        return next(iter(exits)) if exits else None
-
-    def mark_walked(self, cell, d):
-        """DEPRECATED 旧名: crossed-edge 事件别名. R3 删."""
-        self.crossed(cell, d)
-
-    def plan_edge(self, cell, heading):
-        """DEPRECATED: 旧 plan dict 视图 (R2.5.1 过渡层, R3 删除).
-        执行字段 (end_o/v_end/turn_here/far_cut) 属 MotionPlanner;
-        R3 起调用方必须用 plan_intent() → MoveIntent, 禁止新增 plan_edge 调用."""
-        intent = self.plan_intent(cell, heading)
-        if intent in ('wait', 'home'):
-            return intent
-        d2 = intent.next_edge
-        far = intent.target_cell
-        turn_here = None if d2 == heading else ('rev' if d2 == OPP[heading] else 'spin90')
-        end_o, v_end, d3, far_cut = 0.4, self.v_cruise, None, False
-        mfar = self.mark(far)
-        cont = intent.preferred_continuation
-        if mfar and mfar['kind'] == 'DEAD':
-            v_end = 0.0
-        elif cont is not None:
-            d3, far_cut, end_o, v_end = cont, True, 0.25, self.v_cruise
-        elif mfar and self.cell_classified(far):
-            f_far = self.front(far)
-            if f_far:
-                d3 = self._choose(f_far, d2)
-                if d3 != d2 and d3 != OPP[d2]:
-                    far_cut, end_o, v_end = True, 0.25, self.v_cruise
-            else:
-                v_end = 0.0
-        return {'d2': d2, 'far': far, 'end_o': end_o, 'v_end': v_end,
-                'turn_here': turn_here, 'd3': d3, 'far_cut': far_cut}
-
     def home_route(self, cell):
-        """收齐方块 → 回出口 (EXIT). 返回方向序列或 None (无出口候选)."""
-        exits = self.exit_cells()
+        """收齐方块 → 回出口 (EXIT). 返回 (方向序列, 出口格, 出口边方向) 或 None.
+        出口边方向 = 出口格上 effective OPEN 的 boundary 边 (派生, 可撤销)."""
         best = None
-        for exc in exits:
+        for exc in self.exit_cells():
             seg = self.route_between(cell, exc)
-            if seg and (best is None or len(seg) < len(best[0])):
-                best = (seg, exc)
+            if not seg:
+                continue
+            edirs = [d for d in DIRS if self.is_boundary(exc, d) and self.is_open(exc, d)]
+            if not edirs:
+                continue
+            if best is None or len(seg) < len(best[0]):
+                best = (seg, exc, edirs[0])
         return best
 
     def v_cap(self, d_remain):

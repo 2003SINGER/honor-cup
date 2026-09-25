@@ -47,6 +47,7 @@ class StreamNav:
         self.m = MazeMap(n, entry)              # 认知地图
         self.wall_known = {}                    # (cell,dir) -> 已确认的墙
         self.exit_open = set()                  # (cell,dir) -> 已确认出口开口
+        self.marks = {}                         # cell -> {'kind','d2'} 格子标记器
         self.got = 0
         self.exit_cell = None
 
@@ -66,8 +67,9 @@ class StreamNav:
     # ---- 观测摄入 (唯一入口; 只信数据, 不问真值) ----
 
     def ingest(self, hits, opens):
-        """hits[(cell,dir)]=实测距离; opens=[(cell,dir)] 确认开口.
-           节点层负责把 /scan 转成这两个字典 (几何反算), 本类做置信门限."""
+        """hits[(cell,dir)]=实测距离; opens=[(cell,dir,dist)] 确认开口(带距离).
+           节点层负责把 /scan 转成这两个字典 (几何反算), 本类做置信门限.
+           开口同样受掠射门限约束: 远处斜向的'开口'不可信, 靠近再确认."""
         newly = 0
         for (ck, axis), d_meas in hits.items():
             if self.resolved(ck, axis):
@@ -79,17 +81,56 @@ class StreamNav:
                 err = math.hypot(0.02, d_meas * self.DPHI)
             if err < self.gate:
                 self.wall_known[(ck, axis)] = True
+                nbm = (ck[0] + DIRV[axis][0], ck[1] + DIRV[axis][1])
+                if 0 <= nbm[0] < self.n and 0 <= nbm[1] < self.n:
+                    self.wall_known[(nbm, OPP[axis])] = True   # 边共享镜像
                 newly += 1
-        for (ck, axis) in opens:
+        for (ck, axis, dist) in opens:
             if self.resolved(ck, axis):
                 continue
-            if 0.02 < self.gate:                     # 开口由正入射轴扫描给出
+            if dist < 0.25:                          # 正入射/贴身: 直接确认
+                err = 0.02
+            else:                                    # 对角掠射开口: 远才可信
+                phi = math.atan2(P_HALF, dist)
+                err = max(0.02, P_HALF / math.sin(phi) ** 2 * self.DPHI)
+            if err < self.gate:
                 nb = self.m.open_edge(ck, axis)
                 if nb is None:
                     self.exit_open.add((ck, axis))
                     self.exit_cell = ck if self.exit_cell is None else self.exit_cell
                 newly += 1
         return newly
+
+    # ---- 认知一致性守卫 ----
+
+    def consistency_guard(self):
+        """walked 边是物理事实(车真走过), 推断墙与之冲突 → 删墙并作废相关标记.
+           防'墙+walked并存'矛盾认知导致决策死循环 (仿真实测教训)."""
+        n = 0
+        for cc, nd in self.m.nodes.items():
+            for d, s in nd['edges'].items():
+                if s == 'walked' and (cc, d) in self.wall_known:
+                    del self.wall_known[(cc, d)]
+                    nbm = (cc[0] + DIRV[d][0], cc[1] + DIRV[d][1])
+                    self.wall_known.pop((nbm, OPP[d]), None)
+                    self.marks.pop(cc, None)
+                    self.marks.pop(nbm, None)
+                    n += 1
+        return n
+
+    # ---- 格子标记器 (纯局部观测: 四边登记齐 → 直接打"怎么走"标记) ----
+
+    def try_mark(self, c):
+        if c != self.entry and c not in self.m.nodes:
+            return
+        if any(not self.resolved(c, d) for d in DIRV):
+            return                                   # 还有未知边: 靠近再说
+        opens = [d for d in DIRV if (c, d) not in self.wall_known]
+        n = len(opens)
+        new_mk = ({'kind': 'dead', 'd2': None} if n == 0 else
+                  {'kind': 'way', 'd2': opens[0]} if n == 1 else
+                  {'kind': 'branch', 'd2': None})
+        self.marks[c] = new_mk
 
     # ---- 决策 ----
 
@@ -121,31 +162,41 @@ class StreamNav:
                       if self.rel_of(dd, heading) in self.order else 99)[0]
 
     def plan_edge(self, cell, heading):
-        """格心决策 → 本边 plan dict.
-           'wait'  = 本格未确认完 (节点层应减速就地进行 360° 确认)
+        """标记驱动决策: 非岔路格读标记直接动(零推理); 岔路才进搜索层.
+           'wait'  = 本格无标记 (四边未齐: 节点层减速靠近, 到置信范围即打标)
            'home'  = 探索完 (收齐/全图) → 上层切速度跑回出口"""
-        if not self.cell_classified(cell):
+        mk = self.marks.get(cell)
+        if mk is None:
             return 'wait'
-        front = self.front(cell)
-        # 数墙剪枝: 远格三面墙已确认 + 本边开口 → 死路格, 无需进入即完结
-        # (不需要"迷宫是树"假设, 有环场地也安全)
-        def is_dead_end(d2):
-            far = (cell[0] + DIRV[d2][0], cell[1] + DIRV[d2][1])
-            w = sum(1 for d in DIRV if d != d2 and (far, d) in self.wall_known)
-            return w == 3
-        front = [d for d in front if not is_dead_end(d)]
-        if front:
-            d2 = self.choose(front, heading)
-        else:
-            nf = self.nearest_frontier(cell)
-            if nf is None:
-                return 'home'
-            d2 = nf[1]
+        if mk['kind'] == 'way':
+            d2 = mk['d2']                            # 唯一出口: 标记即答案
+        else:                                        # branch
+            front = self.front(cell)
+            # dead 方向跳过 — 节点层可用 has_block(far) 例外(死路抓块必须进)
+            def farc_of(d):
+                return (cell[0] + DIRV[d][0], cell[1] + DIRV[d][1])
+            front = [d for d in front
+                     if self.marks.get(farc_of(d), {}).get('kind') != 'dead']
+            if front:
+                d2 = self.choose(front, heading)
+            else:
+                nf = self.nearest_frontier(cell)     # 回溯: BFS 最近未探分支
+                if nf is None:
+                    return 'home'
+                d2 = nf[1]
         far = (cell[0] + DIRV[d2][0], cell[1] + DIRV[d2][1])
         turn_here = None if d2 == heading else ('arc' if d2 != OPP[heading] else 'rev')
-        # far 格转弯 → 本边 end_o / v_end (peek: 提前知道要弯就提前降速)
+        # peek far 转弯方式: 优先读标记; branch 用决策层预演
         end_o, v_end, d3, far_arc = 0.4, self.v_cruise, None, False
-        if self.cell_classified(far):
+        mfar = self.marks.get(far)
+        if mfar and mfar['kind'] == 'dead':
+            v_end = 0.0
+        elif mfar and mfar['kind'] == 'way':
+            d3 = mfar['d2']
+            if d3 != d2 and d3 != OPP[d2]:
+                far_arc = True
+                end_o, v_end = 0.2, self.v_arc
+        elif self.cell_classified(far):
             f_far = self.front(far)
             if f_far:
                 d3 = self.choose(f_far, d2)

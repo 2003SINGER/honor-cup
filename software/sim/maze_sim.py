@@ -341,6 +341,42 @@ def explore_stream(walls, entry, ex, order, blocks, *,
     def cell_classified(c):
         return all(resolved(c, d) for d in DIRS)
 
+    # ---- 格子标记器 (用户方案): 四边登记齐 → 直接打"怎么走"标记 ----
+    # 纯局部观测: 只看本格四边登记状态(墙/开口), 零推理、不依赖树假设.
+    # way 标记含行进方向 → 决策层进格前读标记直接动, 低耦合.
+    marks = {}                                       # cell -> {'kind','d2'}
+
+    def try_mark(c):
+        if c != entry and c not in m.nodes:
+            return
+        if any(not resolved(c, d) for d in DIRV):
+            return                                   # 还有未知边: 不打, 靠近再说
+        opens = [d for d in DIRV if (c, d) not in wall_known]
+        n = len(opens)
+        new_mk = ({'kind': 'dead', 'd2': None} if n == 0 else
+                  {'kind': 'way', 'd2': opens[0]} if n == 1 else
+                  {'kind': 'branch', 'd2': None})
+        if marks.get(c) != new_mk:
+            if c in marks:
+                st['mark_revised'] = st.get('mark_revised', 0) + 1
+            marks[c] = new_mk
+
+    def consistency_guard():
+        """认知一致性: walked 边是物理事实(车真走过了), 推断墙与之冲突 → 删墙.
+           防止'墙+walked并存'的矛盾认知导致决策死循环."""
+        n = 0
+        for cc, nd in m.nodes.items():
+            for d, s in nd['edges'].items():
+                if s == 'walked' and (cc, d) in wall_known:
+                    del wall_known[(cc, d)]
+                    nbm = (cc[0] + DIRV[d][0], cc[1] + DIRV[d][1])
+                    wall_known.pop((nbm, OPP[d]), None)
+                    marks.pop(cc, None)                # 该格标记作废重打
+                    marks.pop(nbm, None)
+                    n += 1
+        st['wall_conflicts'] = st.get('wall_conflicts', 0) + n
+        return n
+
     def prune():
         """树环剪枝: 未知边两端点在已知通道图已连通 → 必是墙 (加边即成环). 另含镜像."""
         newly = 0
@@ -387,6 +423,7 @@ def explore_stream(walls, entry, ex, order, blocks, *,
     hits, opens = world.sense()
     ingest(hits, opens)
     prune()
+    try_mark(entry)
 
     plan = None
     arc_left = 0.0
@@ -464,27 +501,29 @@ def explore_stream(walls, entry, ex, order, blocks, *,
         return None
 
     def make_plan():
-        """决策(只读认知 m/wall_known/exit_open) → 本边 plan"""
-        if not cell_classified(cell):
-            return 'wait'
-        front = [d for d in m.frontier(cell)]
-        # 数墙剪枝: 远格三面墙已确认 + 本边开口 → 死路格, 无需进入即完结
-        def is_dead_end(d2):
-            far = (cell[0] + DIRV[d2][0], cell[1] + DIRV[d2][1])
-            w = sum(1 for d in DIRV if d != d2 and (far, d) in wall_known)
-            return w == 3
-        pruned = [d for d in front if not is_dead_end(d)]
-        if len(pruned) < len(front):
-            st['dead_skipped'] = st.get('dead_skipped', 0) + len(front) - len(pruned)
-        front = pruned
-        if front:
-            d2 = sorted(front, key=lambda dd: order.index(rel_of(dd, heading))
-                        if rel_of(dd, heading) in order else 99)[0]
-        else:
-            nf = nearest_frontier_dir()                # frontier 导航: 最近未探分支
-            if nf is None:
-                return 'home'                          # 真·全图探完
-            d2 = nf[1]
+        """标记驱动决策: 非岔路格读标记直接动(零推理); 岔路/无标记才走搜索层.
+           本格: way→唯一出口直接走; branch/未标→frontier选向; 未标记→wait靠近"""
+        mk = marks.get(cell)
+        if mk is None:
+            return 'wait'                              # 四边未齐: 靠近/等待观测
+        if mk['kind'] == 'way':
+            d2 = mk['d2']                              # 唯一出口: 标记即答案
+        else:                                          # branch
+            front = [d for d in m.frontier(cell)]
+            # dead 方向跳过 — 除非那格有方块(必须进去抓)
+            def farc_of(d):
+                return (cell[0] + DIRV[d][0], cell[1] + DIRV[d][1])
+            front = [d for d in front
+                     if marks.get(farc_of(d), {}).get('kind') != 'dead'
+                     or world.block_at(farc_of(d))]
+            if front:
+                d2 = sorted(front, key=lambda dd: order.index(rel_of(dd, heading))
+                            if rel_of(dd, heading) in order else 99)[0]
+            else:
+                nf = nearest_frontier_dir()            # 回溯: BFS 最近未探分支
+                if nf is None:
+                    return 'home'                      # 真·全图探完
+                d2 = nf[1]
         far = (cell[0] + DIRV[d2][0], cell[1] + DIRV[d2][1])
         grab = world.block_at(far)
         turn_here = None if d2 == heading else ('arc' if d2 != OPP[heading] else 'rev')
@@ -492,8 +531,17 @@ def explore_stream(walls, entry, ex, order, blocks, *,
         if turn_here == 'arc' and world.block_at(cut):
             d2, far, grab = heading, cut, True
             turn_here = None                           # 直行进格先抓, 不切角
+        # peek far 转弯方式: 优先读标记; branch 用决策层预演
         end_o, v_end, d3, far_arc = 0.4, v_cruise, None, False
-        if cell_classified(far):
+        mfar = marks.get(far)
+        if mfar and mfar['kind'] == 'dead':
+            v_end = 0.0                                # 死路: 停格心(抓块)或掉头
+        elif mfar and mfar['kind'] == 'way':
+            d3 = mfar['d2']
+            if d3 != d2 and d3 != OPP[d2]:
+                far_arc = True
+                end_o, v_end = 0.2, v_arc
+        elif cell_classified(far):
             f_far = [d for d in m.frontier(far)]
             if f_far:
                 d3 = sorted(f_far, key=lambda dd: order.index(rel_of(dd, d2))
@@ -521,6 +569,9 @@ def explore_stream(walls, entry, ex, order, blocks, *,
         if tick % scan_every == 0:
             st['obs_new'] += ingest(*world.sense())
             prune()
+            consistency_guard()
+            for c2 in list(m.nodes):
+                try_mark(c2)
 
         # ---- 决策 ----
         if plan is None:
@@ -559,8 +610,6 @@ def explore_stream(walls, entry, ex, order, blocks, *,
             st['dist'] += step
             if arc_left <= 1e-9:
                 # 本格转弯弧线: 弧在 C 内自转(切点=两侧中心), 不走格
-                import sys as _s
-                print(f"ARC-DONE t={tick} cell={cell} newhdg={plan['d2']}", file=_s.stderr)
                 heading = plan['d2']
                 world.heading = heading
                 o, v, plan = 0.2, v_arc, None
@@ -581,8 +630,8 @@ def explore_stream(walls, entry, ex, order, blocks, *,
                     break
                 farc = m.walk_edge(cell, heading)
                 world.collect(farc)
-                if world.block_at(farc):
-                    pass
+                st['enters'] = st.get('enters', 0) + 1
+                st['mark_hit'] = st.get('mark_hit', 0) + (farc in marks)
                 st['got'] += 1
                 st['grabs'] += 1
                 st['time'] += t_grab
@@ -593,6 +642,8 @@ def explore_stream(walls, entry, ex, order, blocks, *,
                 arc_left = (math.pi / 2) * P
                 st['arcs'] += 1
                 nxtc = m.walk_edge(cell, heading)        # 走到 far
+                st['enters'] = st.get('enters', 0) + 1
+                st['mark_hit'] = st.get('mark_hit', 0) + (nxtc in marks)
                 cell = nxtc                              # 弧线切 far 的角: 车停 far 内 o=0.2
                 world.cell = cell
                 heading = plan['d3']
@@ -607,6 +658,8 @@ def explore_stream(walls, entry, ex, order, blocks, *,
                       f"frontier={m.frontier(cell)} exit_open={sorted(exit_open)}", file=_s.stderr)
                 break
             nxtc = m.walk_edge(cell, heading)
+            st['enters'] = st.get('enters', 0) + 1
+            st['mark_hit'] = st.get('mark_hit', 0) + (nxtc in marks)
             cell, o, v, plan = nxtc, 0.0, v, None
             world.cell = cell
 
@@ -801,7 +854,7 @@ def cmd_stream(a):
     orders = a.orders.split(',')
     print(f"流式探索 · {a.seeds} 种子 · 巡航 {a.vc} m/s · 弧线限速 √(0.7·0.2)={math.sqrt(0.7*0.2):.3f} m/s · "
           f"δφ={a.dphi}° · gate={a.gate}m · 扫描 {a.scan}Hz · 处理 {a.proc}ms\n")
-    print(f"{'顺序':<8}{'平均用时(s)':>10}{'最短':>7}{'最长':>7}{'平均路程':>9}{'平均速':>8}{'弧线':>6}{'掉头':>6}{'违规':>6}{'未确认':>7}")
+    print(f"{'顺序':<8}{'平均用时(s)':>10}{'最短':>7}{'最长':>7}{'平均路程':>9}{'平均速':>8}{'弧线':>6}{'掉头':>6}{'违规':>6}{'未确认':>7}{'标记命中':>8}")
     for o_ in orders:
         res = []
         for s in range(a.seeds):
@@ -819,7 +872,8 @@ def cmd_stream(a):
               f"{st.mean(d) / st.mean(t):>8.2f}"
               f"{st.mean([r['arcs'] for r in res]):>6.0f}{st.mean([r['spins'] for r in res]):>6.1f}"
               f"{st.mean([r['violations'] for r in res]):>6.1f}"
-              f"{st.mean([r.get('unresolved', -1) for r in res]):>6.1f}")
+              f"{st.mean([r.get('unresolved', -1) for r in res]):>6.1f}"
+              f"{100 * st.mean([r.get('mark_hit', 0) / max(1, r.get('enters', 1)) for r in res]):>6.1f}%")
     print("\n对照(同迷宫): pivot@0.3 186.7s · holo@0.3 109.8s · arc@0.3 78.2s (30种子, explore 命令)")
     print("流式 = 观测置信建图+弧线提前承诺+视界调速+处理延迟; 违规>0 说明视界模型过于乐观")
 

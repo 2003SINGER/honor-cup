@@ -154,7 +154,7 @@ def test_derived_wall_retracts_when_premise_retracts():
 def test_dfs_goes_deep_before_sibling():
     dx = DFSExplorer((0, 0), order='LFR')
     mark = {'kind': BRANCH, 'opens': ('N', 'E', 'W')}
-    d2, mode = dx.commit_enter((0, 0), mark, 'S', lambda c, d: False)
+    d2, mode = dx.commit_enter((0, 0), mark, 'S', lambda c, d: False, arrived_side='S')
     assert (d2, mode) == ('W', 'explore')         # LFR: L 最优先
     assert dx.stack[-1].parent_side == 'S'        # 冻结
 
@@ -172,9 +172,9 @@ def test_dfs_peek_is_pure():
 def test_dfs_branch_parent_side_frozen_on_child_return():
     dx = DFSExplorer((0, 0), order='LFR')
     mark = {'kind': BRANCH, 'opens': ('N', 'E', 'W')}
-    dx.commit_enter((0, 0), mark, 'S', lambda c, d: False)   # parent_side='S'
-    d2, mode = dx.commit_enter((0, 0), mark, 'E',      # 从 child 回来 entry=E
-                               lambda c, d: d == 'N')
+    dx.commit_enter((0, 0), mark, 'S', lambda c, d: False, arrived_side='S')
+    d2, mode = dx.commit_enter((0, 0), mark, 'S',      # parent 冻结传 'S'
+                               lambda c, d: d == 'N', arrived_side='E')  # 实际从 E 回
     st = dx.stack[-1]
     assert st.parent_side == 'S'                  # 冻结, 不被 'E' 覆盖
     assert 'E' in st.explored                     # E 子树标记完成 (entry=E)
@@ -186,29 +186,29 @@ def test_dfs_full_depth_trajectory():
     dx = DFSExplorer((0, 0), order='LFR')
     # A=(0,0) 从 S 进, opens N/E/W
     d2, mode = dx.commit_enter((0, 0), {'kind': BRANCH, 'opens': ('N', 'E', 'W')},
-                               'S', lambda c, d: False)
+                               'S', lambda c, d: False, arrived_side='S')
     assert (d2, mode) == ('W', 'explore')         # A 选 L
     # way 格 (西邻) opens=(N,E): 从 E 进 → 唯一出口 N (transition 决定, 不经 DFS)
     assert transition({'kind': WAY, 'opens': ('N', 'E')}, 'E') == 'N'
     # B=(-1,1) 从 S 进, opens N/E
     d2, mode = dx.commit_enter((-1, 1), {'kind': BRANCH, 'opens': ('N', 'E')},
-                               'S', lambda c, d: False)
+                               'S', lambda c, d: False, arrived_side='S')
     assert (d2, mode) == ('N', 'explore')         # B 选 E
     # dead end (E 邻格) → transition 原路返回 → 回 B
     assert transition({'kind': DEAD, 'opens': ('E',)}, 'E') == 'E'
     # B: entry=E (从 child 回), N 未探
     d2, mode = dx.commit_enter((-1, 1), {'kind': BRANCH, 'opens': ('N', 'E')},
-                               'E', lambda c, d: d == 'E')
+                               'E', lambda c, d: d == 'E', arrived_side='E')
     assert (d2, mode) == ('N', 'explore')
     # N 子树探完回到 B: children 全 explored → 弹栈, 沿冻结 parent_side='S'
     d2, mode = dx.commit_enter((-1, 1), {'kind': BRANCH, 'opens': ('N', 'E')},
-                               'S', lambda c, d: True)
+                               'S', lambda c, d: True, arrived_side='S')
     assert (d2, mode) == ('S', 'backtrack')
     # 沿 way 回到 A: way opens=(N,S) 从 N 进 → 出 S
     assert transition({'kind': WAY, 'opens': ('N', 'S')}, 'N') == 'S'
     # A: entry=W (从西边回来), N/W 已探 → sibling E
     d2, mode = dx.commit_enter((0, 0), {'kind': BRANCH, 'opens': ('N', 'E', 'W')},
-                               'W', lambda c, d: d in ('N', 'W'))
+                               'W', lambda c, d: d in ('N', 'W'), arrived_side='W')
     assert (d2, mode) == ('E', 'explore')
 
 
@@ -326,3 +326,125 @@ def test_streamnav_semanticsim_integration():
     nav.mark_walked((0, 0), 'N')                  # 车向北走过
     plan = nav.plan_edge((0, 0), 'N')
     assert plan['d2'] == 'E'                      # way: N 进 → 唯一另一口 E
+
+
+# ---------------- R2.5.1 验收 (GPT 四审复核 9 项) ----------------
+
+def test_derived_independent_of_previous_cache():
+    """预塞错误 derived 后重算 → 结果只由 base facts 决定 (无自举)"""
+    em, tr = _mk_u_channel()
+    em.derived = {em.edge_key((5, 5), 'N'): 'WALL'}      # 垃圾缓存
+    em.derived[em.edge_key((1, 2), 'E')] = 'OPEN'        # 错误翻转
+    em.derived = tree_inference.recompute_derived(em, tr)
+    assert em.state((1, 2), 'E', tr) == WALL             # 只由 base 推出
+    assert em.state((5, 5), 'N', tr) == UNKNOWN          # 垃圾不残留
+
+
+def test_exit_candidate_retracts():
+    """出口不是旁路真相: 误 OPEN 翻 WALL → exit 候选自动消失"""
+    from m3pro_nav.stream_nav import StreamNav
+    nav = StreamNav((0, 0), n=7)
+    # 远处格 (6,3) 东边界: 先误 OPEN (近距 2 帧 → confirmed)
+    for _ in range(2):
+        nav.observe({}, [((6, 3), 'E', 0.2, 0.01)])
+    assert (6, 3) in nav.exit_cells()
+    # 反复墙证据越过 T_FLIP → 翻 WALL
+    for _ in range(6):
+        nav.observe({((6, 3), 'E'): (0.2, 0.01)}, [])
+    assert (6, 3) not in nav.exit_cells()                # 无 stale exit
+
+
+def test_no_nearest_frontier_fallback():
+    """README 宣称 nearest_frontier 已废除 → 探索 fallback 不得存在"""
+    from m3pro_nav.stream_nav import StreamNav
+    assert not hasattr(StreamNav, '_route_to_frontier')
+    assert not hasattr(StreamNav, 'nearest_frontier')
+
+
+def test_no_fake_assume_tree_param():
+    """assume_tree 虚假可配置项已删 (树公理恒成立)"""
+    from m3pro_nav.stream_nav import StreamNav
+    import inspect as _insp
+    assert 'assume_tree' not in _insp.signature(StreamNav.__init__).parameters
+    import m3pro_nav.tree_inference as ti
+    assert 'assume_tree' not in _insp.signature(ti.recompute_derived).parameters
+
+
+def test_move_intent_contract():
+    """MoveIntent 只含拓扑意图, 无执行细节"""
+    from m3pro_nav.move_intent import MoveIntent
+    mi = MoveIntent(next_edge='E', mode='EXPLORE', target_cell=(1, 0),
+                    preferred_continuation='N', requires_stop=False)
+    assert mi.next_edge == 'E' and mi.mode == 'EXPLORE'
+    assert not hasattr(mi, 'end_o') and not hasattr(mi, 'v_end')
+    assert not hasattr(mi, 'turn_here') and not hasattr(mi, 'far_cut')
+
+
+def test_coordinator_full_dfs_event_sequence():
+    """完整 DFS 轨迹全走 StreamNav 公共 API (observe+crossed+commit_cell+plan_intent):
+    A branch → way → B branch → dead → B → B sibling → dead → B → way → A → A sibling"""
+    from m3pro_nav.stream_nav import StreamNav
+
+    nav = StreamNav((0, 0), n=7, order='LFR')
+
+    def set_cell(c, walls):
+        for _ in range(2):
+            for d in ('N', 'E', 'S', 'W'):
+                if d in walls:
+                    nav.edges.observe_wall(c, d, 0.2)
+                else:
+                    nav.edges.observe_open(c, d, 0.2)
+
+    set_cell((0, 0), {'W'})                  # A: opens N,E,S(boundary entry)
+    set_cell((0, 1), {'E', 'W'})             # way: opens S,N
+    set_cell((0, 2), {'W'})                  # B: opens S,E,N
+    set_cell((1, 2), {'N', 'E', 'S'})        # dead: opens W
+    set_cell((0, 3), {'N', 'E', 'W'})        # dead: opens S
+    # A 是 branch (opens N,E + S 场外) → commit
+    r = nav.commit_cell((0, 0), 'N')
+    assert r is not None and r[0] == 'N'     # LFR: F(N) 无 L 可选 → N? opens 无 W/L → N=F 优先
+    assert nav.dfs.stack[-1].parent_side == 'S'
+    # → way (0,1): S 进 N 出
+    nav.crossed((0, 0), 'N')
+    it = nav.plan_intent((0, 1), 'N')
+    assert isinstance(it, object) and it.next_edge == 'N' and it.mode == 'EXPLORE'
+    # → B (0,2): branch, commit (children=N,E; heading N → L 无, F=N 优先于 R=E)
+    nav.crossed((0, 1), 'N')
+    r = nav.commit_cell((0, 2), 'N')
+    assert r[0] == 'N' and r[1] == 'explore'
+    assert nav.dfs.stack[-1].parent_side == 'S'
+    # → dead (0,3): 原路返回 S
+    nav.crossed((0, 2), 'N')
+    it = nav.plan_intent((0, 3), 'N')
+    assert it.next_edge == 'S' and it.mode == 'BACKTRACK'
+    # 回 B: entry=N ∈ children → explored; 未探 E
+    nav.crossed((0, 3), 'S')
+    r = nav.commit_cell((0, 2), 'S')
+    assert r[0] == 'E' and r[1] == 'explore'
+    assert 'N' in nav.dfs.stack[-1].explored
+    # → dead (1,2): 原路返回 W
+    nav.crossed((0, 2), 'E')
+    it = nav.plan_intent((1, 2), 'E')
+    assert it.next_edge == 'W' and it.mode == 'BACKTRACK'
+    # 回 B: entry=E ∈ children → explored; children 全完成 → 弹栈沿冻结 parent_side=S
+    nav.crossed((1, 2), 'W')
+    r = nav.commit_cell((0, 2), 'W')
+    assert r == ('S', 'backtrack')
+    assert nav.dfs.stack[-1].cell == (0, 0)  # 栈顶回到 A
+    # → way (0,1) 重访: S 出
+    nav.crossed((0, 2), 'S')
+    it = nav.plan_intent((0, 1), 'S')
+    assert it.next_edge == 'S'
+    # 回 A: N ∈ children → explored; 未探 E
+    nav.crossed((0, 1), 'S')
+    r = nav.commit_cell((0, 0), 'S')
+    assert r[0] == 'E' and r[1] == 'explore'
+    assert 'N' in nav.dfs.stack[-1].explored
+
+
+def test_sim_commits_dfs():
+    """SemanticSim 真实进格路径必须调用 commit_cell (静态断言)"""
+    src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            '..', 'sim', 'maze_sim.py')).read()
+    assert src.count('nav.commit_cell(') >= 3, \
+        f"sim 真实进格事件未接 DFS commit: {src.count('nav.commit_cell(')} 处"

@@ -143,6 +143,25 @@ class EdgeMap:
         bel = self.soft.get(key)
         return bel['prov'] if 'prov' in (bel or {}) else (P_SENSOR if bel else None)
 
+    # ---- base 查询 (hard+soft, 不含 derived) —— TreeInference 只许读这些 ----
+    def base_state(self, c, d, traversal=None):
+        key = self.edge_key(c, d)
+        if traversal is not None and traversal.is_walked(c, d):
+            return OPEN                              # hard
+        if key in self.hard:
+            return self.hard[key][0]                 # hard (BOUNDARY)
+        bel = self.soft.get(key)
+        return bel['state'] if bel else UNKNOWN      # soft (不含 derived!)
+
+    def base_is_open(self, c, d, traversal=None):
+        return self.base_state(c, d, traversal) == OPEN
+
+    def base_resolved(self, c, d, traversal=None):
+        return self.base_state(c, d, traversal) != UNKNOWN
+
+    def is_boundary(self, c, d):
+        return self.edge_key(c, d)[0] == 'B'
+
     def is_wall(self, c, d, traversal=None):
         return self.state(c, d, traversal) == WALL
 

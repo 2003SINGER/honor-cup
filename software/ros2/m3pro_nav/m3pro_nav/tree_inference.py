@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
-"""TreeInference —— derived 事实重算 (规范 §4).
+"""TreeInference —— derived 事实纯重算 (规范 §4; GPT 四审 §8: 只读 base facts).
 
-派生层: 每次从当前 base 事实 (soft/hard) 重算 derived closure, 不持久盖章.
-前提 (SENSOR OPEN) 撤销 → 下一轮 recompute → derived WALL 自动消失.
-7×7 规模 O(49×4) 全量重算, 优先简单正确."""
+derived_new = f(base facts)  —— 纯函数, 不读旧 derived (无自举推理).
+前提 (SENSOR OPEN) 撤销 → 下轮 recompute → derived WALL 自动消失.
+本项目赛题官方保证迷宫为树 → 规则 A (成环必墙) 恒成立, 不设虚假可配置项.
+规则 B/C/D (桥必开等) 未经题面保证, 禁止引入."""
 
 DIRV = {'N': (0, 1), 'E': (1, 0), 'S': (0, -1), 'W': (-1, 0)}
 DIRS = ('N', 'E', 'S', 'W')
 
 
-def recompute_derived(edges, traversal, assume_tree=False):
-    """重算 derived facts (当前仅规则 A: 成环必墙). 返回 derived dict.
-    调用方负责把它放回 edges.derived (StreamNav 每帧调用)."""
+def recompute_derived(edges, traversal):
+    """纯重算 derived (当前仅规则 A: 成环必墙). 只读 base facts."""
     derived = {}
-    # 规则 A: UNKNOWN 边两端已被 effective-OPEN 图连通 → WALL
     parent = {}
 
     def find(x):
@@ -23,19 +22,21 @@ def recompute_derived(edges, traversal, assume_tree=False):
             x = parent[x]
         return x
 
-    def is_open_edge(c, d):
+    def base_open(c, d):
         nb = (c[0] + DIRV[d][0], c[1] + DIRV[d][1])
         if not (0 <= nb[0] < edges.n and 0 <= nb[1] < edges.n):
             return False
-        return edges.is_open(c, d, traversal)
+        return edges.base_is_open(c, d, traversal)   # base only!
 
+    # confirmed-OPEN 图 (base) 建 union-find
     for i in range(edges.n):
         for j in range(edges.n):
             for d in DIRS:
-                if is_open_edge((i, j), d):
+                if base_open((i, j), d):
                     a, b = find((i, j)), find((i + DIRV[d][0], j + DIRV[d][1]))
                     if a != b:
                         parent[a] = b
+    # UNKNOWN (base) 边两端已连通 → 成环 → WALL
     for i in range(edges.n):
         for j in range(edges.n):
             for d in DIRS:
@@ -43,9 +44,8 @@ def recompute_derived(edges, traversal, assume_tree=False):
                 nb = (i + dv[0], j + dv[1])
                 if not (0 <= nb[0] < edges.n and 0 <= nb[1] < edges.n):
                     continue
-                if edges.resolved((i, j), d, traversal):
+                if edges.base_resolved((i, j), d, traversal):
                     continue
                 if find((i, j)) == find(nb):
                     derived[edges.edge_key((i, j), d)] = 'WALL'
-    # 规则 B/C/D (桥必开/唯一出口/边数): assume_tree 且赛题正式保证后实现
     return derived

@@ -1,5 +1,30 @@
 # TODO —— 真相板（按 GPT 三审令重排, 2026-09-25）
 
+## ✅ P0-R2.5.1 Semantic Closure (2026-09-25, GPT 四审复核 9 项)
+
+- [x] sim 真实进格事件接 commit_cell (grab/straight/far_cut 三点; far_cut 只 commit farc 不预登记)
+- [x] _route_to_frontier 探索 fallback 删除 (测试断言复活即 FAIL)
+- [x] exit 旁路真相删除: exit_cells() 从 boundary 边 effective OPEN 派生, 误 OPEN 翻 WALL 自动消失
+- [x] TreeInference 纯 base 重算 (base_state/base_is_open/base_resolved; derived 垃圾预塞回归测试)
+- [x] assume_tree 虚假参数删除 (树公理恒成立)
+- [x] MoveIntent dataclass (move_intent.py); 旧 plan dict 降级 deprecated 适配层 (R3 删)
+- [x] 35/35 G0a+G0b 全绿
+
+接线过程修的连锁回归 (全部有 spy 现场定位):
+- far_cut 启动后决策块重规划冻结 cut → 决策/速度调度加 cut is None 门控
+- _backtrack_step None 泄漏 → 'home'/'wait'/d2 三值语义
+- commit_enter 增加 arrived_side (parent_side 冻结 ≠ 本次来向标记 explored)
+- 迟分类 branch: _pending[cell]=首访真实 parent_side, 栈空回访补 commit (parent 不从重访来向推)
+
+### 🔴 已定位未修 (下一个一刀)
+plan_edge 适配层 cell_classified(far) fallback 的 d3=_choose(f_far) 没过 is_boundary(far,d3) 检查
+→ 出口格 far_cut 选边界方向 → walk_edge 越界 → cell=(3,-1) 永久 wait (seed3 实测根因)。
+修复 = fallback 加 boundary guard。修完重跑 10 种子冒烟再谈 30 种子。
+
+### 🔴 R3 范围残留 (数字继续不作数)
+far_cut 双 walk (离散超前物理一格) / cut 完成位姿接缝跳变 / seed5 162k violation 碰撞风暴 /
+三套位姿账本收敛为 Pose 唯一 owner。
+
 ## 本轮范围（GPT 指令：第一轮只做 R0+R1+R2, 停在 R3 前）
 
 ### ✅ P0-R0 文档与契约冻结 (本轮)

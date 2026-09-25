@@ -358,7 +358,7 @@ def explore_stream(walls, entry, ex, order, blocks, *,
                    v_cruise=0.70, a_acc=1.0, a_dec=1.0, a_lat=0.7,
                    dphi_deg=0.30, gate=0.06, scan_hz=10.0, proc_ms=5.0,
                    t_spin180=1.0, t_turn90=0.5, t_grab=1.0, ctrl_hz=50.0, v_run=0.60,
-                   assume_tree=True, cam_range=1.5,
+                   cam_range=1.5,
                    lat_k=3.0, lat_sigma=0.03):
     """流式探索 —— 世界(World) + 认知(StreamNav, 唯一决策核心) + 运动/碰撞.
 
@@ -376,8 +376,7 @@ def explore_stream(walls, entry, ex, order, blocks, *,
 
     world = World(walls, blocks, entry)
     nav = StreamNav(entry, order=order, n=N, v_cruise=v_cruise, a_acc=a_acc,
-                    a_dec=a_dec, a_lat=a_lat, dphi_deg=dphi_deg, gate=gate,
-                    assume_tree=assume_tree)
+                    a_dec=a_dec, a_lat=a_lat, dphi_deg=dphi_deg, gate=gate)
     wall_segs = world.wall_segs
 
     def walk_edge(cell_, d_):
@@ -533,12 +532,13 @@ def explore_stream(walls, entry, ex, order, blocks, *,
         due = [p for p in pending if p[0] <= tick]
         pending = [p for p in pending if p[0] > tick]
         for _, frame, cbs in due:
-            st['obs_new'] += nav.observe(*frame)
+            nav.observe(*frame)              # soft 证据 + derived 重算 (R2.5.1)
             for bc in cbs:
                 nav.set_block_seen(bc, True)
 
         # ---- 决策 (StreamNav 唯一决策核心) ----
-        if plan is None or plan in ('wait', 'home'):
+        if cut is None and (plan is None or plan in ('wait', 'home')):
+            # cut 进行中 = 车在 far 格内部过弯, 不是决策点 (R2.5.1 修复: 冻结重规划)
             p_ = nav.plan_edge(cell, heading)
             if p_ == 'home':
                 return finish()
@@ -569,14 +569,15 @@ def explore_stream(walls, entry, ex, order, blocks, *,
                         'end_o': 0.4, 'v_end': v_cruise,
                         'turn_here': None, 'd3': None, 'far_cut': False}
 
-        # ---- 速度调度 (视界) ----
-        seg_end, seg_vend = plan['end_o'], plan['v_end']
-        far = plan['far']
-        if nav.mark(far) is None and not nav.cell_classified(far):
-            cap = math.sqrt(max(0.0, 2 * a_dec * max(0.0, 0.4 - o - 0.05)))
-            if v > cap:
-                v = cap
-                st['sched_t'] += dt
+        # ---- 速度调度 (视界; cut 进行中只跳过调度, 由下方 cut 分支推进位姿) ----
+        if cut is None:
+            seg_end, seg_vend = plan['end_o'], plan['v_end']
+            far = plan['far']
+            if nav.mark(far) is None and not nav.cell_classified(far):
+                cap = math.sqrt(max(0.0, 2 * a_dec * max(0.0, 0.4 - o - 0.05)))
+                if v > cap:
+                    v = cap
+                    st['sched_t'] += dt
 
         # ---- 运动 ----
         if cut is not None:                          # 45° 斜切进行中
@@ -629,6 +630,7 @@ def explore_stream(walls, entry, ex, order, blocks, *,
                 st['mark_hit'] += nav.mark(farc) is not None
                 cell, o, v, plan = farc, 0.0, 0.0, None
                 world.cell = cell
+                nav.commit_cell(cell, heading)   # 真实进格事件 → DFS commit
                 continue
             if plan['far_cut'] and plan['far'] != cell and \
                     0 <= cell[0] + DIRV[heading][0] < N and 0 <= cell[1] + DIRV[heading][1] < N:
@@ -645,10 +647,11 @@ def explore_stream(walls, entry, ex, order, blocks, *,
                 tgt_cell = walk_edge(farc, plan['d3'])
                 cut = ((px, py), th, p_out, TH[plan['d3']], tgt_cell, plan['d3'], 0.2121)
                 st['arcs'] += 1
-                heading = plan['d3']
-                world.heading = heading
                 cell = farc
                 world.cell = cell
+                nav.commit_cell(cell, heading)   # 真实进格事件 → DFS commit (进格方向=切弯前 heading)
+                heading = plan['d3']
+                world.heading = heading
                 o = 0.25                             # 簿记: cut 完成后置 0.15
                 plan = None
                 continue
@@ -671,6 +674,7 @@ def explore_stream(walls, entry, ex, order, blocks, *,
             st['mark_hit'] += nav.mark(nxtc) is not None
             cell, o, v, plan = nxtc, 0.0, v, None
             world.cell = cell
+            nav.commit_cell(cell, heading)       # 真实进格事件 → DFS commit
 
     return st
 
@@ -874,7 +878,7 @@ def cmd_stream(a):
             blocks = set() if a.fullinfo else set(rnd.sample(cells, 8))
             r = explore_stream(walls, entry, ex, o_, blocks, v_cruise=a.vc,
                                dphi_deg=a.dphi, gate=a.gate, scan_hz=a.scan, proc_ms=a.proc,
-                               assume_tree=not a.no_prune)
+)
             res.append(r)
         t = [r['time'] for r in res]
         d = [r.get('dist', 0.0) for r in res]

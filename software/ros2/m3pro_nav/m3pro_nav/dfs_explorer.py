@@ -48,15 +48,17 @@ class DFSExplorer:
             return d2, 'explore'
         return known_parent, 'backtrack'
 
-    def commit_enter(self, branch_cell, mark, entry_side, walked_fn):
-        """真实进入 branch 事件: 创建/沿用 BranchState, 返回 (d2, mode) 同 peek."""
+    def commit_enter(self, branch_cell, mark, parent_side, walked_fn, arrived_side=None):
+        """真实进入 branch 事件: 创建/沿用 BranchState, 返回 (d2, mode) 同 peek.
+        parent_side: 首次创建时冻结的父方向 (不可从重访来向推测!);
+        arrived_side: 本次实际从哪条边到格 (重访自 child 返回时标记 explored)."""
         st = self._find_state(branch_cell)
         if st is None:
-            st = BranchState(branch_cell, entry_side,
-                             tuple(d for d in mark['opens'] if d != entry_side))
+            st = BranchState(branch_cell, parent_side,
+                             tuple(d for d in mark['opens'] if d != parent_side))
             self.stack.append(st)
-        elif entry_side in st.children:
-            st.explored.add(entry_side)     # 从该 child 子树返回 → 已消费
+        if arrived_side is not None and arrived_side in st.children:
+            st.explored.add(arrived_side)   # 从该 child 子树返回 → 已消费
         unexplored = [d for d in st.children
                       if d not in st.explored and not walked_fn(branch_cell, d)]
         if unexplored:

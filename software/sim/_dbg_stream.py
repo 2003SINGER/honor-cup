@@ -436,6 +436,8 @@ def explore_stream(walls, entry, ex, order, blocks, *,
                     if not resolved((i, j), d):
                         unres += 1
         st['unresolved'] = unres // 2
+        wrong = sum(1 for (ck, axis) in wall_known if axis not in walls[ck])
+        st['wrong_walls'] = wrong
         dirs, extra = go_home()
         if dirs is None:
             return None                                 # 出口区域还没走到
@@ -468,15 +470,6 @@ def explore_stream(walls, entry, ex, order, blocks, *,
         if not cell_classified(cell):
             return 'wait'
         front = [d for d in m.frontier(cell)]
-        # 数墙剪枝: 远格三面墙已确认 + 本边开口 → 死路格, 无需进入即完结
-        def is_dead_end(d2):
-            far = (cell[0] + DIRV[d2][0], cell[1] + DIRV[d2][1])
-            w = sum(1 for d in DIRV if d != d2 and (far, d) in wall_known)
-            return w == 3
-        pruned = [d for d in front if not is_dead_end(d)]
-        if len(pruned) < len(front):
-            st['dead_skipped'] = st.get('dead_skipped', 0) + len(front) - len(pruned)
-        front = pruned
         if front:
             d2 = sorted(front, key=lambda dd: order.index(rel_of(dd, heading))
                         if rel_of(dd, heading) in order else 99)[0]

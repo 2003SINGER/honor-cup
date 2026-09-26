@@ -325,8 +325,13 @@ _PLACEHOLDERS = ('__CALIBRATE__', '__MEASURE__')
 
 def load_runtime_config(path):
     """读 config yaml; 返回 (config, uncalibrated_keys).
+
     占位符 (__CALIBRATE__/__MEASURE__) 不解析为数字 —— 未标定项必须
-    fail closed (dry_run 允许, 实跑拒绝)。"""
+    fail closed (dry_run 允许, 实跑拒绝)。
+
+    条件性占位 (GPT 审查收尾): laser_extrinsic.source == 'tf' 时, YAML
+    分支的 x/y/yaw 占位**不会**被使用 (实际外参来自 TF) —— 不计入
+    uncalibrated, 否则现场会碰到"TF 正常却拒绝启动"的假 fail。"""
     import yaml
 
     def walk(node, prefix=()):
@@ -341,6 +346,12 @@ def load_runtime_config(path):
     with open(path) as f:
         raw = yaml.safe_load(f)
     flat = walk(raw)
-    uncalibrated = [k for k, v in flat.items() if isinstance(v, str)
-                    and any(p in v for p in _PLACEHOLDERS)]
+    # 条件性占位: source=tf 时 YAML 外参分支整体豁免
+    ext = raw.get('laser_extrinsic') or {}
+    exempt = ('laser_extrinsic.',) if str(ext.get('source', 'yaml')) == 'tf' \
+        else ()
+    uncalibrated = [k for k, v in flat.items()
+                    if isinstance(v, str)
+                    and any(p in v for p in _PLACEHOLDERS)
+                    and not k.startswith(exempt)]
     return raw, uncalibrated

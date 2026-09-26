@@ -216,3 +216,19 @@ d_unknown 信息视界速度上限、真实抓取链、下位参数标定。
 - 验证: 182 tests 全绿; 仿真 gate 回归 10+10 PASS（衔接修复零影响）
 - 未做（按 GPT 路线图）: 方块视觉 Adapter（RGB→BLOCK/EMPTY）、机械臂
   collect transaction、真实标定（帧名/外参/感知参数——到场用工作台采数）
+
+### 审查收尾（GPT 四点意见落实）
+
+1. 假 fail 修复: `load_runtime_config` 条件性豁免 —— `laser_extrinsic.
+   source: tf` 时 YAML 分支占位不计入 uncalibrated（TF 正常却拒绝启动
+   的烦人场景消除）；source: yaml 时三项必须有效。
+2. preflight 注释与实现对齐: 实跑前显式收集 preflight_failures
+   （uncalibrated / 外参 missing → RuntimeError）；scan 帧不符 dry_run
+   只 warn、实跑 → 立即 FAULT + 零指令；ARMED 期间每 0.5s 复查
+   /cmd_vel 归属（手柄中途启动即 FAULT）。
+3. 明确不做（防预优化）: 单线程 executor 保留 —— 上车先记录
+   scan/planner callback 时长与 control tick 抖动，真堵了再切
+   MultiThreadedExecutor + callback groups。
+4. 诚实边界重申: 当前 Pose 链是 raw odom + 初始锚定（无 confirmed-wall
+   correction）；"ray 已进地图"但可信域判定仍沿用仿真 StreamNav gate
+   —— 两项都等现场数据，不在软件层预答。

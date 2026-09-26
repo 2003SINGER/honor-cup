@@ -71,6 +71,21 @@ class NavRuntimeNode(Node):
         self._scan_frame = frames_cfg.get('laser_frame', '')
 
         extrinsic = self._load_extrinsic(config)
+        # ---- 实跑 preflight (影响运动安全的条件逐项 fail closed;
+        #      与模块头注释一一对应, dry_run 只 warn 不挡) ----
+        preflight_failures = []
+        if uncalibrated:
+            preflight_failures.append(
+                f'uncalibrated config: {uncalibrated}')
+        if not extrinsic.available:
+            preflight_failures.append(
+                'laser extrinsic unavailable (no TF, no valid YAML) — '
+                'all observations would ABSTAIN')
+        if preflight_failures and not self._dry_run:
+            raise RuntimeError(
+                'preflight FAIL (real run): ' + '; '.join(preflight_failures))
+        for f in preflight_failures:
+            self.get_logger().warn(f'preflight (dry-run tolerating): {f}')
         self.runtime = NavRuntime(
             entry=(int(anchor_cfg.get('entry_x', 0)),
                    int(anchor_cfg.get('entry_y', 0))),
@@ -140,6 +155,7 @@ class NavRuntimeNode(Node):
                     'preflight FAIL: /cmd_vel already has a publisher; '
                     'refusing to create another (dry_run only)')
             self._cmd_pub = self.create_publisher(Twist, '/cmd_vel', qos)
+        self._ownership_tick = 0
         self.get_logger().info(
             f"nav_runtime: dry_run={self._dry_run} scan={scan_topic} "
             f"odom={odom_topic} uncalibrated={len(uncalibrated)} "
@@ -202,9 +218,21 @@ class NavRuntimeNode(Node):
     def _on_scan(self, msg):
         self._scans_seen += 1
         if self._scan_frame and msg.header.frame_id != self._scan_frame:
-            self.get_logger().warn(
-                f"scan frame {msg.header.frame_id!r} != expected "
-                f"{self._scan_frame!r}", throttle_duration_sec=10.0)
+            # 帧名不符: 干跑容忍 (warn); 实跑 → 立即 FAULT (观测会关联到
+            # 错误的几何上, 不允许继续驱车)
+            if self._dry_run:
+                self.get_logger().warn(
+                    f"scan frame {msg.header.frame_id!r} != expected "
+                    f"{self._scan_frame!r}", throttle_duration_sec=10.0)
+            else:
+                self.get_logger().error(
+                    f'preflight FAIL (real run): scan frame '
+                    f"{msg.header.frame_id!r} != expected "
+                    f"{self._scan_frame!r}; FAULT")
+                self.runtime.core.report_fault(
+                    'scan frame mismatch in real run')
+                self._cmd_pub.publish(Twist())
+                return
         stats = self.runtime.on_scan(msg)
         if stats is not None:
             self._events_file.write(json.dumps({
@@ -224,6 +252,14 @@ class NavRuntimeNode(Node):
 
     def _control_tick(self):
         now = self.get_clock().now().nanoseconds * 1e-9
+        # 实跑: 每 ~0.5s 复查 /cmd_vel 归属 (手柄中途启动也要被发现)
+        self._ownership_tick += 1
+        if (not self._dry_run
+                and self._ownership_tick % 25 == 0
+                and self.count_publishers('/cmd_vel') > 1):
+            self.get_logger().error(
+                '/cmd_vel publisher conflict while ARMED; FAULT')
+            self.runtime.core.report_fault('/cmd_vel publisher conflict')
         try:
             out = self.runtime.control_tick(now)
         except Exception as exc:                          # noqa: BLE001

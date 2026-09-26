@@ -304,3 +304,42 @@ def test_nav_config_has_placeholders_and_dry_run_allows_them(tmp_path=None):
                 'frames: {odom_frame: odom, base_frame: base_link}\n')
     _, unc = load_runtime_config(path)
     assert unc == []
+
+
+def test_config_tf_source_exempts_yaml_placeholders():
+    """source=tf 时 YAML 外参占位不挡实跑 (GPT 审查: 假 fail 修复)."""
+    import tempfile
+    from m3pro_nav.nav_runtime import load_runtime_config
+    d = tempfile.mkdtemp()
+    tf_cfg = os.path.join(d, 'tf.yaml')
+    with open(tf_cfg, 'w') as f:
+        f.write('laser_extrinsic:\n'
+                '  source: tf\n'
+                '  x: __CALIBRATE__\n'
+                '  y: __CALIBRATE__\n'
+                '  yaw: __CALIBRATE__\n'
+                'frames: {odom_frame: odom, base_frame: base_link}\n')
+    _, unc = load_runtime_config(tf_cfg)
+    assert unc == [], f'tf source must exempt yaml placeholders, got {unc}'
+    yaml_cfg = os.path.join(d, 'yaml_src.yaml')
+    with open(yaml_cfg, 'w') as f:
+        f.write('laser_extrinsic:\n'
+                '  source: yaml\n'
+                '  x: __CALIBRATE__\n')
+    _, unc2 = load_runtime_config(yaml_cfg)
+    assert any('laser_extrinsic.x' in k for k in unc2)
+
+
+def test_nav_node_preflight_gates_real_run():
+    """preflight 契约: 实跑挡 (外参 missing / 占位 / cmd_vel 归属 /
+    scan 帧不符→FAULT); dry_run 只 warn。源码级断言。"""
+    src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            '..', 'ros2', 'm3pro_nav', 'm3pro_nav',
+                            'nav_runtime_node.py')).read()
+    # 实跑 preflight 显式收集并 fail closed
+    assert 'preflight_failures' in src
+    assert 'extrinsic unavailable' in src
+    # scan 帧不符: 实跑 → report_fault; dry_run → warn
+    assert 'scan frame mismatch in real run' in src
+    # ARMED 期间周期复查归属
+    assert 'publisher conflict' in src

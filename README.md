@@ -60,6 +60,13 @@ LaserScan → 连续可信遮罩 → 边离散归属(ABSTAIN 兜底) → EdgeMap
 - 当前功能分支已修正固定模板的几何契约、计划内局部 DFS、方块任务剪枝
   和速度接缝；51 项确定性测试及 Tier A 随机 Gate 双模式各 1000 seed
   已通过。准确指标与未验收边界见 [TODO](TODO.md)。
+- 当前控制分支已加入固定轨迹速度时间表、轨迹参考、独立车身 yaw 的位置环、
+  源码对照的下位速度环与五项确定性运动门槛；当前共 92 项确定性测试
+  通过。下位电机动态参数仍未实测。
+  细节见 [运动控制链与下位机审计](docs/architecture/运动控制链与下位机审计.md)。
+- ROS 包的失效 `decision` 启动项已替换为默认只读的 `driver_probe`，
+  可记录 `/cmd_vel`、`/odom_raw`、`/imu/data_raw`；小幅阶跃须显式启用，
+  尚未在车端运行。
 - 本轮验收依照用户方案 §24：确定性 A–G → 随机 H（双模式各 100 seed，
   然后各 1000 seed）；规范 §13 的实车/感知 Gate 留待对应阶段。
 
@@ -74,11 +81,15 @@ software/ros2/m3pro_nav/m3pro_nav/   核心实现 (单一真相源)
   ├─ events.py / visits.py / event_detector.py   几何事件链
   ├─ action_horizon.py  计划内局部 DFS overlay 与滚动动作链
   ├─ motion_primitive.py / motion_planner.py / motion_executor.py
-  │                     固定模板 STRAIGHT/ARC/REVERSE/STOP (只改位置, 不改 yaw)
+  │                     固定模板与 Tier A 理想执行器
+  ├─ speed_profile.py / trajectory_reference.py / position_controller.py
+  │                     速度时间表、世界系参考、车体系位置环输出
+  ├─ control_chain.py / plant.py   多速率运动链、理想/下位环模型
+  ├─ driver_probe.py      默认只读 ROS 接口/CSV 探针
   ├─ stream_nav.py      薄 coordinator: 图递推, BRANCH 局部 DFS, 任务剪枝
-  ├─ mazemap.py / tracker.py   路径 BFS / 全向跟踪 (上车件)
-software/sim/           runtime_v2 事件驱动 SemanticSim + gate harness
-software/tests/         确定性几何、拓扑和任务语义 Gate 测试
+  ├─ mazemap.py        旧模拟器依赖，非当前地图真相
+software/sim/           runtime_v2 Tier A + motion_gate 五项控制机动
+software/tests/         确定性几何、拓扑、任务与控制接口测试
 docs/design/            现行设计文档 (算法规范 = 唯一设计真相)
 docs/decisions/         历史/已否决方案存档 (Rejected after re-alignment)
 docs/官方资料总览.md     134 份官方 PDF 摘要

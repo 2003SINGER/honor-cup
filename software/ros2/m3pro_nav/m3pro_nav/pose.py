@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Pose2D —— 唯一物理真相 (R3 规范).
+"""Pose2D/Twist2D values shared by motion and observation adapters.
 
-整个系统只有一个 Pose owner: MotionExecutor.
-Sensor / Collision / GridEventDetector / Visualization 全部以参数形式接收 Pose 快照,
-禁止任何模块自行维护第二套位姿账本 (cell/o / world.cell 等全部废除)."""
+Each execution backend has one Pose owner: MotionExecutor in Tier A semantic
+regression, or one ChassisPlant in the deterministic control gate. Sensors,
+collision checks, and event detection consume snapshots instead of keeping a
+second physical pose ledger.
+"""
 
 from dataclasses import dataclass
 import math

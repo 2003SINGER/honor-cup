@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-MazeMap —— 在线迷宫地图数据结构（纯 Python，无 ROS 依赖，车上/仿真/可视化共用）
+MazeMap —— 旧巡线路口模型，仅供历史 maze_sim 使用。
+
+当前规划使用 EdgeMap + StreamNav + TopologicalCursor；本模块不是车端地图
+真相，也不是 runtime_v2 的探索状态。以下是旧模型的原始契约：
 
 建模：节点 = 格中心(路口)，边 = 黑线走廊，格距 0.4m，7×7。
 
@@ -19,7 +22,7 @@ MazeMap —— 在线迷宫地图数据结构（纯 Python，无 ROS 依赖，�
   to_json / from_json   存盘 / 传给可视化
   render()              ASCII 图：`---` walked · ` ~ ` seen未走 · 空格 unknown
 
-决策约定（与仿真/实车一致）：
+旧版决策约定（不适用于当前固定模板方案）：
   1. DFS 沿 frontier 走，没 frontier 就沿栈回溯
   2. 出口已发现 且 方块收齐 → 停止探索，path_between 直奔出口（"跳过"）
   3. fully_explored 后仍未收齐 → 也回出口（剩下的靠罚时权衡，规则公布后调）

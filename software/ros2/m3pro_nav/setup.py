@@ -17,6 +17,7 @@ setup(
         'console_scripts': [
             'driver_probe = m3pro_nav.driver_probe:main',
             'control_probe = m3pro_nav.control_probe:main',
+            'motion_runtime = m3pro_nav.motion_runtime_node:main',
         ],
     },
 )

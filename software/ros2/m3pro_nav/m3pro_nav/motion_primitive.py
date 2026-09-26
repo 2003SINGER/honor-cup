@@ -20,6 +20,24 @@ ARC_RADIUS = 0.2
 GEOMETRY_EPS = 1e-9
 
 
+def _validate_axis_aligned_segment(kind, p0, p1, length):
+    """Validate endpoint geometry shared by STRAIGHT and REVERSE segments."""
+    if p0 is None or p1 is None or len(p0) != 2 or len(p1) != 2:
+        raise ValueError(f"{kind} requires 2D p0 and p1 endpoints")
+    if not all(math.isfinite(v) for v in (*p0, *p1)):
+        raise ValueError(f"{kind} endpoints must be finite")
+    dx = abs(p1[0] - p0[0])
+    dy = abs(p1[1] - p0[1])
+    if dx <= GEOMETRY_EPS and dy <= GEOMETRY_EPS:
+        raise ValueError(f"{kind} must have nonzero axis-aligned length")
+    if dx > GEOMETRY_EPS and dy > GEOMETRY_EPS:
+        raise ValueError(f"{kind} must be axis aligned; p0={p0}, p1={p1}")
+    expected_length = math.hypot(dx, dy)
+    if abs(length - expected_length) > GEOMETRY_EPS:
+        raise ValueError(
+            f"{kind} length must match endpoints; expected {expected_length}, got {length}")
+
+
 @dataclass
 class MotionPrimitive:
     kind: str                          # STRAIGHT / ARC / REVERSE / STOP
@@ -42,22 +60,9 @@ class MotionPrimitive:
     def __post_init__(self):
         if self.kind not in KINDS:
             raise ValueError(f"unknown motion primitive kind: {self.kind!r}")
-        if self.kind == 'STRAIGHT':
-            if self.p0 is None or self.p1 is None or len(self.p0) != 2 or len(self.p1) != 2:
-                raise ValueError("STRAIGHT requires 2D p0 and p1 endpoints")
-            if not all(math.isfinite(v) for v in (*self.p0, *self.p1)):
-                raise ValueError("STRAIGHT endpoints must be finite")
-            dx = abs(self.p1[0] - self.p0[0])
-            dy = abs(self.p1[1] - self.p0[1])
-            if dx <= GEOMETRY_EPS and dy <= GEOMETRY_EPS:
-                raise ValueError("STRAIGHT must have nonzero axis-aligned length")
-            if dx > GEOMETRY_EPS and dy > GEOMETRY_EPS:
-                raise ValueError(
-                    f"STRAIGHT must be axis aligned; p0={self.p0}, p1={self.p1}")
-            expected_length = math.hypot(dx, dy)
-            if abs(self.length - expected_length) > GEOMETRY_EPS:
-                raise ValueError(
-                    f"STRAIGHT length must match endpoints; expected {expected_length}, got {self.length}")
+        if self.kind in ('STRAIGHT', 'REVERSE'):
+            _validate_axis_aligned_segment(
+                self.kind, self.p0, self.p1, self.length)
         elif self.kind == 'ARC':
             radius = self.meta.get('r')
             if (not isinstance(radius, (int, float)) or not math.isfinite(radius) or

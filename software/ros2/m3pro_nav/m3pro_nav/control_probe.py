@@ -8,13 +8,14 @@ frames, command ownership, and plant response remain uncalibrated/unverified.
 
 import argparse
 import csv
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 import math
 from pathlib import Path
 import time
 
 from .motion_primitive import MotionPrimitive
-from .pose import Pose2D, norm_angle
+from .pose import Pose2D
+from .frame_transform import RigidFrameTransform
 from .position_controller import PositionController
 from .speed_profile import SpeedProfile
 from .trajectory_reference import TrajectoryReference
@@ -101,37 +102,27 @@ class StraightTrial:
         # references into odom. MotionPrimitive intentionally rejects diagonals.
         dx, dy = (distance, 0.0) if axis == 'x' else (0.0, distance)
         primitive = MotionPrimitive(kind='STRAIGHT', start_pose=Pose2D(0.0, 0.0, 0.0),
-            p0=(0.0, 0.0), p1=(dx, dy), yaw0=start_pose.yaw,
+            p0=(0.0, 0.0), p1=(dx, dy), yaw0=0.0,
             length=distance, v_max=max_speed, v_end=0.0)
         # Conservative trial parameterization, still provisional pending calibration.
         self.profile = SpeedProfile((primitive,), start_speed=0.0, a_acc=0.05, a_dec=0.05)
-        self.reference = TrajectoryReference((primitive,), yaw_ref=start_pose.yaw)
+        self.reference = TrajectoryReference((primitive,), yaw_ref=0.0)
         self.controller = PositionController()
         self.duration = self.profile.duration
         self.start_pose = start_pose.copy()
-        self._c, self._s = math.cos(start_pose.yaw), math.sin(start_pose.yaw)
-
-    def _world_reference(self, local):
-        return replace(local,
-            x=self.start_pose.x + self._c*local.x - self._s*local.y,
-            y=self.start_pose.y + self._s*local.x + self._c*local.y,
-            yaw_ref=self.start_pose.yaw,
-            vx_world=self._c*local.vx_world - self._s*local.vy_world,
-            vy_world=self._s*local.vx_world + self._c*local.vy_world,
-            tangent_x=self._c*local.tangent_x - self._s*local.tangent_y,
-            tangent_y=self._s*local.tangent_x + self._c*local.tangent_y)
+        self.frame_transform = RigidFrameTransform(
+            Pose2D(0.0, 0.0, 0.0), self.start_pose)
 
     @property
     def target_pose(self):
         local = self.reference.sample(self.profile.length)
-        return Pose2D(self.start_pose.x + self._c*local.x - self._s*local.y,
-                      self.start_pose.y + self._s*local.x + self._c*local.y,
-                      self.start_pose.yaw)
+        return self.frame_transform.transform_pose(
+            Pose2D(local.x, local.y, local.yaw_ref))
 
     def sample(self, elapsed: float, measured_pose: Pose2D,
                measured_velocity_world, yaw_rate: float):
         speed = self.profile.sample(elapsed)
-        reference = self._world_reference(self.reference.sample(
+        reference = self.frame_transform.transform_reference(self.reference.sample(
             speed.progress_s, speed.speed, speed.acceleration))
         return self.controller.update(reference, measured_pose,
             measured_velocity_world=measured_velocity_world, yaw_rate=yaw_rate)

@@ -29,6 +29,16 @@ def test_straight_rejects_diagonal_motion():
         _straight((0.1, 0.2), (0.3, 0.4))
 
 
+def test_reverse_rejects_diagonal_and_accepts_axis_aligned_motion():
+    with pytest.raises(ValueError, match='REVERSE must be axis aligned'):
+        MotionPrimitive('REVERSE', Pose2D(0.0, 0.0, 0.0),
+                        p0=(0.1, 0.2), p1=(0.3, 0.4), length=math.sqrt(0.08))
+
+    reverse = MotionPrimitive('REVERSE', Pose2D(0.4, 0.4, 0.0),
+                              p0=(0.4, 0.4), p1=(0.0, 0.4), length=0.4)
+    assert reverse.kind == 'REVERSE'
+
+
 def test_primitive_rejects_zero_distance_and_wrong_path_length():
     with pytest.raises(ValueError, match='nonzero'):
         _straight((0.1, 0.2), (0.1, 0.2))

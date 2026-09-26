@@ -95,6 +95,7 @@ software/ros2/m3pro_nav/m3pro_nav/   核心实现 (单一真相源)
   ├─ driver_probe.py      默认只读 ROS 接口/CSV 探针
   ├─ odometry_adapter.py / control_probe.py
   │                     原始里程计适配与默认只读的位置环 ROS 探针
+  ├─ frame_transform.py  规划参考到里程计参考的显式平面坐标映射
   ├─ stream_nav.py      薄 coordinator: 图递推, BRANCH 局部 DFS, 任务剪枝
   ├─ mazemap.py        旧模拟器依赖，非当前地图真相
 software/sim/           runtime_v2 Tier A + motion_gate 五项控制机动

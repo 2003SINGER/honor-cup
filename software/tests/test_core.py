@@ -179,6 +179,89 @@ def test_incomplete_cell_waits_at_cursor_boundary_then_resumes_from_new_map():
     assert seq2[:2] == [cell, (cell[0] + 1, cell[1])]
 
 
+def test_running_horizon_extends_after_new_map_without_replanning_started_motion():
+    from copy import deepcopy
+    from m3pro_nav.motion_executor import MotionExecutor
+
+    nav = StreamNav((0, 0), n=7)
+    branch, parent, north, east = (3, 3), (3, 2), (3, 4), (4, 3)
+    _cell(nav, branch, {'S', 'N', 'E'})
+    _cell(nav, north, {'S'})
+    start = Pose2D(*_mid(branch, 'S'), 0.4)
+    horizon = ActionHorizon(MotionPlanner())
+    prims, terminal, seq, state = horizon.compile_with_state(
+        nav, start, (parent, branch))
+    assert terminal == (branch, east)
+    assert seq == [branch, north, branch, east]
+    assert prims[-1].kind == 'STOP'
+
+    executor = MotionExecutor(start)
+    executor.set_plan(prims)
+    last_motion = prims[-2]
+    for _ in range(2000):
+        if executor.queue[0] is last_motion and last_motion.progress > 0:
+            break
+        executor.step(0.02)
+    else:
+        pytest.fail('did not reach the started tail motion before STOP')
+    prior = [(p, p.progress, p.v_end) for p in executor.queue]
+    old_state = deepcopy(state)
+
+    # The east cell becomes mature while the car is still moving. The suffix
+    # must inherit the virtual completion of north, rather than visit it again.
+    _cell(nav, east, {'W'})
+    suffix, new_terminal, new_seq, new_state = horizon.compile_with_state(
+        nav, prims[-1].start_pose, terminal, state)
+    assert state == old_state
+    assert new_seq[:3] == [east, branch, parent]
+    assert new_terminal == (branch, parent)
+    assert new_state[branch]['done'] == {north, east}
+    assert not executor.extend_plan(suffix)  # started prefix keeps its STOP
+    assert [(p, p.progress, p.v_end) for p in executor.queue[:len(prior)]] == prior
+
+    for _ in range(3000):
+        if executor.idle:
+            break
+        executor.step(0.02)
+    assert executor.idle
+    assert executor.pose.yaw == pytest.approx(start.yaw)
+
+
+def test_runtime_uses_new_map_before_motion_queue_becomes_idle(monkeypatch):
+    import run_semantic_gate as gate
+    from m3pro_nav.motion_executor import MotionExecutor
+
+    original = MotionExecutor.extend_plan
+    moving_extensions = []
+
+    def record_extension(self, prims):
+        if self.queue[0].kind != 'STOP':
+            moving_extensions.append(tuple(p.kind for p in prims))
+        return original(self, prims)
+
+    monkeypatch.setattr(MotionExecutor, 'extend_plan', record_extension)
+    result = gate.run_seed(11, False)
+    assert moving_extensions
+    assert gate.check(result, False) == []
+
+
+def test_task_pruning_cannot_turn_a_walked_parent_edge_into_a_bounce():
+    from m3pro_nav.task_pruning import prove_empty_dead_branch
+
+    nav = StreamNav((0, 0), n=7, task_mode=True)
+    cell, child, parent = (5, 2), (4, 2), (5, 1)
+    _cell(nav, cell, {'S', 'W'})
+    _cell(nav, parent, {'N'})
+    nav.observe_blocks({parent: 'EMPTY'})
+    assert prove_empty_dead_branch(nav, cell, parent)
+
+    # Before traversing, skipping the known empty spur is legal. Once this
+    # edge has been walked, it is the return route and must remain traversable.
+    assert nav.resolve_next(child, cell) == child
+    nav.traversal.mark_crossed(cell, 'S')
+    assert nav.resolve_next(child, cell) == parent
+
+
 def test_motion_contract_rejects_non_axis_aligned_straight():
     from m3pro_nav.motion_primitive import MotionPrimitive
 

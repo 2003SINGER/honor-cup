@@ -12,6 +12,7 @@ primitive 只修改连续 Pose 的位置, 绝不修改 yaw / 认知状态。
 import math
 from .pose import Pose2D
 from .motion_primitive import MotionPrimitive
+from .motion_planner import validate_geometry
 
 _EPS = 1e-9
 _DIST_EPS = 1e-6
@@ -37,6 +38,58 @@ class MotionExecutor:
             assert abs(p0.x - self.pose.x) < 1e-6 and abs(p0.y - self.pose.y) < 1e-6, \
                 "primitive 链起点与当前位姿不连续"
         self.queue = list(prims)
+
+    def extend_plan(self, prims):
+        """Safely append a geometrically continuous suffix at a STOP boundary.
+
+        Returns True when an unstarted terminal STOP was removed. An active
+        STOP remains in the queue and the suffix runs after its wait completes.
+        """
+        suffix = list(prims)
+        if not suffix:
+            return False
+        try:
+            validate_geometry(suffix)
+        except ValueError as exc:
+            raise ValueError(f"invalid suffix geometry: {exc}") from exc
+        if not self.queue:
+            p0 = suffix[0].start_pose
+            if math.hypot(p0.x - self.pose.x, p0.y - self.pose.y) > 1e-6:
+                raise ValueError("suffix start is not continuous with executor pose")
+            self.queue = suffix
+            return False
+
+        tail = self.queue[-1]
+        if tail.kind != 'STOP':
+            raise ValueError("extend_plan requires a terminal STOP boundary")
+        # Validate before mutating the live queue, including the join to STOP.
+        try:
+            validate_geometry(self.queue + suffix)
+        except ValueError as exc:
+            raise ValueError(f"suffix geometry is not continuous: {exc}") from exc
+
+        removable = not tail.done and tail.progress <= _EPS
+        if removable:
+            # A horizon STOP is preceded by a primitive planned to end at zero.
+            # Keep that seam speed: it is reachable and also handles ARC and
+            # dead-end reversal joins without assuming an acceleration budget.
+            previous_motion = next((p for p in reversed(self.queue[:-1])
+                                    if p.kind != 'STOP'), None)
+            if previous_motion is not None and previous_motion.v_end > _EPS:
+                removable = False
+            if previous_motion is not None and (previous_motion.progress > _EPS or
+                                                  previous_motion.done):
+                removable = False
+            if self.v > _EPS:
+                removable = False
+
+        if removable:
+            self.queue = self.queue[:-1] + suffix
+        else:
+            # A running wait is a hard boundary. Preserve it and start the new
+            # chain only after it; geometry validation above proves the seam.
+            self.queue.extend(suffix)
+        return removable
 
     def clear(self):
         self.queue = []

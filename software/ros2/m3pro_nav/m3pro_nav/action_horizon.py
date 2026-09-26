@@ -8,6 +8,7 @@ kept as a geometry-only compiler for one explicit ``(prev, cell, next)`` triple.
 from .motion_planner import MotionPlanner, GRAB_V, validate_geometry
 from .motion_primitive import MotionPrimitive
 from .pose import Pose2D
+from copy import deepcopy
 
 
 class ActionHorizon:
@@ -26,12 +27,21 @@ class ActionHorizon:
         The overlay tracks only simulated branch descents and returns; committed
         navigation state remains owned by ``nav``.
         """
+        prims, terminal, seq, _ = self.compile_with_state(nav, pose, cursor)
+        return prims, terminal, seq
+
+    def compile_with_state(self, nav, pose, cursor, plan_state=None):
+        """Compile a suffix using an isolated copy of a prior DFS overlay.
+
+        ``plan_state`` is never mutated; ``new_state`` carries the simulated
+        branch decisions needed by the next horizon.
+        """
         planner = self.motion_planner
         prims = []
         cur = pose.copy()
         prev, cell = cursor
         seq = [cell]
-        plan_state = {}
+        plan_state = deepcopy(plan_state) if plan_state is not None else {}
 
         for _ in range(self.max_steps):
             is_branch = nav.is_exploration_branch(cell)
@@ -54,7 +64,7 @@ class ActionHorizon:
                     p0=(cur.x, cur.y), yaw0=cur.yaw, duration=0.2,
                     meta={'wait': cell}))
                 validate_geometry(prims, cursor=(prev, cell))
-                return prims, (prev, cell), seq
+                return prims, (prev, cell), seq, plan_state
 
             if is_branch:
                 state = plan_state[cell]
@@ -76,4 +86,4 @@ class ActionHorizon:
             if prims[i + 1].kind == 'ARC' and prims[i].kind == 'STRAIGHT':
                 prims[i].v_end = planner.v_arc
         validate_geometry(prims, cursor=(prev, cell))
-        return prims, (prev, cell), seq
+        return prims, (prev, cell), seq, plan_state

@@ -152,7 +152,12 @@ class StreamNav:
         din = (cell[0] - prev_cell[0], cell[1] - prev_cell[1])
         if len(nbrs) == 2:
             fwd = others[0]
-            if self.task_mode and task_pruning.prove_empty_dead_branch(self, cell, fwd):
+            # Pruning only skips an unwalked future spur. A walked edge may be
+            # the way back to the root; pruning it creates a parent-child
+            # ping-pong even when the branch contains no remaining blocks.
+            fwd_dir = _dir_of((fwd[0] - cell[0], fwd[1] - cell[1]))
+            if (self.task_mode and not self.traversal.is_walked(cell, fwd_dir) and
+                    task_pruning.prove_empty_dead_branch(self, cell, fwd)):
                 return prev_cell                 # 前向空死枝: 当场回头 (P7)
             return fwd                           # WAY: 纯查表
         return self._branch_pick(cell, prev_cell, din, others, plan_state)

@@ -15,7 +15,7 @@
   5. sensor: sense_from (雷达) + block_observe_from (直线连通方块观测)
   6. nav.observe / nav.observe_blocks
   7. refresh_branch (迟分类 commit, 依据 visit 真父)
-  8. executor.idle → ActionHorizon.compile(cursor) → 新 primitive 链
+  8. 新观测可从队尾 STOP 的拓扑游标延长 Action Horizon；空闲时新编链
 
 禁止: 从 Pose 反推规划拓扑 / NUDGE 蹭入 / 新方块清运动链 —— 见 tests 结构验收."""
 
@@ -244,7 +244,10 @@ def explore(walls, entry, order, blocks, *, required_blocks,
     nav = StreamNav(entry, order=order, n=N, dphi_deg=dphi_deg, gate=gate,
                     task_mode=task_mode)
     planner = MotionPlanner(v_cruise=v_cruise)
-    horizon = ActionHorizon(planner)
+    # A 7x7 tree needs at most 2*(N*N-1) edge traversals for a complete DFS.
+    # Keep the bounded horizon long enough to end at a real unknown/root STOP,
+    # rather than leaving a moving, max_steps-truncated queue tail.
+    horizon = ActionHorizon(planner, max_steps=2 * N * N)
     executor = MotionExecutor(Pose2D((entry[0] + 0.5) * C, (entry[1] + 0.5) * C,
                                      TH['N']), a_acc=a_acc, a_dec=a_dec)
     detector = GridEventDetector(n=N)
@@ -257,6 +260,7 @@ def explore(walls, entry, order, blocks, *, required_blocks,
     # 规划游标 (拓扑真相; 车位姿只服务物理层)
     cursor = (None, entry)
     planned_cells = [entry]          # 计划将进入的格序列 (一致性校验用)
+    plan_state = {}                  # 已排队动作对应的虚拟 DFS continuation
     last_def_cell = entry            # last_unambiguous_cell (GPT 定案: 不失忆)
     nav.on_entered(entry, None, ts=0.0)   # 根 commit (入口边界 = 来向)
 
@@ -349,25 +353,20 @@ def explore(walls, entry, order, blocks, *, required_blocks,
             return st
 
         # 5-6. 观测 (延迟队列; 同一 pose). 车恰在格线上时需消解 floor 歧义:
-        #  - 停在 cursor 边界中点 (等待态)     → 按计划进入格观测
+        #  - 停在 STOP 边界中点 (等待态)       → 按该 STOP 的格观测
         #  - 链中途接缝 tick (仅 1 tick, 车在动) → last_unambiguous (前一格帧,
-        #    关联到的都是真实墙, 无害; 严禁用远处 cursor 帧 —— 会错关联出幻开放)
+        #    关联到的都是真实墙, 无害; 严禁用远处队尾 cursor 帧)
         uc = unambiguous_cell(new_pose)
         if uc is not None:
             last_def_cell = uc
             cell_hint = uc
         else:
-            pcell = cursor[1]
-            pprev = cursor[0]
-            cx, cy = (pcell[0] + 0.5) * C, (pcell[1] + 0.5) * C
-            if pprev is not None:
-                m_in = (cx - (pcell[0] - pprev[0]) * 0.2,
-                        cy - (pcell[1] - pprev[1]) * 0.2)
-            else:
-                m_in = (cx, cy - 0.2)          # 根: 入口边界中点
-            if (abs(new_pose.x - m_in[0]) < 1e-6 and
-                    abs(new_pose.y - m_in[1]) < 1e-6):
-                cell_hint = pcell
+            wait = (executor.queue[0] if executor.queue and
+                    executor.queue[0].kind == 'STOP' else None)
+            if wait is not None:
+                cell_hint = wait.meta['wait']
+            elif executor.idle:
+                cell_hint = cursor[1]
             else:
                 cell_hint = last_def_cell
         if tick % scan_every == 0:
@@ -411,9 +410,23 @@ def explore(walls, entry, order, blocks, *, required_blocks,
                 if r is not None:
                     return r
 
-        # 8. 空闲 → 图递推编链 (cursor 续航, 不从 Pose 反推)
+        # 8. 新信息在车仍运动时就能延长队尾的等待边界。编译从旧队尾的
+        #    cursor/pose/虚拟 DFS overlay 继续；executor 只追加，不重编已执行前缀。
+        if due and not done and not executor.idle and executor.queue[-1].kind == 'STOP':
+            tail_pose = executor.queue[-1].start_pose.copy()
+            suffix, terminal, seq, next_state = horizon.compile_with_state(
+                nav, tail_pose, cursor, plan_state)
+            if suffix and suffix[0].kind != 'STOP':
+                executor.extend_plan(suffix)
+                cursor = terminal
+                planned_cells.extend(seq[1:])
+                plan_state = next_state
+                st['arcs'] += sum(pm.kind == 'ARC' for pm in suffix)
+
+        # 空闲 → 图递推编链 (cursor 续航, 不从 Pose 反推)
         if executor.idle:
-            prims, terminal, seq = horizon.compile(nav, executor.pose, cursor)
+            prims, terminal, seq, plan_state = horizon.compile_with_state(
+                nav, executor.pose, cursor)
             cursor = terminal
             planned_cells = seq
             for pm in prims:

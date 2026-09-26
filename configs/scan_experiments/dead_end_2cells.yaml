@@ -1,0 +1,10 @@
+# 两格死路: 死路前 2 格: 关键实验 - 结构能否提前 2 格确定
+experiment: dead_end_2cells
+cell: null          # 现场 CLI 覆盖: --cell X Y
+heading: null       # 现场 CLI 覆盖: --heading N/E/S/W
+notes: >
+  死路前 2 格: 关键实验 - 结构能否提前 2 格确定.
+record_seconds: 30
+topics:
+  scan: /scan
+  odom: /odom_raw

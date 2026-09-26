@@ -1,0 +1,7 @@
+# laser → base_link 外参 (UNCALIBRATED —— 现场实测前禁止当真值使用)
+# 优先级: TF > 本文件; 两者都缺 → 全体 NO_TRANSFORM ABSTAIN
+laser_extrinsic:
+  x: 0.0
+  y: 0.0
+  yaw: 0.0
+  status: UNCALIBRATED

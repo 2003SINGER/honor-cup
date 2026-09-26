@@ -1,0 +1,10 @@
+# 场地边界正对: 边界墙长直线 (最干净的正对残差数据)
+experiment: boundary_straight
+cell: null          # 现场 CLI 覆盖: --cell X Y
+heading: null       # 现场 CLI 覆盖: --heading N/E/S/W
+notes: >
+  边界墙长直线 (最干净的正对残差数据).
+record_seconds: 30
+topics:
+  scan: /scan
+  odom: /odom_raw

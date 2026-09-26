@@ -1,0 +1,59 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid10cm
+      Enabled: true
+      Cell Size: 0.1
+      Color: 80; 80; 80
+      Plane Cell Count: 28
+      Reference Frame: <Fixed Frame>
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+      Frame Timeout: 15
+      Show Arrows: true
+      Show Axes: true
+      Show Names: true
+    - Class: rviz_default_plugins/LaserScan
+      Name: RawScan
+      Enabled: true
+      Topic:
+        Value: /scan
+        Depth: 5
+        Reliability Policy: Best Effort
+      Size (m): 0.02
+      Style: Points
+      Color Transformer: Flat Color
+      Color: 120; 120; 255
+    - Class: rviz_default_plugins/MarkerArray
+      Name: ScanDebugMarkers
+      Enabled: true
+      Topic:
+        Value: /scan_debug/markers
+        Depth: 5
+        Reliability Policy: Best Effort
+  Global Options:
+    Fixed Frame: maze
+    Background Color: 48; 48; 48
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/Measure
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Name: Current View
+      Distance: 4
+      Focal Point:
+        X: 1.4
+        Y: 1.4
+        Z: 0
+      Pitch: 0.8
+      Yaw: 4.7
+Window Geometry:
+  Height: 900
+  Width: 1400

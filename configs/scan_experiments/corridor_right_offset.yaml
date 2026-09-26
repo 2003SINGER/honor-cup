@@ -1,0 +1,10 @@
+# 走廊右偏: 车摆走廊中线右侧 5-10cm
+experiment: corridor_right_offset
+cell: null          # 现场 CLI 覆盖: --cell X Y
+heading: null       # 现场 CLI 覆盖: --heading N/E/S/W
+notes: >
+  车摆走廊中线右侧 5-10cm.
+record_seconds: 30
+topics:
+  scan: /scan
+  odom: /odom_raw

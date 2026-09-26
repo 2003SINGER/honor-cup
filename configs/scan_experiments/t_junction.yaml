@@ -1,0 +1,10 @@
+# 丁字岔路: 岔路口: 前墙 + 左右开口, 观察开口边缘 associate 行为
+experiment: t_junction
+cell: null          # 现场 CLI 覆盖: --cell X Y
+heading: null       # 现场 CLI 覆盖: --heading N/E/S/W
+notes: >
+  岔路口: 前墙 + 左右开口, 观察开口边缘 associate 行为.
+record_seconds: 30
+topics:
+  scan: /scan
+  odom: /odom_raw

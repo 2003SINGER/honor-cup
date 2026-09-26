@@ -1,0 +1,10 @@
+# 走廊左偏: 车摆走廊中线左侧 5-10cm (近侧墙可信度对照)
+experiment: corridor_left_offset
+cell: null          # 现场 CLI 覆盖: --cell X Y
+heading: null       # 现场 CLI 覆盖: --heading N/E/S/W
+notes: >
+  车摆走廊中线左侧 5-10cm (近侧墙可信度对照).
+record_seconds: 30
+topics:
+  scan: /scan
+  odom: /odom_raw

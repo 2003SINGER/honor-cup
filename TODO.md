@@ -151,3 +151,38 @@ d_unknown 信息视界速度上限、真实抓取链、下位参数标定。
   104.8s），确认宏化 REVERSE 零影响。rolling horizon 的"跨越多个
   未开始段的无停车延长"仍属保守路径（排队刹停），未声称完整高速
   滚动优化。
+
+## 实车感知调试工作台（2026-09-26, codex/scan-debug-workbench）
+
+执行层冻结（0138a6b 不动），本轮补 Observation 前端调试设施：
+- 纯 Python 管线: `scan_adapter`（RayObservation 保留 beam 语义与
+  deskew 预留时间字段, NaN/Inf/越量程带因拒绝）→ `frame_projector`
+  （laser→base→odom→maze 全链复用 RigidFrameTransform; ManualMazeAnchor
+  一次性锚定后只跟随 odom 永不重吸附; 无 TF 无 YAML → 全体 NO_TRANSFORM
+  ABSTAIN）→ `grid_association`（0.4m/7×7 canonical 网格, UNIQUE/
+  AMBIGUOUS/NONE 三态, 角点歧义绝不强选边; 每候选带 residual/range/
+  incidence/along/corner/uniqueness 全特征; free path 穿越生成 OPEN
+  证据, hit 后不推理; edge_id 与 EdgeMap canonical 同构）
+- `trust_policy`: diagnostic_only 默认恒开; TrustThresholds 全部
+  UNCALIBRATED（None 即 ABSTAIN + 明确缺失清单）; 预留
+  TrustedEdgeObservation → ObservationAdapter → EdgeMap 接口但不接导航
+- `scan_diagnostics`: 在线/离线同一 FrameAccumulator + summarize_frames
+  （1mm 直方图可加, 分位数精确可重放）; 绝不自动宣布可信距离
+- `scan_debug` ROS 节点: 只读（无 /cmd_vel, 不 import 运动层, 结构测试
+  断言）; topic 全可配置; 一次性 static TF maze←odom 仅供 RViz
+- `scan_debug_markers`: 一帧 ≤6 个批量 Marker（POINTS/LINE_LIST）,
+  绝不 per-beam; RViz 只观察不是数据通路
+- `scan_debug.launch.py`（cell_x/cell_y/heading 参数化）+ 
+  `config/scan_debug.rviz` + 10 个实验模板 + 外参样例（UNCALIBRATED）
+- `software/scripts/field_scan_session.sh`（环境/topic/类型/帧名核对 →
+  anchor → 节点+RViz+rosbag → git SHA/参数元数据 → 自动 summary）与
+  `replay_scan_session.sh`（同参数重放 + 在线/离线 summary 自动 diff）
+- `software/tools/scan_session_summary.py`（frames.jsonl → summary.json/
+  csv, 按距离桶 unique rate/残差分位数/入射角/角距/拒绝原因直方图）
+- FIELD_DEBUG.md: 现场全流程手册（0 前置 → 1 采集 → 2 产物 → 3 重放 →
+  4 首批 session 建议 → 5 判读 → 6 UNCALIBRATED 清单 → 7 安全边界）
+- 验证: 173 tests 全绿（新增 23 项感知契约: ray 语义/坐标链解析/锚定
+  跟随/三态关联/角点弃权/OPEN 证据/ABSTAIN/批量 marker/重放逐字节一致/
+  节点只读+可配置+端到端落盘）; summary CLI 合成 session 冒烟通过
+- 未做（有意）: colcon build 需在车端/ROS 环境执行（本机无 ROS）;
+  TrustPolicy 阈值标定、TrustedEdgeObservation 接 EdgeMap 属下一轮

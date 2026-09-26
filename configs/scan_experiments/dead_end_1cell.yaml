@@ -1,0 +1,10 @@
+# 一格死路: 死路前 1 格: 正前墙 + 侧墙收口
+experiment: dead_end_1cell
+cell: null          # 现场 CLI 覆盖: --cell X Y
+heading: null       # 现场 CLI 覆盖: --heading N/E/S/W
+notes: >
+  死路前 1 格: 正前墙 + 侧墙收口.
+record_seconds: 30
+topics:
+  scan: /scan
+  odom: /odom_raw

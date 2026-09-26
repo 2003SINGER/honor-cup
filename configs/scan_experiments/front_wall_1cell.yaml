@@ -1,0 +1,10 @@
+# 一格前墙: 车正对 1 格外墙面 (0.4m 正对)
+experiment: front_wall_1cell
+cell: null          # 现场 CLI 覆盖: --cell X Y
+heading: null       # 现场 CLI 覆盖: --heading N/E/S/W
+notes: >
+  车正对 1 格外墙面 (0.4m 正对).
+record_seconds: 30
+topics:
+  scan: /scan
+  odom: /odom_raw

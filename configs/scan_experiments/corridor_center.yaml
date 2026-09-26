@@ -1,0 +1,10 @@
+# 走廊正中: 竖直走廊, 车摆在走廊中线 (正前远墙, 两侧等距)
+experiment: corridor_center
+cell: null          # 现场 CLI 覆盖: --cell X Y
+heading: null       # 现场 CLI 覆盖: --heading N/E/S/W
+notes: >
+  竖直走廊, 车摆在走廊中线 (正前远墙, 两侧等距).
+record_seconds: 30
+topics:
+  scan: /scan
+  odom: /odom_raw

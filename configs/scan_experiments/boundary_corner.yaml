@@ -1,0 +1,10 @@
+# 场地边界角: 车对角摆放, 观察角点附近 AMBIGUOUS/NEAR_CORNER 比例
+experiment: boundary_corner
+cell: null          # 现场 CLI 覆盖: --cell X Y
+heading: null       # 现场 CLI 覆盖: --heading N/E/S/W
+notes: >
+  车对角摆放, 观察角点附近 AMBIGUOUS/NEAR_CORNER 比例.
+record_seconds: 30
+topics:
+  scan: /scan
+  odom: /odom_raw

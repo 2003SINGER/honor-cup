@@ -4,7 +4,7 @@
 KINDS: STRAIGHT / ARC / REVERSE / STOP
   STRAIGHT  直线平移 (p0→p1), body yaw 不变
   ARC       四分之一圆弧平移: p0 字段存圆心, yaw0 存起始极角, yaw1 存带符号角跨度,
-            meta['r'] 存半径; 速度矢量 = 切向, |v| = v_max 恒定
+            meta['r'] 存半径; 速度矢量 = 切向, 速度模长受加减速及 v_end 约束
   REVERSE   沿来路反向平移 (死路折返), body yaw 不变 (planner 编译为两段 STRAIGHT)
   STOP      v=0 等待 (CellMark 未完成时唯一合法行为)
 
@@ -12,9 +12,30 @@ KINDS: STRAIGHT / ARC / REVERSE / STOP
   修改 cell / TraversalMap / yaw / 调用导航 —— 离散状态只来自 GridEventDetector 几何事件."""
 
 from dataclasses import dataclass, field
+import math
 from .pose import Pose2D
 
 KINDS = ('STRAIGHT', 'ARC', 'REVERSE', 'STOP')
+ARC_RADIUS = 0.2
+GEOMETRY_EPS = 1e-9
+
+
+def _validate_axis_aligned_segment(kind, p0, p1, length):
+    """Validate endpoint geometry shared by STRAIGHT and REVERSE segments."""
+    if p0 is None or p1 is None or len(p0) != 2 or len(p1) != 2:
+        raise ValueError(f"{kind} requires 2D p0 and p1 endpoints")
+    if not all(math.isfinite(v) for v in (*p0, *p1)):
+        raise ValueError(f"{kind} endpoints must be finite")
+    dx = abs(p1[0] - p0[0])
+    dy = abs(p1[1] - p0[1])
+    if dx <= GEOMETRY_EPS and dy <= GEOMETRY_EPS:
+        raise ValueError(f"{kind} must have nonzero axis-aligned length")
+    if dx > GEOMETRY_EPS and dy > GEOMETRY_EPS:
+        raise ValueError(f"{kind} must be axis aligned; p0={p0}, p1={p1}")
+    expected_length = math.hypot(dx, dy)
+    if abs(length - expected_length) > GEOMETRY_EPS:
+        raise ValueError(
+            f"{kind} length must match endpoints; expected {expected_length}, got {length}")
 
 
 @dataclass
@@ -35,3 +56,24 @@ class MotionPrimitive:
     progress: float = 0.0              # 已走长度
     done: bool = False
     meta: dict = field(default_factory=dict)   # {'grab': cell} / {'turn': side} / {'wait': cell}
+
+    def __post_init__(self):
+        if self.kind not in KINDS:
+            raise ValueError(f"unknown motion primitive kind: {self.kind!r}")
+        if self.kind in ('STRAIGHT', 'REVERSE'):
+            _validate_axis_aligned_segment(
+                self.kind, self.p0, self.p1, self.length)
+        elif self.kind == 'ARC':
+            radius = self.meta.get('r')
+            if (not isinstance(radius, (int, float)) or not math.isfinite(radius) or
+                    abs(radius - ARC_RADIUS) > GEOMETRY_EPS):
+                raise ValueError(
+                    f"ARC radius must be {ARC_RADIUS}; got {radius!r}")
+            if (not math.isfinite(self.yaw0) or not math.isfinite(self.yaw1) or
+                    abs(abs(self.yaw1) - math.pi / 2) > GEOMETRY_EPS):
+                raise ValueError(
+                    f"ARC sweep must be a signed quarter turn (±pi/2); got {self.yaw1!r}")
+            expected_length = ARC_RADIUS * math.pi / 2
+            if abs(self.length - expected_length) > GEOMETRY_EPS:
+                raise ValueError(
+                    f"ARC length must equal quarter-circle length {expected_length}; got {self.length}")

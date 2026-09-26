@@ -15,6 +15,8 @@ setup(
     install_requires=['setuptools'],
     entry_points={
         'console_scripts': [
+            'driver_probe = m3pro_nav.driver_probe:main',
+            'control_probe = m3pro_nav.control_probe:main',
         ],
     },
 )

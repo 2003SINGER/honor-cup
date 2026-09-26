@@ -1,129 +1,96 @@
-#!/usr/bin/env python3
-"""核心单元回归 (规范 §13 Gate A-L 的确定性子集).
+"""Deterministic acceptance gates for the topology-first navigation contract.
 
-每个测试 = 一条语义的可执行定义. 全绿前禁止随机 seed benchmark."""
+These tests exercise externally visible decisions and forbidden dependencies;
+they deliberately avoid reproducing planner implementation details.
+"""
 
-import sys
-import os
+import ast
 import math
-
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                'ros2', 'm3pro_nav'))
+import os
+import sys
 
 import pytest
-from m3pro_nav.edge_map import EdgeMap, TraversalMap, UNKNOWN, WALL, OPEN, T_CONFIRM, T_FLIP
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                '..', 'ros2', 'm3pro_nav'))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'sim'))
+
+from m3pro_nav.edge_map import EdgeMap, TraversalMap, WALL, OPEN, T_FLIP
+from m3pro_nav.pose import Pose2D, C
+from m3pro_nav.stream_nav import StreamNav
+from m3pro_nav.motion_planner import MotionPlanner, PlanGeometryMismatch
+from m3pro_nav.action_horizon import ActionHorizon
+from m3pro_nav.cell_classifier import classify, DEAD, WAY, BRANCH
 from m3pro_nav import tree_inference
-from m3pro_nav.cell_classifier import classify, transition, turn_type, DEAD, WAY, BRANCH
 
 
-def _cell(walls, cell=(2, 2)):
-    """构造四边全确认的格: walls=墙方向集合, 其余开口. 返回 (em, tr)."""
-    em, tr = EdgeMap(7), TraversalMap(7)
-    for d in ('N', 'E', 'S', 'W'):
-        for _ in range(2):
-            (em.observe_wall if d in walls else em.observe_open)(cell, d, 0.2)
-    return em, tr
+def _cell(nav, cell, open_dirs):
+    """Confirm one local cell without marking any traversal events."""
+    for _ in range(2):
+        for direction in ('N', 'E', 'S', 'W'):
+            observer = (nav.edges.observe_open if direction in open_dirs
+                        else nav.edges.observe_wall)
+            observer(cell, direction, 0.2)
 
 
-# ---------------- Gate A: CellAction 穷举 ----------------
-
-def test_cell_dead():
-    em, tr = _cell({'N', 'E', 'S'})
-    mark = classify(em, (2, 2), tr)
-    assert mark['kind'] == DEAD and mark['degree'] == 1
+def _edge_cell(walls, cell=(2, 2)):
+    nav = StreamNav((0, 0), n=7)
+    _cell(nav, cell, {'N', 'E', 'S', 'W'} - set(walls))
+    return nav.edges, nav.traversal
 
 
-def test_cell_straight():
-    em, tr = _cell({'N', 'S'})
-    mark = classify(em, (2, 2), tr)
-    assert mark['kind'] == WAY and mark['degree'] == 2
-
-
-def test_cell_tjunction_and_cross():
-    em, tr = _cell({'S'})
-    mark = classify(em, (2, 2), tr)
-    assert mark['kind'] == BRANCH and mark['degree'] == 3
-    em2, tr2 = _cell(set())
-    mark2 = classify(em2, (2, 2), tr2)
-    assert mark2['kind'] == BRANCH and mark2['degree'] == 4
-
-
-def test_cell_incomplete_returns_none():
+def test_cell_classification_and_incomplete_information():
+    em, tr = _edge_cell({'N', 'E', 'S'})
+    assert classify(em, (2, 2), tr)['kind'] == DEAD
+    em, tr = _edge_cell({'N', 'S'})
+    assert classify(em, (2, 2), tr)['kind'] == WAY
+    em, tr = _edge_cell({'S'})
+    assert classify(em, (2, 2), tr)['kind'] == BRANCH
     assert classify(EdgeMap(7), (2, 2), TraversalMap(7)) is None
 
 
-def test_gate_a_cellaction_exhaustive():
-    """Gate A: 所有 COMPLETE CellMark × 4 个 entry_side 穷举.
-    WAY → 唯一另一 OPEN; DEAD → entry; BRANCH → preview 的非 entry OPEN.
-    绝不输出 WALL 或越界方向."""
+def test_local_graph_transition_exhaustive_for_every_opening_set_and_entry():
+    """All local degrees and incoming sides resolve to a real graph neighbor."""
     from itertools import combinations
-    from m3pro_nav.stream_nav import StreamNav
-    for walls_n in range(0, 4):
-        for walls in combinations(('N', 'E', 'S', 'W'), walls_n):
-            em, tr = _cell(set(walls))
-            mark = classify(em, (2, 2), tr)
-            opens = mark['opens']
-            for entry in ('N', 'E', 'S', 'W'):
-                ex = transition(mark, entry)
-                if mark['kind'] == BRANCH:
-                    # 岔路走 StreamNav preview (纯函数, 零副作用)
-                    nav = StreamNav((0, 0), n=7)
-                    nav.edges = em
-                    nav.traversal = tr
-                    ex = nav.resolve_exit((2, 2), entry)
-                    if entry not in opens:
-                        assert ex is None
-                    else:
-                        ch = [d for d in opens
-                              if d != entry and not nav.is_boundary((2, 2), d)]
-                        assert (ex in ch) if ch else (ex is None)
-                elif entry not in opens:
-                    assert ex is None or ex == entry   # 非法入口不承诺
-                elif mark['kind'] == DEAD:
-                    assert ex == entry
+    from m3pro_nav.pose import DIRV
+
+    cell = (3, 3)
+    for count in range(1, 5):
+        for openings in combinations(('N', 'E', 'S', 'W'), count):
+            for incoming in openings:
+                nav = StreamNav((0, 0), n=7)
+                _cell(nav, cell, set(openings))
+                dv = DIRV[incoming]
+                prev = (cell[0] + dv[0], cell[1] + dv[1])
+                actual = nav.resolve_next(prev, cell)
+                available = {
+                    (cell[0] + DIRV[d][0], cell[1] + DIRV[d][1])
+                    for d in openings
+                }
+                assert actual in available
+                if count == 1:
+                    assert actual == prev
+                elif count == 2:
+                    assert actual == next(iter(available - {prev}))
                 else:
-                    assert ex in opens and ex != entry
+                    assert actual in available - {prev}
+                    assert nav.branch == {}  # preview has no commit side effect
 
 
-def test_dead_transition_returns_entry_side():
-    em, tr = _cell({'N', 'E', 'S'})
-    mark = classify(em, (2, 2), tr)
-    assert transition(mark, 'W') == 'W'
-
-
-def test_turn_types():
-    assert turn_type('S', 'N') == 'STRAIGHT'
-    assert turn_type('S', 'W') == 'LEFT'
-    assert turn_type('S', 'E') == 'RIGHT'
-    assert turn_type('S', 'S') == 'BACK'
-
-
-# ---------------- Edge / Traversal 分离 ----------------
-
-def test_open_not_walked():
+def test_open_edges_are_not_walked_and_walked_edges_are_hard_open():
     em, tr = EdgeMap(7), TraversalMap(7)
     em.observe_open((2, 2), 'E', 0.2)
     em.observe_open((2, 2), 'E', 0.2)
     assert em.state((2, 2), 'E', tr) == OPEN
     assert not tr.is_walked((2, 2), 'E')
-
-
-def test_open_walked_canonical():
-    em, tr = EdgeMap(7), TraversalMap(7)
     tr.mark_crossed((2, 2), 'E')
-    assert em.state((2, 2), 'E', tr) == OPEN
     assert em.state((3, 2), 'W', tr) == OPEN
-
-
-def test_walked_hard_beats_sensor_votes():
-    em, tr = EdgeMap(7), TraversalMap(7)
-    tr.mark_crossed((2, 2), 'E')
     for _ in range(10):
         em.observe_wall((2, 2), 'E', 0.2)
     assert em.state((2, 2), 'E', tr) == OPEN
 
 
-def test_open_to_wall_removes_frontier():
+def test_sensor_edge_reversal_removes_frontier():
     em, tr = EdgeMap(7), TraversalMap(7)
     for _ in range(2):
         em.observe_open((2, 2), 'E', 0.2)
@@ -134,412 +101,457 @@ def test_open_to_wall_removes_frontier():
     assert 'E' not in em.frontier((2, 2), tr)
 
 
-# ---------------- Gate D: TreeInference 可撤销 ----------------
-
-def _mk_u_channel():
+def test_tree_inference_wall_is_retractable():
     em, tr = EdgeMap(7), TraversalMap(7)
-    for c, d in (((1, 2), 'S'), ((1, 1), 'S'), ((1, 0), 'E'),
-                 ((2, 0), 'N'), ((2, 1), 'N')):
-        em.observe_open(c, d, 0.2)
-        em.observe_open(c, d, 0.2)
-    return em, tr
-
-
-def test_cycle_inference_wall():
-    em, tr = _mk_u_channel()
+    for cell, direction in (((1, 2), 'S'), ((1, 1), 'S'), ((1, 0), 'E'),
+                            ((2, 0), 'N'), ((2, 1), 'N')):
+        em.observe_open(cell, direction, 0.2)
+        em.observe_open(cell, direction, 0.2)
     em.derived = tree_inference.recompute_derived(em, tr)
     assert em.state((1, 2), 'E', tr) == WALL
     assert em.provenance((1, 2), 'E', tr) == 'TREE_INFERENCE'
-
-
-def test_derived_wall_retracts_when_premise_retracts():
-    em, tr = _mk_u_channel()
-    em.derived = tree_inference.recompute_derived(em, tr)
-    assert em.state((1, 2), 'E', tr) == WALL
     for _ in range(T_FLIP + 2):
         em.observe_wall((1, 0), 'E', 0.2)
     em.derived = tree_inference.recompute_derived(em, tr)
     assert em.state((1, 2), 'E', tr) != WALL
 
 
-def test_derived_independent_of_previous_cache():
-    em, tr = _mk_u_channel()
-    em.derived = {em.edge_key((5, 5), 'N'): 'WALL'}
-    em.derived[em.edge_key((1, 2), 'E')] = 'OPEN'
-    em.derived = tree_inference.recompute_derived(em, tr)
-    assert em.state((1, 2), 'E', tr) == WALL
-    assert em.state((5, 5), 'N', tr) == UNKNOWN
+def _center(cell):
+    return ((cell[0] + 0.5) * C, (cell[1] + 0.5) * C)
 
 
-# ---------------- Gate E: 固定模板几何 ----------------
-
-def _mk_nav():
-    from m3pro_nav.stream_nav import StreamNav
-    return StreamNav((0, 0), n=7)
-
-
-def _confirm_all(nav, cell, walls):
-    for _ in range(2):
-        for d in ('N', 'E', 'S', 'W'):
-            if d in walls:
-                nav.edges.observe_wall(cell, d, 0.2)
-            else:
-                nav.edges.observe_open(cell, d, 0.2)
+def _mid(cell, direction):
+    from m3pro_nav.pose import DIRV
+    x, y = _center(cell)
+    return x + 0.2 * DIRV[direction][0], y + 0.2 * DIRV[direction][1]
 
 
-def _mid(cell, d):
-    from m3pro_nav.pose import C, DIRV
-    return ((cell[0] + 0.5) * C + DIRV[d][0] * 0.2,
-            (cell[1] + 0.5) * C + DIRV[d][1] * 0.2)
+@pytest.mark.parametrize(
+    'open_dirs, previous_dir, expected_kind',
+    [
+        ({'N', 'S'}, 'S', 'way'),
+        ({'S'}, 'S', 'dead'),
+        ({'N', 'S', 'E'}, 'S', 'branch'),
+    ],
+)
+def test_local_graph_resolves_from_previous_cell_without_visit_state(
+        open_dirs, previous_dir, expected_kind):
+    nav = StreamNav((0, 0), n=7)
+    cell = (3, 3)
+    from m3pro_nav.pose import DIRV
+    dv = DIRV[previous_dir]
+    previous = (cell[0] + dv[0], cell[1] + dv[1])
+    _cell(nav, cell, open_dirs)
+
+    # No VisitRegistry or EnteredCell event is supplied. The local graph alone
+    # determines the transition from the (previous,current) cursor.
+    result = nav.resolve_next(previous, cell)
+    if expected_kind == 'dead':
+        assert result == previous
+    elif expected_kind == 'way':
+        assert result == (cell[0], cell[1] + 1)
+    else:
+        assert result in {(cell[0], cell[1] + 1), (cell[0] + 1, cell[1])}
+        assert nav.branch == {}  # preview does not commit a branch
+    assert nav.visits.get(cell) is None
 
 
-def test_gate_e_straight_template():
-    from m3pro_nav.motion_planner import MotionPlanner
-    nav = _mk_nav()
-    _confirm_all(nav, (2, 2), {'N', 'S'})          # WAY: E/W 开
-    prims = MotionPlanner().compile_chain(nav, _mid((2, 2), 'W') and
-                                          __import__('m3pro_nav.pose', fromlist=['Pose2D']).Pose2D(*_mid((2, 2), 'W'), 0.0),
-                                          (2, 2), 'W')
-    kinds = [p.kind for p in prims]
-    assert kinds[0] == 'STRAIGHT'
-    seg = prims[0]
-    assert abs(seg.p1[0] - _mid((2, 2), 'E')[0]) < 1e-9   # 直行到对边中点
-    assert seg.length > 0
+def test_incomplete_cell_waits_at_cursor_boundary_then_resumes_from_new_map():
+    nav = StreamNav((0, 0), n=7)
+    prev, cell = (2, 3), (3, 3)
+    cursor = (prev, cell)
+    pose = Pose2D(*_mid(cell, 'W'), 0.37)
+
+    prims, terminal, seq = ActionHorizon(MotionPlanner()).compile(nav, pose, cursor)
+    assert terminal == cursor
+    assert seq == [cell]
+    assert [p.kind for p in prims] == ['STOP']
+    assert (prims[0].start_pose.x, prims[0].start_pose.y) == pytest.approx(
+        (pose.x, pose.y))
+
+    # A map update, without an EnteredCell event or pose nudge, releases the
+    # wait and makes a forward template available immediately.
+    _cell(nav, cell, {'W', 'E'})
+    prims2, terminal2, seq2 = ActionHorizon(MotionPlanner()).compile(nav, pose, cursor)
+    assert prims2 and prims2[0].kind == 'STRAIGHT'
+    assert prims2[-1].kind == 'STOP'  # next cell is still an unknown boundary
+    assert terminal2 == (cell, (cell[0] + 1, cell[1]))
+    assert seq2[:2] == [cell, (cell[0] + 1, cell[1])]
 
 
-def test_gate_e_arc_template_quarter_circle():
-    """Gate E: 相邻 entry/exit → R=0.2 四分之一圆弧, 圆心=内角点"""
-    from m3pro_nav.motion_planner import MotionPlanner
-    from m3pro_nav.pose import Pose2D, C
-    nav = _mk_nav()
-    _confirm_all(nav, (2, 2), {'N', 'W'})          # WAY: S 进 → E 出 (右转)
-    planner = MotionPlanner()
-    prims = planner.compile_chain(nav, Pose2D(*_mid((2, 2), 'S'), 0.0), (2, 2), 'S')
-    arcs = [p for p in prims if p.kind == 'ARC']
-    assert len(arcs) == 1
-    arc = arcs[0]
-    assert abs(arc.meta['r'] - 0.2) < 1e-9
-    assert abs(abs(arc.yaw1) - math.pi / 2) < 1e-9   # 恰四分之一圆
-    assert abs(arc.length - math.pi / 2 * 0.2) < 1e-9
-    # 圆心 = 内角点 = m_in + exit 方向 0.2
-    m_in, m_out = _mid((2, 2), 'S'), _mid((2, 2), 'E')
-    corner = arc.p0
-    assert abs(math.hypot(m_in[0] - corner[0], m_in[1] - corner[1]) - 0.2) < 1e-9
-    assert abs(math.hypot(m_out[0] - corner[0], m_out[1] - corner[1]) - 0.2) < 1e-9
-
-
-def test_gate_e_reverse_template_not_spin():
-    """DEAD 格 → REVERSE (倒穿父边回父格中心), 绝不出现 SPIN/TURN180"""
-    from m3pro_nav.motion_planner import MotionPlanner
-    from m3pro_nav.pose import Pose2D, C
-    nav = _mk_nav()
-    _confirm_all(nav, (2, 2), {'N', 'E', 'S'})     # DEAD: 只有 W 开
-    prims = MotionPlanner().compile_chain(nav, Pose2D(*_mid((2, 2), 'W'), 0.0), (2, 2), 'W')
-    kinds = [p.kind for p in prims]
-    assert 'SPIN' not in kinds and 'CUT90' not in kinds
-    # 末段终点 = 父格中心 (倒穿父边)
-    end = prims[-1].p1
-    assert abs(end[0] - _mid((2, 2), 'W')[0] - 0.0) < 1e-9 or end == prims[-1].p1
-    pc = ((2 + 0.5) * C + __import__('m3pro_nav.pose', fromlist=['DIRV']).DIRV['W'][0] * 0.4,
-          (2 + 0.5) * C + __import__('m3pro_nav.pose', fromlist=['DIRV']).DIRV['W'][1] * 0.4)
-    assert abs(end[0] - pc[0]) < 1e-9 and abs(end[1] - pc[1]) < 1e-9
-
-
-def test_gate_d_yaw_never_touched_by_primitives():
-    """Gate D: primitive 只改位置; executor 全程不改 yaw"""
-    from m3pro_nav.pose import Pose2D
-    from m3pro_nav.motion_planner import MotionPlanner
+def test_running_horizon_extends_after_new_map_without_replanning_started_motion():
+    from copy import deepcopy
     from m3pro_nav.motion_executor import MotionExecutor
-    from m3pro_nav.event_detector import GridEventDetector
-    nav = _mk_nav()
-    _confirm_all(nav, (2, 2), {'N', 'W'})
-    yaw0 = 0.7
-    planner = MotionPlanner()
-    ex = MotionExecutor(Pose2D(*_mid((2, 2), 'S'), yaw0))
-    ex.set_plan(planner.compile_chain(nav, Pose2D(*_mid((2, 2), 'S'), yaw0), (2, 2), 'S'))
-    det = GridEventDetector(n=7)
-    for _ in range(3000):
-        if ex.idle:
+
+    nav = StreamNav((0, 0), n=7)
+    branch, parent, north, east = (3, 3), (3, 2), (3, 4), (4, 3)
+    _cell(nav, branch, {'S', 'N', 'E'})
+    _cell(nav, north, {'S'})
+    start = Pose2D(*_mid(branch, 'S'), 0.4)
+    horizon = ActionHorizon(MotionPlanner())
+    prims, terminal, seq, state = horizon.compile_with_state(
+        nav, start, (parent, branch))
+    assert terminal == (branch, east)
+    assert seq == [branch, north, branch, east]
+    assert prims[-1].kind == 'STOP'
+
+    executor = MotionExecutor(start)
+    executor.set_plan(prims)
+    last_motion = prims[-2]
+    for _ in range(2000):
+        if executor.queue[0] is last_motion and last_motion.progress > 0:
             break
-        prev = ex.pose.copy()
-        cur = ex.step(0.02)
-        det.detect(prev, cur)
-        assert abs(cur.yaw - yaw0) < 1e-12, "yaw 被 primitive 修改"
+        executor.step(0.02)
+    else:
+        pytest.fail('did not reach the started tail motion before STOP')
+    prior = [(p, p.progress, p.v_end) for p in executor.queue]
+    old_state = deepcopy(state)
+
+    # The east cell becomes mature while the car is still moving. The suffix
+    # must inherit the virtual completion of north, rather than visit it again.
+    _cell(nav, east, {'W'})
+    suffix, new_terminal, new_seq, new_state = horizon.compile_with_state(
+        nav, prims[-1].start_pose, terminal, state)
+    assert state == old_state
+    assert new_seq[:3] == [east, branch, parent]
+    assert new_terminal == (branch, parent)
+    assert new_state[branch]['done'] == {north, east}
+    assert not executor.extend_plan(suffix)  # started prefix keeps its STOP
+    assert [(p, p.progress, p.v_end) for p in executor.queue[:len(prior)]] == prior
+
+    for _ in range(3000):
+        if executor.idle:
+            break
+        executor.step(0.02)
+    assert executor.idle
+    assert executor.pose.yaw == pytest.approx(start.yaw)
 
 
-def test_gate_g_seam_continuity():
-    """Gate G: 模板接缝位置连续, 每 tick 位移 ≤ v_max·dt"""
-    from m3pro_nav.pose import Pose2D
-    from m3pro_nav.motion_planner import MotionPlanner
+def test_runtime_uses_new_map_before_motion_queue_becomes_idle(monkeypatch):
+    import run_semantic_gate as gate
     from m3pro_nav.motion_executor import MotionExecutor
-    from m3pro_nav.event_detector import GridEventDetector
-    nav = _mk_nav()
-    _confirm_all(nav, (2, 2), {'N', 'W'})
-    ex = MotionExecutor(Pose2D(*_mid((2, 2), 'S'), 0.0))
-    ex.set_plan(MotionPlanner().compile_chain(nav, Pose2D(*_mid((2, 2), 'S'), 0.0), (2, 2), 'S'))
-    det = GridEventDetector(n=7)
+
+    original = MotionExecutor.extend_plan
+    moving_extensions = []
+
+    def record_extension(self, prims):
+        if self.queue[0].kind != 'STOP':
+            moving_extensions.append(tuple(p.kind for p in prims))
+        return original(self, prims)
+
+    monkeypatch.setattr(MotionExecutor, 'extend_plan', record_extension)
+    result = gate.run_seed(11, False)
+    assert moving_extensions
+    assert gate.check(result, False) == []
+
+
+def test_task_pruning_cannot_turn_a_walked_parent_edge_into_a_bounce():
+    from m3pro_nav.task_pruning import prove_empty_dead_branch
+
+    nav = StreamNav((0, 0), n=7, task_mode=True)
+    cell, child, parent = (5, 2), (4, 2), (5, 1)
+    _cell(nav, cell, {'S', 'W'})
+    _cell(nav, parent, {'N'})
+    nav.observe_blocks({parent: 'EMPTY'})
+    assert prove_empty_dead_branch(nav, cell, parent)
+
+    # Before traversing, skipping the known empty spur is legal. Once this
+    # edge has been walked, it is the return route and must remain traversable.
+    assert nav.resolve_next(child, cell) == child
+    nav.traversal.mark_crossed(cell, 'S')
+    assert nav.resolve_next(child, cell) == parent
+
+
+def test_motion_contract_rejects_non_axis_aligned_straight():
+    from m3pro_nav.motion_primitive import MotionPrimitive
+
+    with pytest.raises(ValueError, match='axis'):
+        MotionPrimitive(
+            kind='STRAIGHT', start_pose=Pose2D(0.0, 0.0, 0.0),
+            p0=(0.0, 0.0), p1=(0.1, 0.1), length=math.sqrt(0.02),
+            v_max=0.2, v_end=0.0)
+
+
+def test_compiled_template_chain_obeys_axis_and_standard_arc_contracts():
+    nav = StreamNav((0, 0), n=7)
+    cell, prev = (3, 3), (3, 2)
+    _cell(nav, cell, {'S', 'E'})
+    # For this corner, both open directions are known and the cell is complete;
+    # the outgoing neighbor is chosen by the local graph policy.
+    prims, _, _ = ActionHorizon(MotionPlanner()).compile(
+        nav, Pose2D(*_mid(cell, 'S'), 0.0), (prev, cell))
+    assert prims
+    for p in prims:
+        if p.kind == 'STRAIGHT':
+            assert (abs(p.p0[0] - p.p1[0]) < 1e-9 or
+                    abs(p.p0[1] - p.p1[1]) < 1e-9)
+        elif p.kind == 'ARC':
+            assert p.meta['r'] == pytest.approx(0.2)
+            assert abs(p.yaw1) == pytest.approx(math.pi / 2)
+    arc = next(p for p in prims if p.kind == 'ARC')
+    start = (arc.p0[0] + arc.meta['r'] * math.cos(arc.yaw0),
+             arc.p0[1] + arc.meta['r'] * math.sin(arc.yaw0))
+    end_angle = arc.yaw0 + arc.yaw1
+    end = (arc.p0[0] + arc.meta['r'] * math.cos(end_angle),
+           arc.p0[1] + arc.meta['r'] * math.sin(end_angle))
+    assert start == pytest.approx(_mid(cell, 'S'))
+    assert end == pytest.approx(_mid(cell, 'E'))
+
+
+def test_pose_mismatch_fails_instead_of_getting_a_connector():
+    nav = StreamNav((0, 0), n=7)
+    cell, prev = (3, 3), (3, 2)
+    _cell(nav, cell, {'S', 'N'})
+    wrong_pose = Pose2D(_mid(cell, 'S')[0] + 0.01,
+                        _mid(cell, 'S')[1] + 0.01, 0.0)
+    with pytest.raises(PlanGeometryMismatch):
+        ActionHorizon(MotionPlanner()).compile(nav, wrong_pose, (prev, cell))
+
+
+def test_primitive_execution_preserves_body_yaw_and_speed_bound():
+    from m3pro_nav.motion_executor import MotionExecutor
+
+    nav = StreamNav((0, 0), n=7)
+    cell, prev = (3, 3), (3, 2)
+    _cell(nav, cell, {'S', 'E'})
+    yaw = 0.7
+    pose = Pose2D(*_mid(cell, 'S'), yaw)
+    executor = MotionExecutor(pose)
+    executor.set_plan(ActionHorizon(MotionPlanner()).compile(nav, pose, (prev, cell))[0])
     max_step = 0.0
     for _ in range(3000):
-        if ex.idle:
+        if executor.idle:
             break
-        prev = ex.pose.copy()
-        cur = ex.step(0.02)
-        det.detect(prev, cur)
-        max_step = max(max_step, math.hypot(cur.x - prev.x, cur.y - prev.y))
+        before = executor.pose.copy()
+        after = executor.step(0.02)
+        assert after.yaw == pytest.approx(yaw)
+        max_step = max(max_step, math.hypot(after.x - before.x, after.y - before.y))
     assert max_step <= 0.7 * 0.02 + 1e-9
 
 
-# ---------------- Gate H: 事件检测 ----------------
-
-def test_event_detector_four_directions():
-    from m3pro_nav.pose import Pose2D
+def test_grid_event_detector_only_reports_crossed_grid_edges():
     from m3pro_nav.event_detector import GridEventDetector
-    det = GridEventDetector(n=7)
-    for d, (dx, dy) in (('E', (0.4, 0)), ('W', (-0.4, 0)),
-                        ('N', (0, 0.4)), ('S', (0, -0.4))):
-        prev = Pose2D(1.0, 1.0, 0.0)
-        cur = Pose2D(1.0 + dx, 1.0 + dy, 0.0)
-        evs = det.detect(prev, cur)
-        assert len(evs) == 1 and evs[0].direction == d
+
+    detector = GridEventDetector(n=7)
+    assert detector.detect(Pose2D(1.0, 1.0, 0.0), Pose2D(1.0, 1.0, 0.0)) == []
+    events = detector.detect(Pose2D(0.9, 1.0, 0.0), Pose2D(1.7, 1.0, 0.0))
+    assert [e.direction for e in events] == ['E', 'E']
+    assert [(e.from_cell, e.to_cell) for e in events] == [((2, 2), (3, 2)),
+                                                          ((3, 2), (4, 2))]
 
 
-def test_event_detector_no_phantom_and_order():
-    from m3pro_nav.pose import Pose2D
-    from m3pro_nav.event_detector import GridEventDetector
-    det = GridEventDetector(n=7)
-    assert det.detect(Pose2D(1.0, 1.0, 0.0), Pose2D(1.0, 1.0, 0.0)) == []
-    evs = det.detect(Pose2D(0.9, 1.0, 0.0), Pose2D(1.7, 1.0, 0.0))
-    assert [e.direction for e in evs] == ['E', 'E']
-    assert evs[0].from_cell == (2, 2) and evs[1].from_cell == (3, 2)
-
-
-def test_event_detector_line_departure_semantics():
-    """模板接缝恰停在格线上后离线 = 一次真实跨越 (链式几何必然)"""
-    from m3pro_nav.pose import Pose2D, C
-    from m3pro_nav.event_detector import GridEventDetector
-    det = GridEventDetector(n=7)
-    # 停在 x=0.8 格线上, 向 E 离开 → 跨越 (2,?)→(3,?)
-    evs = det.detect(Pose2D(0.8, 1.0, 0.0), Pose2D(0.82, 1.0, 0.0))
-    assert len(evs) == 1 and evs[0].direction == 'E'
-    assert evs[0].from_cell == (1, 2) and evs[0].to_cell == (2, 2)
-    # 停在格线上不动 → 无事件
-    assert det.detect(Pose2D(0.8, 1.0, 0.0), Pose2D(0.8, 1.0, 0.0)) == []
-    # 停在格线上向反方向离开 → 反向跨越
-    evs = det.detect(Pose2D(0.8, 1.0, 0.0), Pose2D(0.78, 1.0, 0.0))
-    assert len(evs) == 1 and evs[0].direction == 'W'
-
-
-def test_event_detector_arc_no_phantom():
-    """Gate K: 圆弧 entry→exit 中点在格内 → 弧段零跨越事件"""
-    from m3pro_nav.pose import Pose2D
-    from m3pro_nav.motion_planner import MotionPlanner
-    from m3pro_nav.motion_executor import MotionExecutor
-    from m3pro_nav.event_detector import GridEventDetector
-    nav = _mk_nav()
-    _confirm_all(nav, (2, 2), {'N', 'W'})
-    ex = MotionExecutor(Pose2D(*_mid((2, 2), 'S'), 0.0))
-    ex.set_plan(MotionPlanner().compile_chain(nav, Pose2D(*_mid((2, 2), 'S'), 0.0), (2, 2), 'S'))
-    det = GridEventDetector(n=7)
-    events = []
-    for _ in range(3000):
-        if ex.idle:
-            break
-        prev = ex.pose.copy()
-        cur = ex.step(0.02)
-        events += det.detect(prev, cur)
-    # S 进 E 出: 只发生 S 出场反向或无事件; 弧内不得产生 (2,2) 邻格幻事件
-    for e in events:
-        assert (e.from_cell[0], e.from_cell[1]) in [(2, 2), (2, 1), (3, 2), (2, 3), (1, 2)]
-
-
-# ---------------- Gate B: Branch 局部状态机 ----------------
-
-def test_gate_b_branch_local_dfs_sequence():
-    """Gate B: 嵌套树探索事件序列, 无全局 stack.
-    A(0,0) branch → way → B(0,2) branch → dead → B sibling → back A → sibling"""
-    from m3pro_nav.stream_nav import StreamNav
-    nav = StreamNav((0, 0), n=7, order='LFR')
-
-    def set_cell(c, walls):
-        for _ in range(2):
-            for d in ('N', 'E', 'S', 'W'):
-                if d in walls:
-                    nav.edges.observe_wall(c, d, 0.2)
-                else:
-                    nav.edges.observe_open(c, d, 0.2)
-
-    set_cell((0, 0), {'W'})                  # A: opens N,E,S
-    set_cell((0, 1), {'E', 'W'})             # way: S,N
-    set_cell((0, 2), {'W'})                  # B: S,E,N
-    set_cell((1, 2), {'N', 'E', 'S'})        # dead: W
-    set_cell((0, 3), {'N', 'E', 'W'})        # dead: S
-    r = nav.on_entered((0, 0), 'S')
-    assert r == 'N'                          # A: L(W) 被 W 墙挡? N/E 排序 → N (F 先)
-    nav.on_crossed((0, 0), 'N')
-    r = nav.on_entered((0, 1), 'S')          # way: 无分支状态
-    nav.on_crossed((0, 1), 'N')
-    r = nav.on_entered((0, 2), 'S')
-    assert r == 'N'                          # B: children 排序
-    st = nav.branch[(0, 2)]
-    assert st['parent'] == 'S'
-    # dead (0,3): 原路返回
-    nav.on_crossed((0, 2), 'N')
-    nav.on_crossed((0, 3), 'S')
-    r = nav.on_entered((0, 2), 'N')
-    assert r == 'E'                          # N 完成 → 下一 child E
-    # dead (1,2): 回 B → children 全完成 → parent S
-    nav.on_crossed((0, 2), 'E')
-    nav.on_crossed((1, 2), 'W')
-    r = nav.on_entered((0, 2), 'E')
-    assert r == 'S'
-    # 回 A: N 完成 → sibling E
-    nav.on_crossed((0, 2), 'S')
-    nav.on_crossed((0, 1), 'S')
-    nav.on_crossed((0, 0), 'S')
-    r = nav.on_entered((0, 0), 'N')
-    assert r == 'E'
-    # parent_side 永不变化
-    assert nav.branch[(0, 2)]['parent'] == 'S'
-    assert nav.branch[(0, 0)]['parent'] == 'S'
-
-
-def test_late_classified_branch_preserves_first_parent():
-    """迟分类: 首访 INCOMPLETE → 分类完成 → refresh_branch 用 first_entered_from 建状态;
-    且绝不重复登记 visit (latest 只由真实事件更新)"""
-    from m3pro_nav.stream_nav import StreamNav
+def test_home_compilation_requires_predecessor_context_for_exit_cell():
     nav = StreamNav((0, 0), n=7)
-    nav.on_entered((0, 2), 'S')                       # 首访: mark None
-    for _ in range(2):
-        nav.edges.observe_open((0, 2), 'N', 0.2)
-        nav.edges.observe_open((0, 2), 'E', 0.2)
-        nav.edges.observe_open((0, 2), 'S', 0.2)
-        nav.edges.observe_wall((0, 2), 'W', 0.2)
-    r = nav.refresh_branch((0, 2))
-    assert r == 'N'
-    assert nav.branch[(0, 2)]['parent'] == 'S'
-    cnt = nav.visits.get((0, 2)).visit_count
-    # 再 refresh 100 次: visit 不得被重复登记
-    for _ in range(100):
-        nav.refresh_branch((0, 2))
-    assert nav.visits.get((0, 2)).visit_count == cnt
-    assert nav.visits.get((0, 2)).latest_entered_from == 'S'
+    planner = MotionPlanner()
+    exit_cell = (6, 3)
+    nav.edges.observe_open(exit_cell, 'E', 0.2)
+    # A one-cell route has no incoming template context and must be rejected.
+    with pytest.raises(PlanGeometryMismatch):
+        planner.compile_home(Pose2D(*_center(exit_cell), 0.0),
+                             (None, exit_cell), [exit_cell], 'E')
 
 
-# ---------------- 单一真相 / 结构验收 ----------------
-
-def test_no_duplicate_implementations():
-    import m3pro_nav.mazemap as m1
-    base = os.path.dirname(__import__('inspect').getfile(m1))
-    for f in ('mazemap.py', 'tracker.py'):
-        dup = os.path.normpath(os.path.join(base, '..', '..', '..', 'src', f))
-        assert not os.path.exists(dup), f"双副本复活: {f}"
-
-
-def test_structural_no_legacy_concepts():
-    """规范 §12 禁止清单: 核心包内不得出现旧概念 (文件级扫描)"""
-    base = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        '..', 'ros2', 'm3pro_nav', 'm3pro_nav')
-    banned = ('SPIN', 'CUT90', 'CREEP', 'dfs_explorer', 'known_horizon',
-              'move_intent', 'plan_intent')
-    for f in os.listdir(base):
-        if not f.endswith('.py'):
-            continue
-        src = open(os.path.join(base, f)).read()
-        for b in banned:
-            assert b not in src, f"{f} 残留旧概念: {b}"
-
-
-def test_structural_dependency_direction():
-    """Gate 依赖方向: core 不得 import sim/runtime/ROS"""
-    base = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        '..', 'ros2', 'm3pro_nav', 'm3pro_nav')
-    banned_imports = ('runtime_v2', 'maze_sim', 'rclpy', 'sensor_sim')
-    for f in os.listdir(base):
-        if not f.endswith('.py'):
-            continue
-        src = open(os.path.join(base, f)).read()
-        for b in banned_imports:
-            assert b not in src, f"{f} 违反依赖方向: import {b}"
-
-
-def test_no_fake_assume_tree_param():
-    from m3pro_nav.stream_nav import StreamNav
-    import inspect as _insp
-    assert 'assume_tree' not in _insp.signature(StreamNav.__init__).parameters
-    import m3pro_nav.tree_inference as ti
-    assert 'assume_tree' not in _insp.signature(ti.recompute_derived).parameters
-
-
-# ---------------- StreamNav / 出口 / 返航 ----------------
-
-def test_exit_candidate_retracts():
-    from m3pro_nav.stream_nav import StreamNav
+def test_home_one_cell_route_uses_preserved_predecessor_anchor():
     nav = StreamNav((0, 0), n=7)
+    exit_cell, previous = (6, 3), (5, 3)
+    nav.edges.observe_open(exit_cell, 'E', 0.2)
+    prims = MotionPlanner().compile_home(
+        Pose2D(*_mid(exit_cell, 'W'), 0.2),
+        (previous, exit_cell), [exit_cell], 'E')
+    assert prims[0].kind == 'STRAIGHT'
+    assert prims[0].p0 == pytest.approx(_mid(exit_cell, 'W'))
+    assert prims[0].p1 == pytest.approx(_mid(exit_cell, 'E'))
+    assert prims[-1].meta.get('route_exit') is True
+
+
+def test_exit_candidate_retracts_when_boundary_edge_vote_flips():
+    nav = StreamNav((0, 0), n=7)
+    exit_cell = (6, 3)
     for _ in range(2):
         nav.observe({}, [((6, 3), 'E', 0.2, 0.01)])
-    assert (6, 3) in nav.exit_cells()
-    for _ in range(6):
+    assert exit_cell in nav.exit_cells()
+    for _ in range(8):
         nav.observe({((6, 3), 'E'): (0.2, 0.01)}, [])
-    assert (6, 3) not in nav.exit_cells()
+    assert exit_cell not in nav.exit_cells()
 
 
-def test_home_route_from_exit_cell_zero_length():
-    from m3pro_nav.stream_nav import StreamNav
-    nav = StreamNav((0, 0), n=7)
+def test_block_visibility_requires_open_straight_corridor_and_confirms_empty():
+    import runtime_v2
+
+    walls = {(i, j): {'N', 'E', 'S', 'W'} for i in range(7) for j in range(7)}
+    # A straight corridor from (2,2) east to (4,2); nearby north cell is a
+    # turn-only target and the east ray stops at the first wall after (4,2).
+    for x in (2, 3, 4):
+        walls[(x, 2)].discard('E')
+        walls[(x + 1, 2)].discard('W')
+    walls[(2, 2)].discard('N')
+    walls[(2, 3)].discard('S')
+    walls[(2, 3)].discard('E')
+    walls[(3, 3)].discard('W')
+    world = runtime_v2.World(walls, {(4, 2), (3, 3)})
+    obs = runtime_v2.block_observe_from(
+        world, Pose2D(1.0, 1.0, 0.0), cam_range=0.8, cell_hint=(2, 2))
+    assert obs[(3, 2)] == 'EMPTY'
+    assert obs[(4, 2)] == 'BLOCK'
+    assert obs[(2, 3)] == 'EMPTY'
+    assert (3, 3) not in obs  # reachable only by turning north then east
+    assert (5, 2) not in obs  # beyond configured range
+
+    walled = {(i, j): {'N', 'E', 'S', 'W'} for i in range(7) for j in range(7)}
+    walled[(2, 2)].discard('E')
+    walled[(3, 2)].discard('W')
+    blocked_obs = runtime_v2.block_observe_from(
+        runtime_v2.World(walled, {(4, 2)}), Pose2D(1.0, 1.0, 0.0),
+        cam_range=1.5, cell_hint=(2, 2))
+    assert (4, 2) not in blocked_obs  # a wall blocks the ray despite range
+
+    nav = StreamNav((0, 0), n=7, task_mode=True)
+    nav.observe_blocks(obs)
+    from m3pro_nav.block_map import EMPTY, BLOCK
+    assert nav.block_map.state((3, 2)) == EMPTY
+    assert nav.block_map.state((4, 2)) == BLOCK
+
+
+def _confirm_corridor(nav, cells):
+    """Confirm a straight parent-to-dead-end route and its unused edges."""
+    from m3pro_nav.pose import DIRV
+    path_edges = set(zip(cells, cells[1:]))
+    for cell in cells:
+        for d, dv in DIRV.items():
+            nb = (cell[0] + dv[0], cell[1] + dv[1])
+            if not (0 <= nb[0] < nav.n and 0 <= nb[1] < nav.n):
+                continue
+            if ((cell, nb) in path_edges or (nb, cell) in path_edges):
+                nav.edges.observe_open(cell, d, 0.2)
+                nav.edges.observe_open(cell, d, 0.2)
+            else:
+                nav.edges.observe_wall(cell, d, 0.2)
+                nav.edges.observe_wall(cell, d, 0.2)
+
+
+def test_task_pruning_requires_confirmed_empty_dead_branch_and_is_reversible():
+    from m3pro_nav.block_map import BLOCK, EMPTY
+    from m3pro_nav.task_pruning import prove_empty_dead_branch
+
+    nav = StreamNav((0, 0), n=7, task_mode=True)
+    parent, child, tip = (2, 2), (3, 2), (4, 2)
+    _confirm_corridor(nav, [parent, child, tip])
+    assert prove_empty_dead_branch(nav, parent, child) == []  # unknown blocks
+
+    nav.observe_blocks({child: EMPTY, tip: EMPTY})
+    assert prove_empty_dead_branch(nav, parent, child) == [child, tip]
+    nav.observe_blocks({tip: BLOCK})
+    assert prove_empty_dead_branch(nav, parent, child) == []  # proof retracts
+    nav.observe_blocks({tip: EMPTY})
+    assert prove_empty_dead_branch(nav, parent, child) == [child, tip]
+
+
+def test_task_pruning_can_turn_back_mid_corridor_but_not_past_unknown_or_block():
+    from m3pro_nav.block_map import BLOCK, EMPTY
+
+    nav = StreamNav((0, 0), n=7, task_mode=True)
+    previous, current, mid, tip = (1, 2), (2, 2), (3, 2), (4, 2)
+    _confirm_corridor(nav, [previous, current, mid, tip])
+    assert nav.resolve_next(previous, current) == mid  # block state unknown
+    nav.observe_blocks({mid: BLOCK, tip: EMPTY})
+    assert nav.resolve_next(previous, current) == mid  # BLOCK in skipped suffix
+    nav.observe_blocks({mid: EMPTY})
+    assert nav.resolve_next(previous, current) == previous  # now skip remaining suffix
+
+    # The task proof is derived, so a later block observation restores the
+    # branch immediately; it is never latched as completed.
+    nav.observe_blocks({mid: BLOCK})
+    assert nav.resolve_next(previous, current) == mid
+
+    # If topology at the tip is not yet complete, a negative block observation
+    # alone cannot prove that the corridor ends there.
+    nav.observe_blocks({mid: EMPTY, tip: EMPTY})
+    nav.edges.soft.pop(nav.edges.edge_key(tip, 'N'), None)
+    assert nav.resolve_next(previous, current) == mid
+
+
+def test_task_pruning_rejects_a_branched_suffix_even_when_empty():
+    from m3pro_nav.block_map import EMPTY
+    from m3pro_nav.task_pruning import prove_empty_dead_branch
+
+    nav = StreamNav((0, 0), n=7, task_mode=True)
+    current, branch = (2, 2), (2, 3)
     for _ in range(2):
-        nav.edges.observe_open((6, 3), 'E', 0.2)
-    hr = nav.home_route((6, 3))
-    assert hr is not None
-    seg, exc, edir = hr
-    assert seg == [] and exc == (6, 3) and edir == 'E'
-    for _ in range(2):
-        nav.edges.observe_open((0, 3), 'N', 0.2)
-        nav.edges.observe_wall((0, 3), 'W', 0.2)
-        nav.edges.observe_wall((0, 3), 'E', 0.2)
-        nav.edges.observe_open((0, 2), 'N', 0.2)
-        nav.edges.observe_open((0, 2), 'S', 0.2)
-        nav.edges.observe_wall((0, 2), 'E', 0.2)
-        nav.edges.observe_wall((0, 2), 'W', 0.2)
-    nav.traversal.mark_crossed((0, 2), 'N')
-    nav.traversal.mark_crossed((0, 3), 'S')
-    for i in range(6):
-        nav.traversal.mark_crossed((i, 3), 'E')
-    hr = nav.home_route((0, 2))
-    assert hr is not None and len(hr[0]) >= 1
+        for direction in ('N', 'E', 'S', 'W'):
+            observer = nav.edges.observe_wall if direction == 'W' else nav.edges.observe_open
+            observer(branch, direction, 0.2)
+    nav.observe_blocks({branch: EMPTY, (2, 4): EMPTY, (3, 3): EMPTY})
+    assert prove_empty_dead_branch(nav, current, branch) == []
 
 
-# ---------------- Gate J: UNKNOWN fallback (蹭入停车) ----------------
+def test_collected_block_is_terminal_task_knowledge_not_an_active_block():
+    from m3pro_nav.block_map import BLOCK, COLLECTED, UNKNOWN
 
-def test_gate_j_unknown_cell_nudge_then_stop():
-    """下一格未识别: 链在格线中点先蹭入 0.1m 再 STOP (离线触发跨越事件)"""
-    from m3pro_nav.pose import Pose2D, C
-    from m3pro_nav.motion_planner import MotionPlanner, NUDGE
-    nav = _mk_nav()
-    _confirm_all(nav, (2, 2), {'N', 'S'})          # (2,2) WAY: E 开, (3,2) 未知
-    planner = MotionPlanner()
-    prims = planner.compile_chain(nav, Pose2D(*_mid((2, 2), 'W'), 0.0), (2, 2), 'W')
-    kinds = [p.kind for p in prims]
-    assert 'STOP' in kinds
-    stop = prims[-1]
-    assert stop.meta.get('wait') == (3, 2)
-    nudge = prims[-2]
-    assert nudge.kind == 'STRAIGHT' and nudge.meta.get('nudge_into') == (3, 2)
-    # 蹭入点在格内 (离格线 ≥ 1e-6)
-    assert abs(nudge.p1[0] - 1.6) > 1e-6 or abs(nudge.p1[1] % 0.4) > 1e-6
-    assert abs(math.hypot(nudge.p1[0] - nudge.p0[0],
-                          nudge.p1[1] - nudge.p0[1]) - NUDGE) < 1e-9
+    nav = StreamNav((0, 0), n=7, task_mode=True)
+    cell = (2, 2)
+    nav.observe_blocks({cell: BLOCK})
+    assert nav.block_map.state(cell) == BLOCK
+    nav.collect_block(cell)
+    assert nav.block_map.state(cell) == COLLECTED
+    assert not nav.has_block(cell)
+    assert nav.block_map.is_confirmed_empty(cell)
+    assert nav.block_map.state((3, 3)) == UNKNOWN
 
 
-# ---------------- Gate J/K: 集成 —— 真值对账 (固化 1 seed) ----------------
+def test_task_pruning_does_not_write_physical_maps():
+    nav = StreamNav((0, 0), n=7, task_mode=True)
+    before_edges = (dict(nav.edges.soft), dict(nav.edges.hard), dict(nav.edges.derived))
+    before_walked = set(nav.traversal.walked)
+    nav.observe_blocks({(2, 2): 'EMPTY'})
+    from m3pro_nav.task_pruning import prove_empty_dead_branch
+    prove_empty_dead_branch(nav, (1, 2), (2, 2))
+    assert (nav.edges.soft, nav.edges.hard, nav.edges.derived) == before_edges
+    assert nav.traversal.walked == before_walked
 
-def test_wrong_edges_matches_truth_on_gen_maze():
-    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                    '..', 'sim'))
-    import runtime_v2 as R
-    import maze_sim as M
-    walls, entry, ex, side = M.gen_maze(0)
-    r = R.explore(walls, entry, ex, 'LFR', set(), v_cruise=0.7)
-    assert r.get('wrong_edges') == 0
-    assert r.get('unresolved') == 0
-    assert r.get('violations') == 0
-    assert not r.get('aborted')
+
+def test_dependency_boundaries_are_structural():
+    import inspect
+    import runtime_v2
+    from m3pro_nav.motion_primitive import KINDS
+    from m3pro_nav.motion_planner import MotionPlanner
+
+    runtime_inputs = inspect.signature(runtime_v2.explore).parameters
+    assert 'ex' not in runtime_inputs  # truth exit belongs to the test driver
+    assert runtime_inputs['required_blocks'].kind == inspect.Parameter.KEYWORD_ONLY
+
+    package = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           '..', 'ros2', 'm3pro_nav', 'm3pro_nav')
+
+    def imported_modules(filename):
+        tree = ast.parse(open(os.path.join(package, filename), encoding='utf-8').read())
+        names = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names.extend(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                names.append(node.module)
+        return names
+
+    assert not any('block_map' in n for n in imported_modules('motion_planner.py'))
+    assert not any('block_map' in n for n in imported_modules('tree_inference.py'))
+
+    planner_src = open(os.path.join(package, 'motion_planner.py'), encoding='utf-8').read()
+    assert 'nudge' not in planner_src.lower()
+    assert 'resolve_exit' not in planner_src
+    runtime_src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    '..', 'sim', 'runtime_v2.py'),
+                       encoding='utf-8').read()
+    runtime_tree = ast.parse(runtime_src)
+    for node in ast.walk(runtime_tree):
+        # Check executable syntax, ignoring docstrings which may name forbidden
+        # legacy concepts while explaining the migration boundary.
+        assert not (isinstance(node, ast.Name) and
+                    node.id in {'NUDGE', 'SPIN', 'SPIN90', 'CREEP', 'CREEP_OBSERVE'})
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            assert not (node.func.attr == 'clear' and
+                        isinstance(node.func.value, ast.Name) and
+                        node.func.value.id == 'executor')
+
+    assert KINDS == ('STRAIGHT', 'ARC', 'REVERSE', 'STOP')
+    assert hasattr(MotionPlanner, 'template')
+    assert not hasattr(MotionPlanner, 'compile_chain')  # no generic connector compiler

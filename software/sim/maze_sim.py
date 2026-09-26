@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
+Legacy simulator and shared deterministic 7×7 maze generator.
+
+The current Tier A navigation gate imports only ``gen_maze`` from here;
+``runtime_v2.py`` owns current motion/topology semantics. The older pivot/
+holo/arc comparisons below are historical and are not the fixed-template plan.
+
 M3 Pro 迷宫 7×7 网格仿真 —— 场地建好之前的算法测试台
 
 对应真实系统:
@@ -26,7 +32,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
                                 'ros2', 'm3pro_nav'))
 from m3pro_nav.mazemap import MazeMap        # 铁律: 单一真相源, 只 import m3pro_nav 包
 from m3pro_nav.stream_nav import StreamNav
-from m3pro_nav.tracker import HolonomicTracker
 
 C = 0.4            # 格距 m (通道 40cm)
 N = 7              # 7×7
@@ -508,7 +513,9 @@ def cmd_stream(a):
             walls, entry, ex, _ = gen_maze(s)
             cells = [(i, j) for i in range(N) for j in range(N) if (i, j) not in (entry, ex)]
             blocks = set() if a.fullinfo else set(rnd.sample(cells, 8))
-            r = _v2_explore(walls, entry, ex, o_, blocks, v_cruise=a.vc,
+            r = _v2_explore(walls, entry, o_, blocks,
+                            required_blocks=0 if a.fullinfo else 8,
+                            v_cruise=a.vc,
                                dphi_deg=a.dphi, gate=a.gate, scan_hz=a.scan, proc_ms=a.proc)
             res.append(r)
         t = [r['time'] for r in res]

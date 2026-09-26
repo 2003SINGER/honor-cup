@@ -3,7 +3,7 @@
 
 规划不再依赖 visit (规划 = resolve_next(prev_cell, cell) 纯图递推).
 visit 只服务: branch 迟提交的 parent 依据 / 调试 / 回放 / 一致性校验.
-绝对禁止: "visit 缺失 → CellAction 算不出 → runtime 卡死" 的反向依赖."""
+绝对禁止: "visit 缺失 → 图递推算不出下一格 → runtime 卡死" 的反向依赖."""
 
 from dataclasses import dataclass
 

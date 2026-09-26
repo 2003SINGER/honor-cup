@@ -27,7 +27,7 @@ import math
 from .edge_map import (EdgeMap, TraversalMap, DIRV, OPP, DIRS,
                        UNKNOWN, WALL, OPEN)
 from . import tree_inference
-from .cell_classifier import classify as _classify, BRANCH
+from .cell_classifier import classify as _classify
 from .visits import VisitRegistry
 from .block_map import BlockMap
 from . import task_pruning
@@ -95,6 +95,18 @@ class StreamNav:
     def mark(self, c):
         return _classify(self.edges, c, self.traversal)
 
+    def is_exploration_branch(self, cell):
+        """Whether DFS owns multiple interior children at this cell.
+
+        Boundary openings are not maze neighbors. The configured entry has one
+        virtual parent outside the maze, so two interior neighbors make it a
+        branch; every other cell needs three interior neighbors.
+        """
+        if self.mark(cell) is None:
+            return False
+        degree = len(self.open_neighbors(cell))
+        return degree >= (2 if cell == self.entry else 3)
+
     # ---- 图递推核心 ----
 
     def open_neighbors(self, cell):
@@ -109,8 +121,8 @@ class StreamNav:
     def resolve_next(self, prev_cell, cell, plan_state=None):
         """图局部转移: 计划沿 prev→cell, 返回 next_cell; 信息不足 → None.
         绝不读取 Pose / Visit / 事件 —— "从哪来"由图本身已知.
-        plan_state: 编译器提供的计划内 overlay ({branch: {'done','incoming'}}),
-        用于单条链多次经过同一 branch 时的虚拟 done 累积 (执行层事件负责正式 commit)."""
+        plan_state: 编译器显式推进的虚拟 branch overlay。查询本身是纯函数；
+        overlay 只由 plan_branch_enter/return 等显式计划转移修改。"""
         if self.mark(cell) is None:
             return None                          # 未成熟: horizon 到此
         nbrs = self.open_neighbors(cell)
@@ -120,54 +132,135 @@ class StreamNav:
             deg = len(nbrs) + 1
             if deg < 2:
                 return None
-            if deg == 2:
+            if not self.is_exploration_branch(cell):
                 return others[0] if others else None
             return self._branch_pick(cell, None, (0, 1), others, plan_state)
         if prev_cell not in nbrs:
             return None                          # 来路边尚未入图: 等待
+
+        # Returning to the configured entry is a return to the virtual root.
+        # Its entrance edge is not in open_neighbors, so a one-child root must
+        # terminate instead of treating that child as a DEAD-cell reversal.
+        if cell == self.entry:
+            if len(nbrs) == 1:
+                return None
+            return self._branch_pick(cell, None, (0, 1), sorted(nbrs), plan_state)
+
         others = sorted(nbrs - {prev_cell})
         if len(nbrs) == 1:
             return prev_cell                     # DEAD: 原路回头
         din = (cell[0] - prev_cell[0], cell[1] - prev_cell[1])
         if len(nbrs) == 2:
             fwd = others[0]
-            if self.task_mode and task_pruning.prove_empty_dead_branch(self, cell, fwd):
+            # Pruning only skips an unwalked future spur. A walked edge may be
+            # the way back to the root; pruning it creates a parent-child
+            # ping-pong even when the branch contains no remaining blocks.
+            fwd_dir = _dir_of((fwd[0] - cell[0], fwd[1] - cell[1]))
+            if (self.task_mode and not self.traversal.is_walked(cell, fwd_dir) and
+                    task_pruning.prove_empty_dead_branch(self, cell, fwd)):
                 return prev_cell                 # 前向空死枝: 当场回头 (P7)
             return fwd                           # WAY: 纯查表
         return self._branch_pick(cell, prev_cell, din, others, plan_state)
 
     def _branch_pick(self, cell, prev_cell, incoming_dv, other_cells, plan_state=None):
-        """BRANCH 下一支路. committed 状态读局部状态; 未 commit 纯 preview 零副作用.
-        plan_state: 计划内虚拟 done / 冻结的 preview 入向 (见 compile_chain)."""
+        """BRANCH 下一支路。读取 committed 或虚拟快照；不推进任何状态。
+
+        一个 child 只有在计划明确模拟“从 child 返回 branch”时才算虚拟完成。
+        进入 child 不等于完成它的子树。
+        """
         pst = (plan_state or {}).get(cell) or {}
         plan_done = pst.get('done', set())
         st = self.branch.get(cell)
         if st is not None and st.get('committed'):
             done_v = set(st['done']) | plan_done
-            if prev_cell is not None and prev_cell in st['children']:
-                done_v.add(prev_cell)            # 返回前 preview: 虚拟完成
             active = [c for c in st['children']
                       if c not in done_v and not self._is_pruned(cell, c)]
             if active:
                 return active[0]
             return st['parent_cell']             # 全完 → 回父 (根 = None → 早停)
-        # preview: 纯函数零副作用; 入向用计划冻结值 (与未来 commit 排序一致)
+
+        # 未 commit 分支：使用冻结的虚拟快照；单次 preview 不写回 plan_state。
+        parent = pst.get('parent_cell', prev_cell)
+        children = pst.get('children')
         inc = pst.get('incoming') or incoming_dv
-        ch = [c for c in other_cells
-              if not self._is_pruned(cell, c) and c not in plan_done]
-        ch.sort(key=lambda c: _rel_rank((c[0] - cell[0], c[1] - cell[1]),
-                                        inc, self.order))
-        return ch[0] if ch else None
+        if children is None:
+            children = [c for c in other_cells if c != parent]
+            children.sort(key=lambda c: _rel_rank(
+                (c[0] - cell[0], c[1] - cell[1]), inc, self.order))
+        active = [c for c in children
+                  if c not in plan_done and not self._is_pruned(cell, c)]
+        return active[0] if active else parent
+
+    def plan_branch_enter(self, plan_state, cell, parent_cell):
+        """在计划 overlay 中冻结 branch 的 parent、incoming 和 child 顺序。
+
+        这是可重复调用的幂等操作。真实 BranchState 优先作为快照来源；
+        未 commit 的 branch 则从当前已知 OPEN 邻居生成快照。"""
+        if cell in plan_state:
+            return plan_state[cell]
+        committed = self.branch.get(cell)
+        if committed is not None and committed.get('committed'):
+            state = {
+                'parent_cell': committed['parent_cell'],
+                'incoming': ((0, 1) if committed['parent_cell'] is None else
+                             (cell[0] - committed['parent_cell'][0],
+                              cell[1] - committed['parent_cell'][1])),
+                'children': tuple(committed['children']),
+                'done': set(committed['done']),
+                'active_child': None,
+                'committed_snapshot': True,
+            }
+        else:
+            incoming = ((0, 1) if parent_cell is None else
+                        (cell[0] - parent_cell[0], cell[1] - parent_cell[1]))
+            children = [c for c in self.open_neighbors(cell) if c != parent_cell]
+            children.sort(key=lambda c: _rel_rank(
+                (c[0] - cell[0], c[1] - cell[1]), incoming, self.order))
+            state = {'parent_cell': parent_cell, 'incoming': incoming,
+                     'children': tuple(children), 'done': set(),
+                     'active_child': None, 'committed_snapshot': False}
+        plan_state[cell] = state
+        return state
+
+    @staticmethod
+    def plan_branch_descend(plan_state, branch_cell, child_cell):
+        """记录虚拟选择的 child；不会将 child 标成完成。"""
+        state = plan_state[branch_cell]
+        if child_cell not in state['children'] or child_cell in state['done']:
+            raise ValueError(f"invalid virtual branch descent: {branch_cell} -> {child_cell}")
+        active = state.get('active_child')
+        if active not in (None, child_cell):
+            raise ValueError(f"virtual child still active: {branch_cell} -> {active}")
+        state['active_child'] = child_cell
+
+    @staticmethod
+    def plan_branch_return(plan_state, branch_cell, child_cell, allow_pending=False):
+        """完成计划 overlay 中 child 子树，仅在模拟返回 branch 时调用。
+
+        `allow_pending` 只用于新 horizon 从 (child, committed_branch) 边界开始，
+        且 EnteredCell commit 尚未落库的情形；它不能代替本 horizon 中的 descend。
+        """
+        state = plan_state[branch_cell]
+        active_child = state.get('active_child')
+        already_committed = (allow_pending and state.get('committed_snapshot') and
+                             active_child is None and child_cell in state['done'])
+        resumed_committed_child = (
+            allow_pending and state.get('committed_snapshot') and
+            active_child is None and child_cell in state['children'] and
+            child_cell not in state['done'] and child_cell != state['parent_cell'])
+        if active_child != child_cell and not resumed_committed_child and not already_committed:
+            raise ValueError(f"virtual return does not match active child: "
+                             f"{branch_cell} <- {child_cell}")
+        if already_committed:
+            return
+        state['done'].add(child_cell)
+        state['active_child'] = None
 
     def _is_pruned(self, parent_cell, child_cell):
         """任务剪枝动态派生: 证明成立才剪; 方块新观测使证明失效 => 自动恢复."""
         if not self.task_mode:
             return False
-        cells = task_pruning.prove_empty_dead_branch(self, parent_cell, child_cell)
-        if cells:
-            self.pruned_cells.update(cells)
-            return True
-        return False
+        return bool(task_pruning.prove_empty_dead_branch(self, parent_cell, child_cell))
 
     # ---- 任务层 (BlockMap) ----
 
@@ -190,11 +283,12 @@ class StreamNav:
     def on_entered(self, cell, from_cell, ts=0.0):
         """EnteredCell: 只 commit branch 状态 + 到访记录, 不喂规划器."""
         self.visits.on_entered(cell, from_cell, ts)
-        mark = self.mark(cell)
-        if mark is not None and mark['kind'] == BRANCH:
+        if self.is_exploration_branch(cell):
             self._commit_branch(cell, from_cell)
 
     def _commit_branch(self, cell, from_cell):
+        if not self.is_exploration_branch(cell):
+            return
         st = self.branch.get(cell)
         if st is not None and st.get('committed'):
             if from_cell is not None and from_cell in st['children']:
@@ -219,8 +313,7 @@ class StreamNav:
         v = self.visits.get(cell)
         if v is None:
             return
-        mark = self.mark(cell)
-        if mark is None or mark['kind'] != BRANCH:
+        if not self.is_exploration_branch(cell):
             return
         self._commit_branch(cell, v.first_from_cell)
 
@@ -279,7 +372,10 @@ class StreamNav:
         return False
 
     def route_cells(self, a, b):
-        """walked 图 BFS 最短路 (树形=唯一路径). 返回格路径 [a..b] 或 None."""
+        """在已确认 OPEN 的物理图上 BFS (树形=唯一路径), 返回 [a..b].
+
+        返航可沿已知但尚未实际走过的边规划；UNKNOWN 边不属于此图。
+        """
         if a == b:
             return [a]
         reach = {a: None}
@@ -287,7 +383,7 @@ class StreamNav:
         while q:
             cc = q.pop(0)
             for d, dv in DIRV.items():
-                if not self.traversal.is_walked(cc, d):
+                if not self.is_open(cc, d):
                     continue
                 nb = (cc[0] + dv[0], cc[1] + dv[1])
                 if nb in reach:

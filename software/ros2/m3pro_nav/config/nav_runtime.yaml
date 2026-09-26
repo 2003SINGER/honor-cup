@@ -1,0 +1,53 @@
+# nav_runtime.yaml —— 正式运行配置
+#
+# 分层约定:
+#   已实测冻结的硬件事实 (topic 名 / 帧名 / 雷达安装) 直接填值;
+#   需现场标定/审查的项填 __CALIBRATE__ 或 __MEASURE__ 占位 ——
+#   dry_run 允许带占位运行; 正式运行 (dry_run:=false) 遇占位即拒绝启动。
+#   雷达可信遮罩等感知参数先用仿真默认值跑通, 现场用 scan_debug 工作台
+#   采数后人工修订 —— 这正是 field_data 回来后 LLM 分析的对象。
+
+ros:
+  scan_topic: /scan_multi          # 已实测: laser_driver.launch.py 拉起
+  odom_topic: /odom_raw            # 已实测
+  imu_topic: /imu/data_raw         # 已实测
+  rgb_topic: /rgb                  # 已实测
+
+frames:
+  odom_frame: __MEASURE__          # 现场 driver_probe 核对后填 (如 odom)
+  base_frame: __MEASURE__          # (如 base_link)
+  laser_frame: __MEASURE__         # scan 消息 header.frame_id
+
+laser_extrinsic:
+  source: tf                       # tf | yaml; 本地有安装资料 → tf 优先
+  # source: yaml 时使用 (UNCALIBRATED 占位 = 全体 ABSTAIN):
+  x: __CALIBRATE__
+  y: __CALIBRATE__
+  yaw: __CALIBRATE__
+
+anchor:                            # 人工摆车: 车中心所在格 + 车头朝向
+  entry_x: 0
+  entry_y: 0
+  cell_x: 0
+  cell_y: 0
+  heading: N
+  order: LFR
+
+perception:                        # —— 现场待审参数 (scan_debug 工作台) ——
+  dphi_deg: 0.30                   # 入射角噪声模型 (rad·deg)
+  gate: 0.06                       # 观测误差门 (m)
+  rng: 0.02                        # 距离噪声底 (m)
+  confirm_near: 0.6                # 近场置信增强距离 (m)
+  # trusted_forward_m: __CALIBRATE__   # 可信遮罩 (实装 trusted mask 时启用)
+  # unknown_margin_m: __CALIBRATE__
+
+control:
+  a_acc: 1.0                       # 保守初值; 阶跃标定后修订
+  a_dec: 1.0
+  # kp_pos / kp_yaw: MotionRuntimeCore 默认 (PositionController);
+  # 阶跃实验 (control_probe / commission) 后修订
+
+safety:
+  max_feedback_age_s: 0.5          # 反馈新鲜度看门狗
+  # 0.03m 调试距离 / 速度硬上限 / cmd_vel 归属检查为 commissioning 硬安全,
+  # 有意不参数化 (见 control_probe / motion_runtime_node)

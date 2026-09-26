@@ -108,13 +108,12 @@ def test_frame_projector_composite_rotation():
     anchor = ManualMazeAnchor((0, 0), 'E', Pose2D(5.0, -1.0, 0.2))
     ray = _world_hit(ext, odom_pose, anchor, 0.5, 1.2)
     total = 0.3 + 0.2 + anchor.transform.rotation
+    # 逐 ray 方向 = 全链旋转角 + 该 ray 自身激光角 (非旋转轴!)
     assert (ray.dir_x, ray.dir_y) == pytest.approx(
-        (math.cos(total), math.sin(total)))
-    # hit = origin + R(total)·(1.2·(cos0.5, sin0.5))
-    lx, ly = 1.2 * math.cos(0.5), 1.2 * math.sin(0.5)
-    c, s = math.cos(total), math.sin(total)
+        (math.cos(total + 0.5), math.sin(total + 0.5)))
+    # hit = origin + range · 方向
     assert (ray.hx, ray.hy) == pytest.approx(
-        (ray.ox + c * lx - s * ly, ray.oy + s * lx + c * ly))
+        (ray.ox + ray.dir_x * 1.2, ray.oy + ray.dir_y * 1.2))
 
 
 # =========== 验收 4: ManualMazeAnchor 一次性 + 跟随 odom ===========

@@ -12,7 +12,8 @@ setup(
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/launch', ['launch/m3pro.launch.py',
                                                'launch/scan_debug.launch.py']),
-        ('share/' + package_name + '/config', ['config/scan_debug.rviz']),
+        ('share/' + package_name + '/config', ['config/scan_debug.rviz',
+                                               'config/nav_runtime.yaml']),
     ],
     install_requires=['setuptools'],
     entry_points={
@@ -21,6 +22,7 @@ setup(
             'control_probe = m3pro_nav.control_probe:main',
             'motion_runtime = m3pro_nav.motion_runtime_node:main',
             'scan_debug = m3pro_nav.scan_debug_node:main',
+            'nav_runtime = m3pro_nav.nav_runtime_node:main',
         ],
     },
 )

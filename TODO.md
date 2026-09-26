@@ -186,3 +186,33 @@ d_unknown 信息视界速度上限、真实抓取链、下位参数标定。
   节点只读+可配置+端到端落盘）; summary CLI 合成 session 冒烟通过
 - 未做（有意）: colcon build 需在车端/ROS 环境执行（本机无 ROS）;
   TrustPolicy 阈值标定、TrustedEdgeObservation 接 EdgeMap 属下一轮
+
+## 真实闭环 runtime（2026-09-26, codex/scan-debug-workbench 续）
+
+执行层与算法核心零语义改动，本轮把"眼睛→脑子→神经→腿"接成同一循环：
+- `observation_adapter.py`（纯 Python）: WorldRay[] → StreamNav.observe
+  的 hits/opens —— 与仿真 sense_from 语义对齐（dist=轴向垂距, alpha=
+  真实入射角）; 同边同帧多 ray 保最小入射角（正对测量不被掠射覆盖）;
+  逐边单票; 无回波射线只出 free-path OPEN 证据
+- `nav_runtime.py`（纯 Python 协调器）: 事件驱动核心（on_odom 事件桥/
+  on_scan 观测/planner_tick 编链-延长-返航/control_tick）; cursor+
+  planned_cells 一致性校验; 返航链补终端 STOP 契约; 任务完成后才装
+  返航（链到位再装, 延长分支加 done 守卫）; evidence 快照喂 LLM
+- `nav_runtime_node.py`（薄 ROS）: subscriptions+timers 事件驱动（无
+  while 串行）; dry_run 默认（完整计算但零 /cmd_vel publisher）;
+  UNCALIBRATED 占位 + 实跑 → fail closed; /cmd_vel 归属 preflight;
+  evidence 目录（events.jsonl/runtime.csv/config/git SHA）
+- `config/nav_runtime.yaml`: 冻结硬件事实（/scan_multi 等已实测 topic）
+  + __MEASURE__/__CALIBRATE__ 占位 + 感知参数（gate/dphi/rng/confirm_near
+  = 仿真默认, 现场用 scan_debug 工作台数据人工修订）
+- 连带修复三个真 bug: ① FrameProjector 全部 ray 存了同一方向 (c,s)
+  → 逐 ray 方向; ② open_edges_along 端点浮点噪声把"打在墙上"当穿越
+  → 给有墙的边投 OPEN 票（端点容差 1e-6）; ③ ARC 前衔接 v_end=v_arc
+  无条件覆盖死路折返段 v_max=GRAB_V → 非法速度界（min(v_arc, v_max),
+  motion_planner + action_horizon 两处; 仿真 executor 不校验所以从未暴露）
+- **闭环契约测试**: ray-cast 合成雷达（几何真实: 360°/无语义捷径）+
+  完美 plant + 帧变换（odom 平移+旋转 30°）→ 整链探索+返航 3 seeds
+  全过（avg ~75s, wrong_edges=0, mismatches=0）
+- 验证: 182 tests 全绿; 仿真 gate 回归 10+10 PASS（衔接修复零影响）
+- 未做（按 GPT 路线图）: 方块视觉 Adapter（RGB→BLOCK/EMPTY）、机械臂
+  collect transaction、真实标定（帧名/外参/感知参数——到场用工作台采数）

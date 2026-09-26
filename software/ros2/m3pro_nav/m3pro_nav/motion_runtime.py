@@ -136,6 +136,11 @@ class MotionRuntimeCore:
         return self._fault_reason
 
     @property
+    def has_feedback(self):
+        """是否已有实测反馈 (load_plan 的 odom 锚点前提)."""
+        return self._last_feedback_time is not None
+
+    @property
     def plan_tail(self):
         """当前计划 (含排队 suffix) 的几何尾点; 无计划 → None."""
         chain = self._active_chain()
@@ -184,8 +189,12 @@ class MotionRuntimeCore:
 
     # ---- 计划生命周期 ----
 
-    def load_plan(self, primitives):
-        """装载完整计划. 仅 IDLE/FINISHED + ARMED; 需要已有实测反馈作锚点."""
+    def load_plan(self, primitives, planner_yaw=None):
+        """装载完整计划. 仅 IDLE/FINISHED + ARMED; 需要已有实测反馈作锚点.
+
+        planner_yaw: 计划坐标系 (planner frame) 的底盘朝向参考. None →
+        沿用实测 odom yaw (规划系与 odom 对齐的探针场景); maze 帧计划
+        (NavRuntime) 必须显式传 maze 帧朝向, 否则帧变换会差一个锚定角."""
         if self._state not in (RuntimeState.IDLE, RuntimeState.FINISHED):
             raise RuntimeError(
                 f'load_plan requires IDLE/FINISHED, current={self._state.value}')
@@ -195,13 +204,25 @@ class MotionRuntimeCore:
             raise ValueError('a measured feedback sample is required before '
                              'load_plan (anchor for odom frame)')
         chain = _validate_chain(primitives)
-        follower = self._build_follower(chain, self._last_pose)
+        follower = self._build_follower(chain, self._last_pose,
+                                        planner_yaw=planner_yaw)
         self._follower = follower
         self._queued_suffix = None
         self._plan_started_at = None       # 由下一次 update 的 tick_time 锚定
         self._state = (RuntimeState.HOLDING
                        if follower.primitives[0].kind == 'STOP'
                        else RuntimeState.TRACKING)
+
+    def tail_wait_stop(self):
+        """当前计划尾部若是 WAIT STOP → (start_pose(maze/planner 帧), cell);
+        否则 None. NavRuntime 用它决定何时延长 horizon / 从哪续编."""
+        chain = self._active_chain()
+        if not chain:
+            return None
+        last = chain[-1]
+        if last.kind == 'STOP' and last.meta.get('wait') is not None:
+            return (last.start_pose.x, last.start_pose.y), last.meta['wait']
+        return None
 
     def append_suffix(self, primitives):
         """追加未来 suffix. 只影响未开始部分; 活动 primitive 永不重编;
@@ -289,7 +310,7 @@ class MotionRuntimeCore:
                        if suffix[0].kind == 'STOP'
                        else RuntimeState.TRACKING)
 
-    def _build_follower(self, chain, odom_start):
+    def _build_follower(self, chain, odom_start, planner_yaw=None):
         first = chain[0]
         if first.kind == 'STRAIGHT':
             start_xy = first.p0
@@ -299,9 +320,11 @@ class MotionRuntimeCore:
                         first.p0[1] + r * math.sin(first.yaw0))
         else:
             start_xy = (first.start_pose.x, first.start_pose.y)
-        # 规划系与 odom 对齐 (帧变换恒等), 底盘朝向参考 = 实测 yaw:
-        # 编译链的 start_pose.yaw 是几何占位符, 不承载物理朝向
-        planner_start = Pose2D(start_xy[0], start_xy[1], odom_start.yaw)
+        # 底盘朝向参考: 显式 planner_yaw 优先 (maze 帧计划); 否则假设
+        # 规划系与 odom 对齐, 取实测 yaw (探针场景). 编译链的 start_pose.yaw
+        # 是几何占位符, 不承载物理朝向.
+        yaw_ref = odom_start.yaw if planner_yaw is None else float(planner_yaw)
+        planner_start = Pose2D(start_xy[0], start_xy[1], yaw_ref)
         return FeedbackTrajectoryFollower(
             chain, planner_start=planner_start, odom_start=odom_start,
             a_acc=self._a_acc, a_dec=self._a_dec, controller=self._controller,

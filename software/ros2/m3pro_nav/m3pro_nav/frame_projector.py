@@ -113,13 +113,12 @@ class FrameProjector:
                                      c, s, math.nan, math.nan, math.nan,
                                      ray.invalid_reason))
                 continue
-            # laser frame 内的 hit 点
-            lx = ray.range * math.cos(ray.angle)
-            ly = ray.range * math.sin(ray.angle)
-            # laser→base→odom→maze 旋转 + 平移
-            hx = origin.x + c * lx - s * ly
-            hy = origin.y + s * lx + c * ly
-            rays.append(WorldRay(ray.index, origin.x, origin.y, c, s,
+            # laser frame 内的 hit 点 + 逐 ray 方向 (旋转到 maze frame)
+            ca, sa = math.cos(ray.angle), math.sin(ray.angle)
+            dx, dy = c * ca - s * sa, s * ca + c * sa
+            hx = origin.x + dx * ray.range
+            hy = origin.y + dy * ray.range
+            rays.append(WorldRay(ray.index, origin.x, origin.y, dx, dy,
                                  hx, hy, ray.range, None))
         return tuple(rays)
 

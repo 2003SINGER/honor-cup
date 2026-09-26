@@ -262,9 +262,10 @@ class MotionPlanner:
             yaw0=cur.yaw, yaw1=cur.yaw,
             length=self.exit_len, v_max=0.6, v_end=0.6,
             meta={'route_exit': True}))
-        # 衔接后处理: ARC 前的直线段 v_end = v_arc (速度模长连续)
+        # 衔接后处理: ARC 前的直线段 v_end = min(v_arc, v_max)
+        # (死路折返段 v_max=GRAB_V < v_arc: 衔接速度受段上限约束, ARC 内自行加速)
         for i in range(len(prims) - 1):
             if prims[i + 1].kind == 'ARC' and prims[i].kind == 'STRAIGHT':
-                prims[i].v_end = self.v_arc
+                prims[i].v_end = min(self.v_arc, prims[i].v_max)
         validate_geometry(prims, cursor=cursor)
         return prims

@@ -84,6 +84,6 @@ class ActionHorizon:
 
         for i in range(len(prims) - 1):
             if prims[i + 1].kind == 'ARC' and prims[i].kind == 'STRAIGHT':
-                prims[i].v_end = planner.v_arc
+                prims[i].v_end = min(planner.v_arc, prims[i].v_max)
         validate_geometry(prims, cursor=(prev, cell))
         return prims, (prev, cell), seq, plan_state

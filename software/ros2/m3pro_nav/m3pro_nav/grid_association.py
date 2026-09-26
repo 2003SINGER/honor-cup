@@ -28,6 +28,8 @@ DEFAULT_CORNER_GUARD = 0.05      # 投影点离格角小于此 → NEAR_CORNER
 
 UNIQUE, AMBIGUOUS, NONE = 'UNIQUE', 'AMBIGUOUS', 'NONE'
 
+_CROSS_TOL = 1e-6                # 端点"恰在线上"容差 (浮点噪声远小于此)
+
 
 def edge_id_for_line(orientation, line_k, seg_j):
     """canonical line (orientation, k, j) → EdgeMap 同构 canonical edge key.
@@ -154,7 +156,10 @@ class GridAssociation:
     def open_edges_along(self, ray: WorldRay):
         """origin→hit 穿过的 canonical edges (hit 前的 free 空间证据).
 
-        hit 之后不做推理; 无效 ray 不产生任何证据."""
+        hit 之后不做推理; 无效 ray 不产生任何证据.
+        端点容差: 迷宫墙面恰在 canonical line 上, 正对命中时 hit 浮点噪声
+        可能落在线两侧 ±1e-16 —— 必须视为"打在线上"而非穿越 (否则会给
+        有墙的边投 OPEN 票)。origin 恰在线上 (边界停靠) 同理不算穿越。"""
         if not ray.valid:
             return ()
         edges = []
@@ -165,7 +170,9 @@ class GridAssociation:
                     a, b = ray.ox - line, ray.hx - line
                 else:
                     a, b = ray.oy - line, ray.hy - line
-                if a == b or not (a * b < 0):
+                if abs(a) < _CROSS_TOL or abs(b) < _CROSS_TOL:
+                    continue                   # 端点恰在线上: 打在墙上, 非穿越
+                if a * b >= 0:
                     continue                   # 未跨越该线
                 t = -a / (b - a)
                 cx = ray.ox + t * (ray.hx - ray.ox)

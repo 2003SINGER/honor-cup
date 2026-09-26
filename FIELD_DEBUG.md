@@ -110,3 +110,45 @@ TrustPolicy, 那是下一轮的事。
 - `diagnostic_only=true` 恒开: 一条观测都不会写 EdgeMap;
 - 无外参 → 全体 NO_TRANSFORM ABSTAIN, 绝不猜雷达在车中心;
 - 网格关联 UNIQUE/AMBIGUOUS/NONE, 宁可弃权绝不吸错格子。
+
+## 8. 正式导航 runtime（nav_runtime, 2026-09-26）
+
+整链已接通（事件驱动，非 while 串行）：
+
+```
+/scan_multi ─→ on_scan ─→ RealObservationAdapter ─→ EdgeMap
+/odom_raw   ─→ on_odom ─→ 事件桥(GridEventDetector) + 反馈
+(50Hz timer)  ─→ MotionRuntimeCore ─→ /cmd_vel (仅实跑模式)
+(10Hz timer)  ─→ ActionHorizon 编链/延长/返航
+```
+
+**离线闭环已验证**：合成 ray-cast 雷达 + 完美 plant 的契约测试
+（`test_nav_runtime.py` 3 seeds）全程跑通探索→返航，wrong_edges=0、
+拓扑零失配。实车语义尚未验证。
+
+### dry-run（第一步，安全）
+
+```bash
+# 车摆进格 (格中心, 车头对 N), source 工作区后:
+ros2 run m3pro_nav nav_runtime --ros-args \
+    -p config_path:=<安装路径>/config/nav_runtime.yaml \
+    -p dry_run:=true \
+    -p run_label:=first_dryrun
+```
+
+dry-run 完整跑传感器→地图→规划→轨迹→控制计算，但**不创建
+/cmd_vel publisher**。看 evidence 目录（`field_data/run_*_dryrun/`）：
+`events.jsonl`（anchor/plan/extend/crossed/mismatch）、`runtime.csv`
+（每控制周期的指令与误差）、`summary.json`。
+
+### 实跑（配置齐全后）
+
+config 里所有 `__MEASURE__`/`__CALIBRATE__` 填实测值（帧名先用
+driver_probe 核对），然后 `dry_run:=false`。preflight 任一不符即拒绝：
+帧名、外参可用、配置占位、/cmd_vel 归属。
+
+### evidence 喂 LLM
+
+一次 run 一个目录（bag 可另录），把 `events.jsonl` + `runtime.csv` +
+`config.yaml` + `git.txt` + 现象描述直接交给强模型分析
+（"为什么第 63s 出现 mismatch"这类问题）。

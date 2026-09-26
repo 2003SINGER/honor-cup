@@ -16,6 +16,13 @@
 相位（STOP-only = HOLDING，非弧长轨迹例外）、STOP-only/ARC 采样/settle
 完成语义测试覆盖。ROS 侧由 odometry_adapter + control_probe 承接
 （odom→Twist 受控发布），rclpy 不进导航核心。129 tests 全绿。
+`codex/feedback-follower`（d68156a）再补 ROS 运动执行骨架：
+`MotionRuntimeCore`（IDLE/TRACKING/HOLDING/FINISHED/FAULT 状态机 +
+DISARMED/ARMED/FAULT 安全分层 + 反馈新鲜度看门狗 + append_suffix 只改未来、
+非法连续性立即拒绝）与 `motion_runtime` 薄 ROS 节点（/odom_raw→FeedbackSample
+→core→/cmd_vel，默认 DISARMED，cmd_vel 发布者冲突拒绝 arm，关闭连发零指令）。
+Gate A-O 确定性测试 140 项全绿。ActionHorizon 尚未真正接实时传感——
+正式比赛仍需雷达/摄像头前端接入后经 load_plan/append_suffix 注入。
 尚未完成（需实车/实感数据）：雷达 Trusted Mask、墙吸附定位校正、
 d_unknown 信息视界速度上限、真实抓取链、下位参数标定。
 `a1d43aa` / `tier-a-core-baseline` 是旧运动方案的 1000+1000 seed 回归参照；

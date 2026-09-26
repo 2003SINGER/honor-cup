@@ -343,3 +343,15 @@ def test_nav_node_preflight_gates_real_run():
     assert 'scan frame mismatch in real run' in src
     # ARMED 期间周期复查归属
     assert 'publisher conflict' in src
+
+
+def test_tf_listener_self_spins_before_executor():
+    """TF listener 必须显式 spin_thread=True: constructor 阶段 executor 尚未
+    spin, 默认 listener 不处理 /tf(_static) → TF 存在也假 missing
+    (GPT 审查: 启动时序修复)。nav_runtime 与 scan_debug 两处都要覆盖。"""
+    base = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        '..', 'ros2', 'm3pro_nav', 'm3pro_nav')
+    for name in ('nav_runtime_node.py', 'scan_debug_node.py'):
+        src = open(os.path.join(base, name)).read()
+        assert 'TransformListener(buffer, self, spin_thread=True)' in src, \
+            f'{name}: TF listener must self-spin (executor not running yet)'

@@ -120,7 +120,9 @@ class ScanDebugNode(Node):
             return None
         try:
             buffer = Buffer()
-            TransformListener(buffer, self)
+            # spin_thread=True: constructor 阶段 executor 尚未 spin, listener
+            # 必须自带线程收 /tf(_static), 否则 TF 存在也会假 missing。
+            TransformListener(buffer, self, spin_thread=True)
             from rclpy.duration import Duration
             from time import sleep
             for _ in range(50):                     # 等 TF 就绪 (≤5s)

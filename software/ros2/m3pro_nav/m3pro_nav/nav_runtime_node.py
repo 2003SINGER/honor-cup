@@ -184,7 +184,10 @@ class NavRuntimeNode(Node):
             from time import sleep
             import math as _m
             buffer = Buffer()
-            TransformListener(buffer, self)
+            # spin_thread=True 必须显式开启: constructor 阶段 executor 尚未
+            # spin, 默认 (spin_thread=False) 的 listener 不会处理 /tf(_static),
+            # 会导致 TF 实际存在却永远等不到 → 假 "extrinsic missing"。
+            TransformListener(buffer, self, spin_thread=True)
             for _ in range(50):
                 if buffer.can_transform(base, laser, rclpy.time.Time()):
                     break

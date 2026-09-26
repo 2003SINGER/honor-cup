@@ -32,6 +32,8 @@ from m3pro_nav.position_controller import PositionController
 
 CONTROL_PERIOD_S = 0.02
 DEFAULT_MAX_FEEDBACK_AGE_S = 0.5
+OWNERSHIP_CHECK_INTERVAL_TICKS = 25     # ARMED 后每 ~0.5s 复查 /cmd_vel 归属
+OWNERSHIP_CHECK_INTERVAL_TICKS = 25     # ARMED 后每 ~0.5s 复查 /cmd_vel 归属
 
 
 class MotionRuntimeNode(Node):
@@ -62,12 +64,21 @@ class MotionRuntimeNode(Node):
         self._latest_odom = None          # (stamp_s, OdometryState)
         self._armed_requested = bool(self.get_parameter('arm').value)
         self._ownership_checked = False
+        self._tick_count = 0
         self._shutting_down = False
 
     # ---- ROS 回调: 只做消息适配, 无控制数学 ----
 
     def _on_odom(self, msg):
-        state = odometry_from_msg(msg)
+        try:
+            state = odometry_from_msg(
+                msg,
+                expected_odom_frame=self._expected_odom_frame,
+                expected_base_frame=self._expected_base_frame)
+        except ValueError as exc:
+            # 帧名不符/字段非法: 丢弃本帧并告警, 不崩溃 (新鲜度由看门狗管)
+            self.get_logger().warn(f'odometry rejected: {exc}')
+            return
         stamp = float(msg.header.stamp.sec) + 1e-9 * float(msg.header.stamp.nanosec)
         self._latest_odom = (stamp, state)
 
@@ -89,16 +100,30 @@ class MotionRuntimeNode(Node):
         self.core.arm()
         self.get_logger().info('motion runtime ARMED')
 
+    def _check_ownership_while_armed(self):
+        """ARMED 期间周期复查: 出现其他 /cmd_vel 发布者 → FAULT (零指令).
+        (手柄/调试节点中途启动也必须被发现, 不只在 arm 前查一次)"""
+        if self.core.safety.value != 'ARMED':
+            return
+        publishers = self.count_publishers('/cmd_vel')
+        if publishers > 1:
+            self.get_logger().error(
+                f'/cmd_vel now has {publishers} publishers; FAULT')
+            self.core.report_fault('/cmd_vel publisher conflict while ARMED')
+
     # ---- 控制周期 ----
 
     def _tick(self):
         now = self.get_clock().now().nanoseconds * 1e-9
         self._try_arm()
+        self._tick_count += 1
+        if self._tick_count % OWNERSHIP_CHECK_INTERVAL_TICKS == 0:
+            self._check_ownership_while_armed()
         feedback = None
         if self._latest_odom is not None:
             stamp, state = self._latest_odom
-            feedback = FeedbackSample(stamp, state.pose, state.vx, state.vy,
-                                      state.wz)
+            feedback = FeedbackSample(stamp, state.pose, state.vx_world,
+                                      state.vy_world, state.wz)
         try:
             out = self.core.update(now, feedback)
         except Exception as exc:                      # 任何异常 → 零指令

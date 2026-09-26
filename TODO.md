@@ -120,3 +120,34 @@ d_unknown 信息视界速度上限、真实抓取链、下位参数标定。
 - 通用平面坐标变换已接入短直线试验，并用固定四分之一圆参考做纯逻辑检查；
   `REVERSE` 的构造也拒绝斜线。完整 Action Horizon 到 ROS 的运行时、
   实际迷宫/odom 对准及闭环实车结果仍未验收。
+
+## 执行层审查修复（2026-09-26, GPT 审查单 P0×3 + P1×4 全部落实）
+
+- P0 `motion_runtime_node._on_odom` 改传完整 `odometry_from_msg` 签名
+  （此前第一帧 /odom_raw 即 TypeError）；坏帧丢弃告警不崩溃；新增
+  rclpy-stub 注入的 callback 链测试（无需 ROS 环境）。
+- P0 STOP 语义按 meta 分流：`meta['wait']` = WAIT STOP 永久 HOLDING
+  （只有 suffix/cancel/fault 离开，绝不因 settle 变 FINISHED）；无 wait
+  的终端 STOP 才 settle → FINISHED。
+- P0 HOLDING 为位置/yaw 保持（v_ff=0 + 位置环，漂移拉回），不再是
+  无条件全零；零误差零速度时 P+D 输出恰为零。
+- P1 REVERSE 定稿为编译期宏：KINDS = STRAIGHT/ARC/STOP，死路折返由
+  planner 编译为两段 STRAIGHT；validate/speed_profile/测试全部对齐。
+- P1 修复两处假绿断言（曲率 `abs(abs(c)-5)`、REVERSE 去掉 `or True`
+  改为真实去程/回程单调性检查）。
+- P1 ARMED 期间每 ~0.5s 复查 /cmd_vel 归属，出现其他发布者 →
+  FAULT + 零指令（新增 `MotionRuntimeCore.report_fault` 公共入口）。
+- P1 append_suffix 双路径：巡航中 suffix 到达且终端 WAIT STOP 尚未
+  影响活动段速度计划（未制动、活动段为 STRAIGHT、其后仅剩 WAIT STOP、
+  切向连续、剖面可行）→ 保守 safe-extension 无缝拼接不停车
+  （`follower.try_splice`：截断活动段 + 同帧变换 + elapsed 连续）；
+  其余情形排队，刹停后续接（与仿真端语义一致）。排队中的新 suffix
+  改为连续性校验后追加，不再静默覆盖。
+- 连带修复：`_tick` 误用不存在的 `state.vx`（应为 vx_world）；
+  `_build_follower`/`_apply_suffix` 把 planner_start.yaw 写死 0 导致
+  整个计划绕锚点旋转实测 yaw 角 —— 改为规划系与 odom 对齐
+  （yaw_ref = 实测底盘朝向），HOLD 续接沿用原帧变换不重锚。
+- 验证：150 项测试全绿；仿真回归 10+10 seeds GATE PASS（avg 85.3s /
+  104.8s），确认宏化 REVERSE 零影响。rolling horizon 的"跨越多个
+  未开始段的无停车延长"仍属保守路径（排队刹停），未声称完整高速
+  滚动优化。

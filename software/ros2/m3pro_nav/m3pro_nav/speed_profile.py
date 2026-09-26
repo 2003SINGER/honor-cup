@@ -13,7 +13,7 @@ _EPS = 1e-9
 
 
 def _tangent(primitive, *, at_end=False):
-    if primitive.kind in ('STRAIGHT', 'REVERSE'):
+    if primitive.kind == 'STRAIGHT':
         dx = primitive.p1[0] - primitive.p0[0]
         dy = primitive.p1[1] - primitive.p0[1]
         length = math.hypot(dx, dy)
@@ -73,7 +73,7 @@ class SpeedProfile:
                     raise ValueError("STOP duration must be finite and nonnegative")
                 ceilings[index] = ceilings[index + 1] = 0.0
                 continue
-            if primitive.kind not in ('STRAIGHT', 'ARC', 'REVERSE'):
+            if primitive.kind not in ('STRAIGHT', 'ARC'):
                 raise ValueError(f"unsupported primitive kind: {primitive.kind}")
             length, vmax, vend = primitive.length, primitive.v_max, primitive.v_end
             if not all(math.isfinite(x) for x in (length, vmax, vend)):

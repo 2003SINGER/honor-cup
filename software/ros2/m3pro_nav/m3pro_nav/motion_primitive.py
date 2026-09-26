@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """MotionPrimitive —— 运动基元契约 (R3 规范 §6; 麦轮平移模型).
 
-KINDS: STRAIGHT / ARC / REVERSE / STOP
+KINDS: STRAIGHT / ARC / STOP
   STRAIGHT  直线平移 (p0→p1), body yaw 不变
   ARC       四分之一圆弧平移: p0 字段存圆心, yaw0 存起始极角, yaw1 存带符号角跨度,
             meta['r'] 存半径; 速度矢量 = 切向, 速度模长受加减速及 v_end 约束
-  REVERSE   沿来路反向平移 (死路折返), body yaw 不变 (planner 编译为两段 STRAIGHT)
-  STOP      v=0 等待 (CellMark 未完成时唯一合法行为)
+  STOP      v=0 等待; 两种语义 (由 meta 区分):
+            - meta['wait']    WAIT STOP: 未知边界等待, 永久 HOLD 直到 suffix
+            - 无 meta['wait'] 终端 STOP: settle 后任务结束
+
+REVERSE 是编译期宏, 不是运行时 primitive: 死路折返 (dout == -din) 由
+MotionPlanner.template 编译为两段 STRAIGHT (入格中心 → 原路退出), 车体 yaw
+全程不变. 运行时链中永远不会出现 kind='REVERSE'.
 
 铁律: primitive 只修改连续 Pose 的位置, 绝对禁止:
   修改 cell / TraversalMap / yaw / 调用导航 —— 离散状态只来自 GridEventDetector 几何事件."""
@@ -15,13 +20,13 @@ from dataclasses import dataclass, field
 import math
 from .pose import Pose2D
 
-KINDS = ('STRAIGHT', 'ARC', 'REVERSE', 'STOP')
+KINDS = ('STRAIGHT', 'ARC', 'STOP')
 ARC_RADIUS = 0.2
 GEOMETRY_EPS = 1e-9
 
 
 def _validate_axis_aligned_segment(kind, p0, p1, length):
-    """Validate endpoint geometry shared by STRAIGHT and REVERSE segments."""
+    """Validate endpoint geometry of a STRAIGHT segment."""
     if p0 is None or p1 is None or len(p0) != 2 or len(p1) != 2:
         raise ValueError(f"{kind} requires 2D p0 and p1 endpoints")
     if not all(math.isfinite(v) for v in (*p0, *p1)):
@@ -40,7 +45,7 @@ def _validate_axis_aligned_segment(kind, p0, p1, length):
 
 @dataclass
 class MotionPrimitive:
-    kind: str                          # STRAIGHT / ARC / REVERSE / STOP
+    kind: str                          # STRAIGHT / ARC / STOP (REVERSE 是编译期宏)
     start_pose: Pose2D                 # 起点位姿 (= 上一 primitive 终点, 链式连续)
     p0: tuple = None                   # 起点位置 (x, y); ARC: 圆心
     p1: tuple = None                   # 终点位置 (STRAIGHT)

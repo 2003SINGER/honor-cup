@@ -7,7 +7,7 @@
       din  = cell - prev
       dout = next - cell
       dout ==  din  → STRAIGHT   (入口边中点 → 出口边中点)
-      dout == -din  → REVERSE    (倒车穿回 prev, 不是 TURN180)
+      dout == -din  → REVERSE 宏 (编译为两段 STRAIGHT: 入中心→原路退出, 不是 TURN180)
       cross(din,dout) > 0 → LEFT_ARC   R = C/2 = 0.2m 四分之一圆
       cross(din,dout) < 0 → RIGHT_ARC
 

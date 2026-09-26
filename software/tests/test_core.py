@@ -552,6 +552,6 @@ def test_dependency_boundaries_are_structural():
                         isinstance(node.func.value, ast.Name) and
                         node.func.value.id == 'executor')
 
-    assert KINDS == ('STRAIGHT', 'ARC', 'REVERSE', 'STOP')
+    assert KINDS == ('STRAIGHT', 'ARC', 'STOP')   # REVERSE 是编译期宏 (两段 STRAIGHT)
     assert hasattr(MotionPlanner, 'template')
     assert not hasattr(MotionPlanner, 'compile_chain')  # no generic connector compiler

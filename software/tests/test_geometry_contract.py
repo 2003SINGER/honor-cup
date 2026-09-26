@@ -29,14 +29,20 @@ def test_straight_rejects_diagonal_motion():
         _straight((0.1, 0.2), (0.3, 0.4))
 
 
-def test_reverse_rejects_diagonal_and_accepts_axis_aligned_motion():
-    with pytest.raises(ValueError, match='REVERSE must be axis aligned'):
-        MotionPrimitive('REVERSE', Pose2D(0.0, 0.0, 0.0),
-                        p0=(0.1, 0.2), p1=(0.3, 0.4), length=math.sqrt(0.08))
-
-    reverse = MotionPrimitive('REVERSE', Pose2D(0.4, 0.4, 0.0),
-                              p0=(0.4, 0.4), p1=(0.0, 0.4), length=0.4)
-    assert reverse.kind == 'REVERSE'
+def test_reverse_is_a_compile_time_macro_not_a_runtime_kind():
+    """GPT 定稿 (方案 B): REVERSE 是编译期宏 (死路折返 = 两段 STRAIGHT),
+    运行时链中不允许出现 kind='REVERSE'."""
+    with pytest.raises(ValueError, match='unknown motion primitive kind'):
+        MotionPrimitive('REVERSE', Pose2D(0.4, 0.4, 0.0),
+                        p0=(0.4, 0.4), p1=(0.0, 0.4), length=0.4)
+    # 死路折返由 planner.template 编译为轴对齐 STRAIGHT 对
+    planner = MotionPlanner()
+    pose = Pose2D(0.2, 0.2, 0.37)
+    root, pt, _ = planner.template(None, (0, 0), (1, 0), pose)
+    retreat, pt2, _ = planner.template((0, 0), (1, 0), (0, 0),
+                                       Pose2D(*pt, 0.37))
+    assert all(p.kind == 'STRAIGHT' for p in root + retreat)
+    assert all(p.length > 0 for p in retreat)
 
 
 def test_primitive_rejects_zero_distance_and_wrong_path_length():

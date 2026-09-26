@@ -175,6 +175,13 @@ class MotionRuntimeCore:
         self._fault_reason = reason
         return self._zero_output()
 
+    def report_fault(self, reason):
+        """外部安全事件入口 (如 ARMED 期间 /cmd_vel 出现其他发布者):
+        FAULT + 零指令, 不可自动恢复, 必须 reset() 后重新 arm()."""
+        if self._safety != SafetyState.FAULT:
+            return self._fault(reason or 'external fault reported')
+        return self._zero_output()
+
     # ---- 计划生命周期 ----
 
     def load_plan(self, primitives):
@@ -198,14 +205,21 @@ class MotionRuntimeCore:
 
     def append_suffix(self, primitives):
         """追加未来 suffix. 只影响未开始部分; 活动 primitive 永不重编;
-        必须与当前计划尾部几何连续, 否则立即拒绝 (Gate I)."""
+        必须与当前计划尾部几何连续, 否则立即拒绝 (Gate I).
+
+        TRACKING 时的两种路径 (GPT P1-7 定稿):
+          safe-extension  终端 WAIT STOP 尚未影响活动 primitive 速度计划 →
+                          删 STOP 无缝续 suffix, 不停车 (follower.try_splice);
+          保守排队        其余情形 → 刹到计划尾再续 (与仿真端语义一致)."""
         if self._state not in (RuntimeState.TRACKING, RuntimeState.HOLDING):
             raise RuntimeError(
                 f'append_suffix requires TRACKING/HOLDING, current={self._state.value}')
         suffix = _validate_chain(primitives)
+        if suffix[-1].kind != 'STOP':
+            raise ValueError('suffix must end with STOP')
         tail = self.plan_tail
         first = suffix[0]
-        if first.kind in ('STRAIGHT', 'REVERSE'):
+        if first.kind == 'STRAIGHT':
             suffix_start = first.p0
         elif first.kind == 'ARC':
             r = first.meta['r']
@@ -219,46 +233,75 @@ class MotionRuntimeCore:
                 f'tail={tail} suffix_start={suffix_start}')
         if self._state == RuntimeState.HOLDING:
             self._apply_suffix(suffix)
+            return
+        # TRACKING: 先尝试保守 safe-extension (删尚未影响速度计划的 WAIT STOP)
+        if self._queued_suffix is None:
+            spliced = self._follower.try_splice(suffix)
+            if spliced is not None:
+                self._follower = spliced       # elapsed 时钟连续, 不重锚
+                return
+            self._queued_suffix = suffix       # 排队: 计划耗尽进入 HOLDING 时应用
         else:
-            self._queued_suffix = suffix      # 排队: 计划耗尽进入 HOLDING 时应用
+            # 已有排队 suffix: 新 suffix 须与其尾连续, 追加到队尾
+            queued = self._queued_suffix
+            qtail = primitive_end(queued[-1])
+            if math.hypot(suffix_start[0] - qtail[0],
+                          suffix_start[1] - qtail[1]) > GEOMETRY_EPS:
+                raise ValueError(
+                    f'suffix is not continuous with queued tail: '
+                    f'tail={qtail} suffix_start={suffix_start}')
+            self._queued_suffix = queued + suffix
 
     def _apply_suffix(self, suffix):
-        """从 HOLDING 位形无缝续接 suffix: 新 follower 以当前实测位姿为锚."""
+        """从 HOLDING 位形无缝续接 suffix: 沿用原帧变换 (不重锚);
+        无原 follower (理论不可达) 时以实测位姿为锚."""
         first = suffix[0]
-        if first.kind in ('STRAIGHT', 'REVERSE'):
-            planner_start = Pose2D(first.p0[0], first.p0[1], 0.0)
+        if first.kind == 'STRAIGHT':
+            start_xy = first.p0
         elif first.kind == 'ARC':
             r = first.meta['r']
-            planner_start = Pose2D(
-                first.p0[0] + r * math.cos(first.yaw0),
-                first.p0[1] + r * math.sin(first.yaw0), 0.0)
+            start_xy = (first.p0[0] + r * math.cos(first.yaw0),
+                        first.p0[1] + r * math.sin(first.yaw0))
         else:
-            planner_start = Pose2D(first.start_pose.x, first.start_pose.y, 0.0)
-        self._follower = FeedbackTrajectoryFollower(
-            suffix, planner_start=planner_start, odom_start=self._last_pose,
-            a_acc=self._a_acc, a_dec=self._a_dec, controller=self._controller,
-            position_tolerance=self._position_tolerance,
-            yaw_tolerance=self._yaw_tolerance,
-            velocity_tolerance=self._velocity_tolerance,
-            yaw_rate_tolerance=self._yaw_rate_tolerance,
-            settle_time=self._settle_time,
-            expected_odom_frame=self._expected_odom_frame,
-            expected_base_frame=self._expected_base_frame)
+            start_xy = (first.start_pose.x, first.start_pose.y)
+        if self._follower is not None:
+            # 同一计划系内续接: 帧变换与 yaw_ref 必须与原 follower 一致
+            planner_start = Pose2D(start_xy[0], start_xy[1],
+                                   self._follower.yaw_ref)
+            self._follower = FeedbackTrajectoryFollower(
+                suffix, planner_start=planner_start,
+                odom_start=self._last_pose,
+                transform=self._follower.transform,
+                a_acc=self._a_acc, a_dec=self._a_dec,
+                controller=self._controller,
+                position_tolerance=self._position_tolerance,
+                yaw_tolerance=self._yaw_tolerance,
+                velocity_tolerance=self._velocity_tolerance,
+                yaw_rate_tolerance=self._yaw_rate_tolerance,
+                settle_time=self._settle_time,
+                expected_odom_frame=self._expected_odom_frame,
+                expected_base_frame=self._expected_base_frame)
+        else:
+            self._follower = self._build_follower(suffix, self._last_pose)
         self._plan_started_at = None          # 重置 elapsed 原点
         self._queued_suffix = None
-        self._state = RuntimeState.TRACKING
+        self._state = (RuntimeState.HOLDING
+                       if suffix[0].kind == 'STOP'
+                       else RuntimeState.TRACKING)
 
     def _build_follower(self, chain, odom_start):
         first = chain[0]
-        if first.kind in ('STRAIGHT', 'REVERSE'):
-            planner_start = Pose2D(first.p0[0], first.p0[1], 0.0)
+        if first.kind == 'STRAIGHT':
+            start_xy = first.p0
         elif first.kind == 'ARC':
             r = first.meta['r']
-            planner_start = Pose2D(
-                first.p0[0] + r * math.cos(first.yaw0),
-                first.p0[1] + r * math.sin(first.yaw0), 0.0)
+            start_xy = (first.p0[0] + r * math.cos(first.yaw0),
+                        first.p0[1] + r * math.sin(first.yaw0))
         else:
-            planner_start = Pose2D(first.start_pose.x, first.start_pose.y, 0.0)
+            start_xy = (first.start_pose.x, first.start_pose.y)
+        # 规划系与 odom 对齐 (帧变换恒等), 底盘朝向参考 = 实测 yaw:
+        # 编译链的 start_pose.yaw 是几何占位符, 不承载物理朝向
+        planner_start = Pose2D(start_xy[0], start_xy[1], odom_start.yaw)
         return FeedbackTrajectoryFollower(
             chain, planner_start=planner_start, odom_start=odom_start,
             a_acc=self._a_acc, a_dec=self._a_dec, controller=self._controller,

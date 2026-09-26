@@ -7,7 +7,8 @@
 
 `codex/template-topology-refactor` 已通过 Tier A 语义模拟重构验收；
 `codex/control-chain-integration` 在其上构建独立运动控制链与 ROS 驱动探针；
-当前 `codex/rolling-horizon-continuation` 继续修复运行中动作链延长。
+`codex/rolling-horizon-continuation` 修复运行中动作链延长；
+当前 `codex/ros-control-adapter` 准备只读观测与受门槛限制的位置环车端试验。
 `a1d43aa` / `tier-a-core-baseline` 是旧运动方案的 1000+1000 seed 回归参照；
 `8893956` 是引入拓扑游标与方块任务层、但随机 Gate 尚未恢复的 WIP。
 这些历史结果不能充当本分支验收。
@@ -49,10 +50,11 @@
 
 1. 在实车 ROS Humble 环境只读核对 `/cmd_vel`、`/odom_raw`、`/imu/data_raw`
    的类型、频率、时间戳、已烧录固件版本与其他 `/cmd_vel` 发布者；
-   `driver_probe` 入口已在本分支准备，但尚未在车端运行。
+   `driver_probe` 和 `control_probe` 尚未在车端运行。
 2. 在安全场地做小幅 `/cmd_vel` 阶跃并留 CSV，拟合轮速/里程计响应，
    量测固定模板的车体净空、侧移误差和定位误差；再替换控制模型中的
-   `UNCALIBRATED` 参数。之后将新位置环接入实际 Pose 来源与 `/cmd_vel`。
+   `UNCALIBRATED` 参数。利用 `control_probe` 核验原始里程计帧/速度方向、
+   位置环到 `/cmd_vel` 的闭环响应，然后接入正式动作链。
 3. 接入真实 Observation Adapter，实装连续雷达可信遮罩、边离散归属与
    已确认墙定位校正，严格防止新墙本帧自证。实装规范 §10 的信息视界
    速度上限，并由真实可观测距离测定其参数；不凭 Tier A 假设定数值。
@@ -89,3 +91,13 @@
 五项确定性接口门槛。真实雷达关联、闭环定位、实车车体净空、已烧录固件
 一致性、真实轮速响应和车端 ROS 运行尚未验收；模拟通过不等于机器人
 已能安全上场。
+
+## ROS 位置环适配检查点（2026-09-26）
+
+- 增加原始 `Odometry` 的有限值、四元数、时间戳和显式 frame 校验，并按
+  ROS 消息约定把车体系 twist 转到里程计世界系。
+- `control_probe` 默认只订阅并写 CSV；执行时必须显式给出实测 frame、
+  轴和不超过 0.03 m 的距离。控制周期检查反馈接收新鲜度及其他
+  `/cmd_vel` 发布者，约束输出幅值，试验结束后尝试连续发零命令 0.5 s。
+- 本机 116 项测试通过；ROS Humble/colcon 和实车运行未验证。车端连接当前
+  不可达，待同网后先进行只读核对，再决定小距离执行试验。

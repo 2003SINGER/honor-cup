@@ -2,7 +2,7 @@
 <package format="3">
   <name>m3pro_nav</name>
   <version>0.1.0</version>
-  <description>Read-only M3 Pro ROS driver probe with explicitly gated short motion steps</description>
+  <description>Read-only M3 Pro ROS probes with explicitly gated short motion trials</description>
   <maintainer email="jetson@todo.todo">jetson</maintainer>
   <license>MIT</license>
   <buildtool_depend>ament_python</buildtool_depend>

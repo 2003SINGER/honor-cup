@@ -70,6 +70,10 @@ LaserScan → 连续可信遮罩 → 边离散归属(ABSTAIN 兜底) → EdgeMap
 - ROS 包的失效 `decision` 启动项已替换为默认只读的 `driver_probe`，
   可记录 `/cmd_vel`、`/odom_raw`、`/imu/data_raw`；小幅阶跃须显式启用，
   尚未在车端运行。
+- 当前分支新增默认只读的 `control_probe`，可记录原始里程计和 IMU；
+  显式启用后才把现有速度时间表、轨迹参考与位置环接到 `/cmd_vel` 做
+  不超过 0.03 m 的直线试验。本机纯逻辑测试通过，车端 frame、速度方向、
+  话题频率和控制效果均待实测。
 - 本轮验收依照用户方案 §24：确定性 A–G → 随机 H（双模式各 100 seed，
   然后各 1000 seed）；规范 §13 的实车/感知 Gate 留待对应阶段。
 
@@ -89,6 +93,8 @@ software/ros2/m3pro_nav/m3pro_nav/   核心实现 (单一真相源)
   │                     速度时间表、世界系参考、车体系位置环输出
   ├─ control_chain.py / plant.py   多速率运动链、理想/下位环模型
   ├─ driver_probe.py      默认只读 ROS 接口/CSV 探针
+  ├─ odometry_adapter.py / control_probe.py
+  │                     原始里程计适配与默认只读的位置环 ROS 探针
   ├─ stream_nav.py      薄 coordinator: 图递推, BRANCH 局部 DFS, 任务剪枝
   ├─ mazemap.py        旧模拟器依赖，非当前地图真相
 software/sim/           runtime_v2 Tier A + motion_gate 五项控制机动

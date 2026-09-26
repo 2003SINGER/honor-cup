@@ -8,7 +8,16 @@
 `codex/template-topology-refactor` 已通过 Tier A 语义模拟重构验收；
 `codex/control-chain-integration` 在其上构建独立运动控制链与 ROS 驱动探针；
 `codex/rolling-horizon-continuation` 修复运行中动作链延长；
-当前 `codex/ros-control-adapter` 准备只读观测与受门槛限制的位置环车端试验。
+`codex/ros-control-adapter` 准备只读观测与受门槛限制的位置环车端试验；
+以上已全部合入 `main`（5d8f91f, 122 tests）。
+分支 `codex/feedback-follower`（233e5cd）补齐最后一层纯逻辑执行：
+`FeedbackTrajectoryFollower` —— 外部实测 OdometryState 驱动（无 plant.step、
+不自积分位姿）、odom↔planner 刚性帧锚定、显式 TRACKING/HOLDING/FINISHED
+相位（STOP-only = HOLDING，非弧长轨迹例外）、STOP-only/ARC 采样/settle
+完成语义测试覆盖。ROS 侧由 odometry_adapter + control_probe 承接
+（odom→Twist 受控发布），rclpy 不进导航核心。129 tests 全绿。
+尚未完成（需实车/实感数据）：雷达 Trusted Mask、墙吸附定位校正、
+d_unknown 信息视界速度上限、真实抓取链、下位参数标定。
 `a1d43aa` / `tier-a-core-baseline` 是旧运动方案的 1000+1000 seed 回归参照；
 `8893956` 是引入拓扑游标与方块任务层、但随机 Gate 尚未恢复的 WIP。
 这些历史结果不能充当本分支验收。

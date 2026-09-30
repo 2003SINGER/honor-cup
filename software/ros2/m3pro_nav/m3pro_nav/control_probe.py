@@ -63,6 +63,17 @@ WHEELS_UP_ODOM_SETTLE_TIMEOUT_S = 5.0
 WHEELS_UP_ODOM_SETTLE_DWELL_S = 0.25
 WHEELS_UP_ODOM_SETTLE_MIN_SAMPLES = 3
 WHEELS_UP_ODOM_DEFAULT_REFERENCE_SPEED_MPS = WHEELS_UP_MAX_SPEED_MPS
+GROUND_ODOM_MAX_DISTANCE_M = 0.4
+GROUND_ODOM_MAX_REFERENCE_SPEED_MPS = 0.20
+GROUND_ODOM_MAX_COMMAND_SPEED_MPS = 0.20
+GROUND_ODOM_DEFAULT_SPEED_MPS = 0.15
+GROUND_ODOM_DEFAULT_ACCEL_MPS2 = 0.20
+GROUND_ODOM_DEFAULT_DECEL_MPS2 = 0.20
+GROUND_ODOM_MAX_WALL_S = 12.0
+GROUND_ODOM_COMMAND_ALLOWANCE_M = 0.05
+GROUND_ODOM_MAX_OVERSHOOT_M = 0.08
+GROUND_ODOM_MAX_CROSS_TRACK_M = 0.05
+GROUND_ODOM_MAX_YAW_ERROR_RAD = 0.15
 
 
 def install_stop_signal_handlers(stop_requested, *, signal_module=signal):
@@ -231,10 +242,52 @@ class ProbeOptions:
     wheels_up_odom: bool = False
     wheels_up_odom_reference_speed: float | None = None
     wheels_up_odom_kd_vel: float | None = None
+    ground_odom_straight: bool = False
+    ground_reference_speed: float | None = None
+    ground_a_dec: float | None = None
+    ground_kp_pos: float | None = None
+    ground_kd_vel: float | None = None
 
 
 def validate_options(options: ProbeOptions) -> ProbeOptions:
     """Validate CLI constraints without importing ROS."""
+    if options.ground_odom_straight:
+        if options.execute or options.wheels_up or options.wheels_up_odom:
+            raise ValueError('--ground-odom-straight excludes other motion modes')
+        if (options.wheels_up_odom_reference_speed is not None
+                or options.wheels_up_odom_kd_vel is not None):
+            raise ValueError('--ground-odom-straight excludes wheels-up tuning parameters')
+        if not options.expected_odom_frame or not options.expected_base_frame:
+            raise ValueError('--ground-odom-straight requires explicit --expected-odom-frame and --expected-base-frame')
+        if options.axis not in ('x', 'y'):
+            raise ValueError('--ground-odom-straight requires --axis x|y')
+        if (options.distance is None or not math.isfinite(options.distance)
+                or options.distance < MIN_DISTANCE_M
+                or options.distance > GROUND_ODOM_MAX_DISTANCE_M):
+            raise ValueError('--ground-odom-straight distance must be in [0.005, 0.4] m')
+        if (options.ground_reference_speed is not None
+                and (not math.isfinite(options.ground_reference_speed)
+                     or options.ground_reference_speed <= 0
+                     or options.ground_reference_speed > GROUND_ODOM_MAX_REFERENCE_SPEED_MPS)):
+            raise ValueError('--ground-reference-speed must be in (0, 0.20] m/s')
+        if (options.ground_a_dec is not None
+                and (not math.isfinite(options.ground_a_dec)
+                     or not 0.05 <= options.ground_a_dec <= 1.0)):
+            raise ValueError('--ground-a-dec must be in [0.05, 1.0] m/s^2')
+        if (options.ground_kp_pos is not None
+                and (not math.isfinite(options.ground_kp_pos)
+                     or not 0.0 <= options.ground_kp_pos <= 2.0)):
+            raise ValueError('--ground-kp-pos must be in [0, 2]')
+        if (options.ground_kd_vel is not None
+                and (not math.isfinite(options.ground_kd_vel)
+                     or not 0.0 <= options.ground_kd_vel <= 1.0)):
+            raise ValueError('--ground-kd-vel must be in [0, 1]')
+        return options
+    if any(v is not None for v in (options.ground_reference_speed,
+                                    options.ground_a_dec,
+                                    options.ground_kp_pos,
+                                    options.ground_kd_vel)):
+        raise ValueError('ground tuning parameters require --ground-odom-straight')
     if options.wheels_up_odom:
         if options.execute or options.wheels_up or options.axis is not None or options.distance is not None:
             raise ValueError('--wheels-up-odom excludes --execute, --wheels-up, --axis, and --distance')
@@ -390,6 +443,15 @@ def update_settle_dwell(inside_tolerance: bool, source_stamp: float,
     return next_state, complete
 
 
+def ground_trial_loop_exit(ros_ok: bool, stop_requested: bool) -> str:
+    """Classify a non-settled exit; callers must treat all outcomes as incomplete."""
+    if stop_requested:
+        return 'operator_interrupt'
+    if not ros_ok:
+        return 'ros_shutdown'
+    return 'unexpected_loop_exit'
+
+
 def next_control_deadline(previous_deadline: float, now: float,
                           period: float = CONTROL_PERIOD_S):
     """Return the next paced tick, skipping missed slots instead of bursting."""
@@ -404,16 +466,18 @@ class StraightTrial:
     """A short straight generated through the existing profile/reference/controller."""
     def __init__(self, start_pose: Pose2D, *, axis: str, distance: float,
                  max_speed=MAX_LINEAR_MPS, max_distance=MAX_DISTANCE_M,
-                 a_acc=0.05, a_dec=0.05, kd_vel=0.0):
+                 a_acc=0.05, a_dec=0.05, kp_pos=1.0, kd_vel=0.0):
         if axis not in ('x', 'y') or not all(math.isfinite(v) for v in
                 (start_pose.x, start_pose.y, start_pose.yaw, distance,
-                 max_speed, max_distance, a_acc, a_dec)):
+                 max_speed, max_distance, a_acc, a_dec, kp_pos)):
             raise ValueError('invalid straight-trial input')
         if (distance <= 0 or distance > max_distance or max_speed <= 0
                 or max_speed > 1.0 or a_acc <= 0 or a_dec <= 0):
             raise ValueError('straight trial exceeds safety limits')
         if not math.isfinite(kd_vel) or kd_vel < 0 or kd_vel > 1.0:
             raise ValueError('straight trial kd_vel must be in [0, 1]')
+        if kp_pos < 0 or kp_pos > 2.0:
+            raise ValueError('straight trial kp_pos must be in [0, 2]')
         # Construct geometry in an axis-aligned local frame, then transform
         # references into odom. MotionPrimitive intentionally rejects diagonals.
         dx, dy = (distance, 0.0) if axis == 'x' else (0.0, distance)
@@ -424,7 +488,7 @@ class StraightTrial:
         self.profile = SpeedProfile((primitive,), start_speed=0.0,
                                     a_acc=a_acc, a_dec=a_dec)
         self.reference = TrajectoryReference((primitive,), yaw_ref=0.0)
-        self.controller = PositionController(kd_vel=kd_vel)
+        self.controller = PositionController(kp_pos=kp_pos, kd_vel=kd_vel)
         self.duration = self.profile.duration
         self.start_pose = start_pose.copy()
         self.frame_transform = RigidFrameTransform(
@@ -438,11 +502,14 @@ class StraightTrial:
 
     def sample(self, elapsed: float, measured_pose: Pose2D,
                measured_velocity_world, yaw_rate: float):
-        speed = self.profile.sample(elapsed)
-        reference = self.frame_transform.transform_reference(self.reference.sample(
-            speed.progress_s, speed.speed, speed.acceleration))
+        reference = self.reference_at(elapsed)
         return self.controller.update(reference, measured_pose,
             measured_velocity_world=measured_velocity_world, yaw_rate=yaw_rate)
+
+    def reference_at(self, elapsed: float):
+        speed = self.profile.sample(elapsed)
+        return self.frame_transform.transform_reference(self.reference.sample(
+            speed.progress_s, speed.speed, speed.acceleration))
 
 
 CSV_FIELDS = ('received_monotonic_s', 'record_type', 'source_stamp_s', 'frame_id',
@@ -466,6 +533,16 @@ def _parser():
                    help='diagnostic reference cruise speed in m/s (default 0.70; command cap remains 0.70)')
     p.add_argument('--wheels-up-odom-kd-vel', type=float,
                    help='diagnostic-only velocity damping gain (default 0; allowed range 0..1)')
+    p.add_argument('--ground-odom-straight', action='store_true',
+                   help='explicit bounded ground straight trial; clear, supervised route required')
+    p.add_argument('--ground-reference-speed', type=float,
+                   help='ground reference speed in m/s (default 0.15; hard cap 0.20)')
+    p.add_argument('--ground-a-dec', type=float,
+                   help='ground reference deceleration in m/s^2 (default 0.20)')
+    p.add_argument('--ground-kp-pos', type=float,
+                   help='ground position gain (default 1.0; range 0..2)')
+    p.add_argument('--ground-kd-vel', type=float,
+                   help='ground velocity damping gain (default 0; range 0..1)')
     p.add_argument('--expected-odom-frame')
     p.add_argument('--expected-base-frame')
     p.add_argument('--axis', choices=('x', 'y'))
@@ -480,7 +557,9 @@ def main(args=None):
         parsed.expected_base_frame, parsed.axis, parsed.distance, parsed.csv_path,
         parsed.wheels_up, parsed.wheels_up_odom,
         parsed.wheels_up_odom_reference_speed,
-        parsed.wheels_up_odom_kd_vel))
+        parsed.wheels_up_odom_kd_vel, parsed.ground_odom_straight,
+        parsed.ground_reference_speed, parsed.ground_a_dec,
+        parsed.ground_kp_pos, parsed.ground_kd_vel))
 
     # Delayed ROS imports keep pure logic importable on macOS.
     import rclpy
@@ -493,18 +572,24 @@ def main(args=None):
         def __init__(self):
             super().__init__('m3pro_control_probe_' + str(int(time.time()*1000) % 1000000))
             csv_stamp = f'{time.strftime("%Y%m%d_%H%M%S")}_{time.time_ns() % 1000000000:09d}'
-            if options.wheels_up or options.wheels_up_odom:
-                requested = Path(options.csv_path or '/tmp/m3pro_wheels_up.csv')
+            if options.wheels_up or options.wheels_up_odom or options.ground_odom_straight:
+                default_csv = ('/tmp/m3pro_ground_odom.csv'
+                               if options.ground_odom_straight else
+                               '/tmp/m3pro_wheels_up.csv')
+                requested = Path(options.csv_path or default_csv)
                 suffix = requested.suffix or '.csv'
-                self.csv_path = requested.with_name(
-                    f'{requested.stem}_wheels_up_'
-                    f'{"odom_closed" if options.wheels_up_odom else "command"}_'
-                    f'{csv_stamp}{suffix}')
+                if options.ground_odom_straight:
+                    self.csv_path = requested.with_name(
+                        f'{requested.stem}_ground_odom_{csv_stamp}{suffix}')
+                else:
+                    mode = 'odom_closed' if options.wheels_up_odom else 'command'
+                    self.csv_path = requested.with_name(
+                        f'{requested.stem}_wheels_up_{mode}_{csv_stamp}{suffix}')
             else:
                 self.csv_path = Path(options.csv_path or
                     f'/tmp/m3pro_control_probe_{csv_stamp}.csv')
             self.csv_path.parent.mkdir(parents=True, exist_ok=True)
-            self.file = self.csv_path.open('x' if (options.wheels_up or options.wheels_up_odom) else 'w',
+            self.file = self.csv_path.open('x' if (options.wheels_up or options.wheels_up_odom or options.ground_odom_straight) else 'w',
                                            newline='', encoding='utf-8')
             self.writer = csv.DictWriter(self.file, fieldnames=CSV_FIELDS)
             self.writer.writeheader()
@@ -553,7 +638,7 @@ def main(args=None):
             except Exception as exc:
                 self.write(record_type='invalid_odom', frame_id=msg.header.frame_id,
                            child_frame_id=msg.child_frame_id, reason=str(exc)[:160])
-                if options.execute:
+                if options.execute or options.ground_odom_straight:
                     self.failure = f'invalid odometry: {exc}'
                 elif options.wheels_up_odom:
                     self.failure = f'invalid odometry: {exc}'
@@ -563,7 +648,8 @@ def main(args=None):
         def on_imu(self, msg):
             try:
                 stamp = self.stamp(msg)
-                if (options.execute or options.wheels_up or options.wheels_up_odom) and not msg.header.frame_id:
+                if (options.execute or options.wheels_up or options.wheels_up_odom
+                        or options.ground_odom_straight) and not msg.header.frame_id:
                     raise ValueError('IMU header.frame_id must be nonempty')
                 vals = (stamp, msg.angular_velocity.z, msg.linear_acceleration.x,
                         msg.linear_acceleration.y)
@@ -580,7 +666,7 @@ def main(args=None):
             except Exception as exc:
                 self.write(record_type='invalid_imu', source_stamp_s='',
                            imu_frame_id=msg.header.frame_id, reason=str(exc)[:160])
-                if options.execute:
+                if options.execute or options.ground_odom_straight:
                     self.failure = f'invalid IMU: {exc}'
                 elif options.wheels_up_odom:
                     self.failure = f'invalid IMU: {exc}'
@@ -597,7 +683,7 @@ def main(args=None):
                 if foreign:
                     return False, f'/cmd_vel has {foreign} other publisher(s)'
                 return True, 'exclusive /cmd_vel ownership'
-            if options.wheels_up_odom:
+            if options.wheels_up_odom or options.ground_odom_straight:
                 allowed, reason = command_gate(time.monotonic(), self.odom_received,
                     self.imu_received, self.foreign_publishers())
                 if not allowed:
@@ -614,6 +700,7 @@ def main(args=None):
                 vx, vy, wz = limit_command(vx, vy, wz,
                     max_linear=(WHEELS_UP_MAX_SPEED_MPS if
                                 (options.wheels_up or options.wheels_up_odom)
+                                else GROUND_ODOM_MAX_COMMAND_SPEED_MPS if options.ground_odom_straight
                                 else MAX_LINEAR_MPS))
             except ValueError as exc:
                 raise RuntimeError(str(exc)) from exc
@@ -655,7 +742,8 @@ def main(args=None):
                    and time.monotonic() < deadline
                    and (self.odom is None or self.imu is None)):
                 rclpy.spin_once(self, timeout_sec=0.05)
-            if not (options.execute or options.wheels_up or options.wheels_up_odom):
+            if not (options.execute or options.wheels_up or options.wheels_up_odom
+                    or options.ground_odom_straight):
                 self.get_logger().info(f'read-only CSV recording: {self.csv_path}')
                 while rclpy.ok() and not stop_requested.is_set():
                     rclpy.spin_once(self, timeout_sec=0.1)
@@ -676,6 +764,9 @@ def main(args=None):
                 raise RuntimeError(reason)
             if options.wheels_up_odom:
                 self.run_wheels_up_odom(stop_requested)
+                return
+            if options.ground_odom_straight:
+                self.run_ground_odom_straight(stop_requested)
                 return
             if options.wheels_up:
                 self.run_wheels_up(stop_requested)
@@ -729,6 +820,139 @@ def main(args=None):
                 return
             if not completed:
                 raise RuntimeError('trial ended without settling')
+
+        def run_ground_odom_straight(self, stop_requested):
+            """Explicitly opted-in, bounded ground segment using odometry feedback."""
+            speed = options.ground_reference_speed or GROUND_ODOM_DEFAULT_SPEED_MPS
+            decel = options.ground_a_dec or GROUND_ODOM_DEFAULT_DECEL_MPS2
+            trial = StraightTrial(
+                self.odom.pose, axis=options.axis, distance=options.distance,
+                max_speed=speed, max_distance=GROUND_ODOM_MAX_DISTANCE_M,
+                a_acc=GROUND_ODOM_DEFAULT_ACCEL_MPS2, a_dec=decel,
+                kp_pos=(1.0 if options.ground_kp_pos is None
+                        else options.ground_kp_pos),
+                kd_vel=(0.0 if options.ground_kd_vel is None
+                        else options.ground_kd_vel))
+            self.write(record_type='ground_trial_start',
+                source_stamp_s=self.odom.stamp, frame_id=self.odom.frame_id,
+                child_frame_id=self.odom.child_frame_id,
+                pose_x_m=trial.start_pose.x, pose_y_m=trial.start_pose.y,
+                pose_yaw_rad=trial.start_pose.yaw,
+                ref_x_m=trial.target_pose.x, ref_y_m=trial.target_pose.y,
+                ref_yaw_rad=trial.target_pose.yaw,
+                reason=(f'axis={options.axis};distance={options.distance:.4f};'
+                        f'speed={speed:.3f};a_dec={decel:.3f};'
+                        f'kp_pos={trial.controller.kp_pos:.3f};'
+                        f'kd_vel={trial.controller.kd_vel:.3f}'))
+            start = time.monotonic()
+            next_tick = start
+            last_command_time = start
+            last_command = (0.0, 0.0)
+            budget = CommandDistanceBudget(
+                options.distance + GROUND_ODOM_COMMAND_ALLOWANCE_M)
+            settle_state = (None, None, 0)
+            stop_reason = 'unknown'
+            try:
+                while rclpy.ok() and not stop_requested.is_set():
+                    now = time.monotonic()
+                    try:
+                        budget.account(*last_command, now - last_command_time)
+                    except RuntimeError as exc:
+                        stop_reason = 'command_path_limit'
+                        raise RuntimeError('ground trial command path limit exceeded') from exc
+                    last_command_time = now
+                    elapsed = now - start
+                    if elapsed > GROUND_ODOM_MAX_WALL_S:
+                        stop_reason = 'wall_clock_limit'
+                        raise RuntimeError('ground trial wall-clock limit exceeded')
+                    if self.failure:
+                        stop_reason = 'sensor_or_frame_failure'
+                        raise RuntimeError(self.failure)
+                    allowed, gate_reason = self.gate()
+                    if not allowed:
+                        stop_reason = 'sensor_or_publisher_gate'
+                        raise RuntimeError(gate_reason)
+                    target = trial.target_pose
+                    measured = self.odom.pose
+                    error = math.hypot(measured.x - target.x,
+                                       measured.y - target.y)
+                    speed_measured = math.hypot(self.odom.vx_world,
+                                                self.odom.vy_world)
+                    progress, cross_track = observed_trial_progress(
+                        trial.start_pose, measured, target)
+                    yaw_error = abs(norm_angle(measured.yaw -
+                                               trial.start_pose.yaw))
+                    if progress > options.distance + GROUND_ODOM_MAX_OVERSHOOT_M:
+                        stop_reason = 'odom_overshoot_limit'
+                        raise RuntimeError('ground trial odometry overshoot limit exceeded')
+                    if cross_track > GROUND_ODOM_MAX_CROSS_TRACK_M:
+                        stop_reason = 'cross_track_limit'
+                        raise RuntimeError('ground trial cross-track limit exceeded')
+                    if yaw_error > GROUND_ODOM_MAX_YAW_ERROR_RAD:
+                        stop_reason = 'yaw_error_limit'
+                        raise RuntimeError('ground trial yaw-error limit exceeded')
+                    reference = trial.reference_at(min(elapsed, trial.duration))
+                    settled = trial_settled(
+                        trial.start_pose, measured, target,
+                        distance=options.distance, elapsed=elapsed,
+                        duration=trial.duration, measured_speed=speed_measured,
+                        position_error=error, yaw_error=yaw_error,
+                        tolerance_override=0.01,
+                        minimum_progress_fraction=0.90,
+                        max_speed=0.02, max_yaw_error=0.05)
+                    settle_state, dwell_complete = update_settle_dwell(
+                        settled, self.odom.stamp, now, settle_state,
+                        dwell_s=0.25, min_samples=3)
+                    self.write(record_type='ground_trial_sample',
+                        source_stamp_s=self.odom.stamp,
+                        frame_id=self.odom.frame_id,
+                        child_frame_id=self.odom.child_frame_id,
+                        pose_x_m=measured.x, pose_y_m=measured.y,
+                        pose_yaw_rad=measured.yaw,
+                        world_vx_mps=self.odom.vx_world,
+                        world_vy_mps=self.odom.vy_world,
+                        odom_wz_radps=self.odom.wz,
+                        odom_forward_path_m=progress,
+                        odom_lateral_path_m=cross_track,
+                        command_integral_m=budget.used,
+                        ref_x_m=reference.x, ref_y_m=reference.y,
+                        ref_yaw_rad=reference.yaw_ref,
+                        pos_err_m=error, yaw_err_rad=yaw_error,
+                        settled=dwell_complete,
+                        reason=(f'progress={progress:.4f};cross_track={cross_track:.4f};'
+                                f'one_shot=true'))
+                    if dwell_complete:
+                        stop_reason = 'settled'
+                        return
+                    command = trial.sample(min(elapsed, trial.duration), measured,
+                        (self.odom.vx_world, self.odom.vy_world), self.odom.wz)
+                    vx, vy = budget.limit_next(command.vx, command.vy)
+                    self.publish(vx, vy, command.wz)
+                    last_command = (vx, vy)
+                    rclpy.spin_once(self, timeout_sec=0.0)
+                    next_tick = next_control_deadline(next_tick, time.monotonic())
+                    remaining = next_tick - time.monotonic()
+                    if remaining > 0 and stop_requested.wait(remaining):
+                        stop_reason = 'operator_interrupt'
+                        break
+                stop_reason = ground_trial_loop_exit(
+                    rclpy.ok(), stop_requested.is_set())
+                if stop_reason == 'operator_interrupt':
+                    return
+                raise RuntimeError(
+                    f'ground trial ended before settling: {stop_reason}')
+            except Exception as exc:
+                if stop_reason == 'unknown':
+                    stop_reason = f'error:{type(exc).__name__}'
+                raise
+            finally:
+                self.write(record_type='ground_trial_stop',
+                    source_stamp_s=(self.odom.stamp if self.odom else ''),
+                    reason=stop_reason,
+                    pose_x_m=(self.odom.pose.x if self.odom else ''),
+                    pose_y_m=(self.odom.pose.y if self.odom else ''),
+                    pose_yaw_rad=(self.odom.pose.yaw if self.odom else ''),
+                    command_integral_m=budget.used)
 
         def run_wheels_up(self, stop_requested):
             """Command 10m integrated forward setpoint at the planner cruise speed."""
@@ -1037,7 +1261,8 @@ def main(args=None):
             unexpected_shutdown = True
     finally:
         if node is not None:
-            if (options.execute or options.wheels_up or options.wheels_up_odom) and node.publisher is not None:
+            if (options.execute or options.wheels_up or options.wheels_up_odom
+                    or options.ground_odom_straight) and node.publisher is not None:
                 try:
                     node.stop_window()
                 except Exception as exc:

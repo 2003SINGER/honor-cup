@@ -7,12 +7,15 @@ import pytest
 
 from m3pro_nav.control_probe import (
     MAX_COMMAND_DISTANCE_M, MAX_DISTANCE_M, CommandDistanceBudget,
+    GROUND_ODOM_MAX_DISTANCE_M, GROUND_ODOM_MAX_REFERENCE_SPEED_MPS,
+    GROUND_ODOM_MAX_COMMAND_SPEED_MPS,
     ProbeOptions, StraightTrial, WheelSpinMonitor, WHEELS_UP_TARGET_COMMAND_M,
     WHEELS_UP_MAX_COMMAND_PATH_M, WHEELS_UP_MAX_SPEED_MPS, WHEELS_UP_MAX_WALL_S,
     WHEELS_UP_ODOM_TARGET_M, WHEELS_UP_ODOM_MAX_COMMAND_M,
     WHEELS_UP_ODOM_MAX_WALL_S, WHEELS_UP_ODOM_ACCEL_MPS2,
     WHEELS_UP_ODOM_DEFAULT_REFERENCE_SPEED_MPS,
     command_gate, install_stop_signal_handlers,
+    ground_trial_loop_exit,
     limit_command, next_control_deadline, pose_envelope_error,
     restore_signal_handlers,
     send_zero_window, shutdown_ros_context, source_stamp_gate, validate_options,
@@ -97,6 +100,60 @@ def test_wheels_up_odom_mode_is_separate_explicit_and_bounded():
         validate_options(ProbeOptions(expected_odom_frame='odom',
             expected_base_frame='base_link', wheels_up_odom=True,
             wheels_up_odom_kd_vel=1.1))
+
+
+def test_ground_odom_trial_requires_explicit_opt_in_and_stays_within_0p4m_caps():
+    parsed = _parser().parse_args(['--ground-odom-straight', '--axis', 'x',
+        '--distance', '0.4', '--expected-odom-frame', 'odom',
+        '--expected-base-frame', 'base_link'])
+    opts = ProbeOptions(expected_odom_frame=parsed.expected_odom_frame,
+        expected_base_frame=parsed.expected_base_frame, axis=parsed.axis,
+        distance=parsed.distance, ground_odom_straight=parsed.ground_odom_straight)
+    assert validate_options(opts).ground_odom_straight
+    assert GROUND_ODOM_MAX_DISTANCE_M == pytest.approx(0.4)
+    assert GROUND_ODOM_MAX_REFERENCE_SPEED_MPS == pytest.approx(0.2)
+    assert GROUND_ODOM_MAX_COMMAND_SPEED_MPS == pytest.approx(0.2)
+    for bad in (
+        ProbeOptions(expected_odom_frame='odom', expected_base_frame='base_link',
+            axis='x', distance=0.4),
+        ProbeOptions(expected_odom_frame='odom', expected_base_frame='base_link',
+            axis='x', distance=0.401, ground_odom_straight=True),
+        ProbeOptions(expected_odom_frame='odom', expected_base_frame='base_link',
+            axis='x', distance=0.1, ground_odom_straight=True,
+            execute=True),
+        ProbeOptions(expected_odom_frame='odom', expected_base_frame='base_link',
+            axis='x', distance=0.1, ground_odom_straight=True,
+            ground_reference_speed=0.201),
+        ProbeOptions(expected_odom_frame='odom', expected_base_frame='base_link',
+            axis='x', distance=0.1, ground_odom_straight=True,
+            ground_a_dec=0.01),
+    ):
+        with pytest.raises(ValueError):
+            validate_options(bad)
+
+
+def test_ground_odom_straight_reuses_profile_and_controller_with_trial_overrides():
+    start = Pose2D(1.0, -2.0, math.pi / 6)
+    trial = StraightTrial(start, axis='x', distance=0.4,
+        max_speed=0.15, max_distance=GROUND_ODOM_MAX_DISTANCE_M,
+        a_acc=0.2, a_dec=0.25, kp_pos=1.2, kd_vel=0.3)
+    assert trial.controller.kp_pos == pytest.approx(1.2)
+    assert trial.controller.kd_vel == pytest.approx(0.3)
+    assert trial.profile.sample(trial.duration / 2).speed == pytest.approx(0.15)
+    faster_brake = StraightTrial(start, axis='x', distance=0.4,
+        max_speed=0.15, max_distance=GROUND_ODOM_MAX_DISTANCE_M,
+        a_acc=0.2, a_dec=0.5)
+    assert trial.duration > faster_brake.duration
+    ref = trial.reference_at(trial.duration / 2)
+    command = trial.sample(trial.duration / 2,
+        Pose2D(ref.x, ref.y, ref.yaw_ref), (ref.vx_world, ref.vy_world), 0.0)
+    assert math.isfinite(command.vx) and math.isfinite(command.vy)
+
+
+def test_ground_trial_nonsettled_shutdown_exit_is_incomplete():
+    assert ground_trial_loop_exit(True, True) == 'operator_interrupt'
+    assert ground_trial_loop_exit(False, False) == 'ros_shutdown'
+    assert ground_trial_loop_exit(True, False) == 'unexpected_loop_exit'
 
 
 def test_wheels_up_odom_uses_existing_profile_reference_and_feedback_controller():

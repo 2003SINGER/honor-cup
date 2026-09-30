@@ -102,7 +102,7 @@ ros2 topic list -v > "$SESSION_DIR/topics.txt" 2>/dev/null || true
 log "session dir: $SESSION_DIR"
 
 # ---- 采集主题 ----
-RECORD_TOPICS="$SCAN_TOPIC $ODOM_TOPIC /tf /tf_static /scan_debug/markers"
+RECORD_TOPICS="$SCAN_TOPIC $ODOM_TOPIC /cmd_vel /tf /tf_static /scan_debug/markers"
 [[ -n "$IMU_RECORD" ]] && RECORD_TOPICS="$RECORD_TOPICS $IMU_RECORD"
 
 cleanup() {

@@ -27,6 +27,11 @@ log() { echo "$(date '+%F %T') $*" >> "$LOG/boot.log"; }
 has() { ros2 topic list 2>/dev/null | grep -qx "$1"; }
 yn()  { has "$1" && printf '✅' || printf '❌'; }
 flow() { timeout 2 ros2 topic hz "$1" 2>/dev/null | grep -q "average rate"; }
+camera_ready() {
+  [ "$(ros2 topic type /camera/color/image_raw 2>/dev/null)" = "sensor_msgs/msg/Image" ] && \
+    timeout 6 ros2 topic echo --once --field header \
+      --qos-reliability best_effort /camera/color/image_raw >/dev/null 2>&1
+}
 agent_running() { pgrep -f micro_ros_agent > /dev/null; }
 
 # 重启代理：官方 start_agent.sh 用 gnome-terminal 开窗口日志看不到；
@@ -77,12 +82,16 @@ up)
   fi
 
   echo "[3/5] 相机 + 机械臂解算"
-  if has /camera/color/image_raw || has /rgb; then
+  if camera_ready; then
     echo "      ✅ 已在运行"
   else
     nohup ros2 launch M3Pro_demo camera_arm_kin.launch.py > "$LOG/camera.log" 2>&1 < /dev/null &
-    for i in $(seq 1 20); do has /camera/color/image_raw && break; sleep 2; done
-    has /camera/color/image_raw && echo "      ✅ 好了" || echo "      ❌ 看 $LOG/camera.log"
+    camera_ok=0
+    for i in $(seq 1 5); do
+      if camera_ready; then camera_ok=1; break; fi
+      sleep 2
+    done
+    [ "$camera_ok" -eq 1 ] && echo "      ✅ 好了（彩色图像有数据）" || echo "      ❌ 彩色图像无有效数据或类型错误；看 $LOG/camera.log"
   fi
 
   echo "[4/5] IMU 滤波（/imu/data，EKF 融合输入）"
@@ -156,8 +165,11 @@ check)
 
   echo "  [TF]       /tf $(yn /tf)    /tf_static $(yn /tf_static)"
 
-  cam=$(ros2 topic list 2>/dev/null | grep -iE 'rgb|camera|depth' | tr '\n' ' ')
-  echo "  [相机]     ${cam:-❌ 没启动}"
+  if camera_ready; then
+    echo "  [相机]     ✅ /camera/color/image_raw (sensor_msgs/msg/Image，有实时消息)"
+  else
+    echo "  [相机]     ❌ /camera/color/image_raw 缺失、类型错误或无图像消息"
+  fi
 
   echo "╠════════════════════════════════╣"
   echo "  缺服务     → bash ~/m3.sh up     （自动补齐 + 失败打印原因）"

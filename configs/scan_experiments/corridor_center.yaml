@@ -6,5 +6,5 @@ notes: >
   竖直走廊, 车摆在走廊中线 (正前远墙, 两侧等距).
 record_seconds: 30
 topics:
-  scan: /scan
+  scan: /scan_multi
   odom: /odom_raw

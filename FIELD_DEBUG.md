@@ -27,17 +27,20 @@ cd ~/honor-cup
 ./software/scripts/field_scan_session.sh --cell 3 2 --heading N --label dead_end_2cells
 ```
 
-脚本自动完成: topic/类型/帧名核对 → maze 锚定 → scan_debug → RViz →
+`N/E/S/W` 是迷宫坐标系固定的四个方向；先选定网格方向锚点，并让 `--cell`/`--heading` 与车的实际格子和朝向一致。入口朝里可以作为你的摆车朝向，但要按已定网格轴换算成对应字母，不能每次把入口方向重新叫作 N。
+
+静止采集用于检查雷达观测经外参投影后的格边关联和统计；它不会根据墙面自动修正车的位置或朝向。脚本默认采集已实测融合话题 `/scan_multi`（与 `nav_runtime.yaml` 一致），同时记录 `/odom_raw`；也可用 `--scan-topic` 覆盖做单雷达实验。脚本自动完成: topic/类型/帧名核对 → maze 锚定 → scan_debug → RViz →
 rosbag → 元数据 (git SHA / ROS distro / 参数) → Ctrl-C 后自动生成 summary。
 
-带实验模板与自定义 topic:
+可附实验模板作为 session 归档元数据。`--config` 只复制模板到 `experiment.yaml`，不读取模板里的 topic、cell/heading 或 `record_seconds` 来配置运行；实际 topic 用 `--scan-topic`/`--odom-topic`，录制时长由操作者按 `Ctrl-C` 决定（模板中的 30 秒仅供记录）。
 
 ```bash
 ./software/scripts/field_scan_session.sh \
     --config configs/scan_experiments/dead_end_2cells.yaml \
     --cell 3 2 --heading N --label dead_end_2cells_run1
 
-SCAN_TOPIC=/my_scan ODOM_TOPIC=/my_odom ./software/scripts/field_scan_session.sh ...
+# 明确做单雷达实验时覆盖默认融合话题：
+./software/scripts/field_scan_session.sh --scan-topic /scan0 --cell 3 2 --heading N --label single_laser
 ```
 
 无 TF 时给显式外参 (UNCALIBRATED 值仅当占位):
@@ -55,7 +58,7 @@ EXTRINSIC_YAML=configs/laser_extrinsic_uncalibrated.yaml \
 
 ```
 field_data/<时间戳>_<label>/
-├── bag/                 # rosbag2 (/scan /odom_raw /imu /tf* debug topics)
+├── bag/                 # rosbag2 (/scan_multi /odom_raw /imu /tf* debug topics)
 ├── session.yaml         # cell/heading/topic/帧名/git SHA/ROS distro
 ├── topics.txt
 ├── frames.jsonl         # 每帧诊断聚合 (在线/离线同一格式)
@@ -80,7 +83,7 @@ python3 software/tools/scan_session_summary.py field_data/<session>
 ## 4. 第一批建议 session (按序)
 
 1. `boundary_straight` —— 最干净的正对残差基线
-2. `front_wall_1cell` / `front_wall_2cells` —— 正对距离 vs 残差/unique rate
+2. `front_wall_1cell` / `front_wall_2cells` —— 前方一格/两格处有墙时的残差与 unique rate（车中心到墙距离还受格边界及雷达外参影响）
 3. `corridor_center` / `corridor_left_offset` —— 侧墙可信度对照
 4. `dead_end_2cells` —— **关键实验**: 结构能否提前 2 格确定
 5. `t_junction` / `boundary_corner` —— 开口边缘与角点的 AMBIGUOUS 行为

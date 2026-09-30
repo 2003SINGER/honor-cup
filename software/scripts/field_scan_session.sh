@@ -2,18 +2,18 @@
 # field_scan_session.sh —— 现场一键采集 (只做实验, 不做软件开发)
 #
 # 用法:
-#   ./scripts/field_scan_session.sh --cell 3 2 --heading N --label dead_end_2cells
-#   ./scripts/field_scan_session.sh --config configs/scan_experiments/dead_end_2cells.yaml \
+#   ./software/scripts/field_scan_session.sh --cell 3 2 --heading N --label dead_end_2cells
+#   ./software/scripts/field_scan_session.sh --config configs/scan_experiments/dead_end_2cells.yaml \
 #       --cell 3 2 --heading N
 #
 # 自动完成: 环境检查 / topic·type·frame 核对 / maze anchor / scan_debug
 #           / RViz / rosbag / git SHA 与参数记录 / 结束后生成 summary
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PACKAGE_DIR="$REPO_ROOT/software/ros2/m3pro_nav"
 FIELD_DATA="$REPO_ROOT/field_data"
-SCAN_TOPIC="${SCAN_TOPIC:-/scan}"
+SCAN_TOPIC="${SCAN_TOPIC:-/scan_multi}"
 ODOM_TOPIC="${ODOM_TOPIC:-/odom_raw}"
 IMU_TOPIC="${IMU_TOPIC:-/imu/data_raw}"
 EXTRINSIC_YAML="${EXTRINSIC_YAML:-}"
@@ -61,13 +61,16 @@ else
     log "imu topic $IMU_TOPIC absent — skipping imu record"
     IMU_RECORD=""
 fi
-LASER_FRAME=$(ros2 topic echo -n1 --field header.frame_id "$SCAN_TOPIC" 2>/dev/null | tr -d '\n' || true)
+LASER_FRAME=$(ros2 topic echo --once --field header.frame_id "$SCAN_TOPIC" 2>/dev/null | sed -n '1p' || true)
 log "scan frame_id: ${LASER_FRAME:-<unread>}"
 
 # ---- session 目录 ----
 STAMP=$(date +%Y%m%d_%H%M%S)
 SESSION_DIR="$FIELD_DATA/${STAMP}_${LABEL}"
 mkdir -p "$SESSION_DIR/bag"
+
+# --config is copied below for metadata only; it does not set topics or recording duration.
+# The session runs until Ctrl-C; the template record_seconds value is descriptive only.
 
 # ---- 元数据 ----
 GIT_SHA=$(cd "$REPO_ROOT" && git rev-parse HEAD 2>/dev/null || echo "unknown")

@@ -6,5 +6,5 @@ notes: >
   边界墙长直线 (最干净的正对残差数据).
 record_seconds: 30
 topics:
-  scan: /scan
+  scan: /scan_multi
   odom: /odom_raw

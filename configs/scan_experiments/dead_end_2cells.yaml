@@ -6,5 +6,5 @@ notes: >
   死路前 2 格: 关键实验 - 结构能否提前 2 格确定.
 record_seconds: 30
 topics:
-  scan: /scan
+  scan: /scan_multi
   odom: /odom_raw

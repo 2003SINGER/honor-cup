@@ -1,10 +1,10 @@
-# 一格前墙: 车正对 1 格外墙面 (0.4m 正对)
+# 前方一格有墙: 实际车中心到墙距离取决于格边界与雷达到车中心外参
 experiment: front_wall_1cell
 cell: null          # 现场 CLI 覆盖: --cell X Y
 heading: null       # 现场 CLI 覆盖: --heading N/E/S/W
 notes: >
-  车正对 1 格外墙面 (0.4m 正对).
+  车正对前方一格处的墙；车中心到墙的实际距离取决于格边界与雷达外参.
 record_seconds: 30
 topics:
-  scan: /scan
+  scan: /scan_multi
   odom: /odom_raw

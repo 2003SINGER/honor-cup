@@ -6,5 +6,5 @@ notes: >
   岔路口: 前墙 + 左右开口, 观察开口边缘 associate 行为.
 record_seconds: 30
 topics:
-  scan: /scan
+  scan: /scan_multi
   odom: /odom_raw

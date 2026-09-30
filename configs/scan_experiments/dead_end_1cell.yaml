@@ -6,5 +6,5 @@ notes: >
   死路前 1 格: 正前墙 + 侧墙收口.
 record_seconds: 30
 topics:
-  scan: /scan
+  scan: /scan_multi
   odom: /odom_raw

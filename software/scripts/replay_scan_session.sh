@@ -2,7 +2,7 @@
 # replay_scan_session.sh —— 离线重放 (与现场同一条算法链, 零第二套代码)
 #
 # 用法:
-#   ./scripts/replay_scan_session.sh field_data/20260926_143011_dead_end_2cells
+#   ./software/scripts/replay_scan_session.sh field_data/20260926_143011_dead_end_2cells
 #
 # 重放 = 读 session.yaml 的同参数启动 scan_debug (session_dir 指向重放目录)
 #        + ros2 bag play 喂同一批消息 → 同一 ScanAdapter/FrameProjector/
@@ -10,7 +10,7 @@
 # 同一 bag 重放两次, 与时间无关的统计必须一致。
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PACKAGE_DIR="$REPO_ROOT/software/ros2/m3pro_nav"
 
 log() { echo "[replay] $*"; }

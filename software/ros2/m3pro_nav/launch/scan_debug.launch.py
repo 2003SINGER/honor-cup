@@ -6,8 +6,27 @@
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
+
+HEADING_WORDS = {'N': 'North', 'E': 'East', 'S': 'South', 'W': 'West'}
+
+
+def string_parameter(name):
+    """Prevent launch's YAML coercion from turning strings like N into bools."""
+    return ParameterValue(LaunchConfiguration(name), value_type=str)
+
+
+def heading_parameter():
+    """Map YAML-1.1 boolean-like compass letters to unambiguous words."""
+    mapping = str(HEADING_WORDS).replace(' ', '')
+    return ParameterValue(
+        PythonExpression([
+            f'{mapping}["', LaunchConfiguration('heading'), '"]',
+        ]),
+        value_type=str,
+    )
 
 
 def generate_launch_description():
@@ -34,16 +53,16 @@ def generate_launch_description():
         parameters=[{
             'cell_x': LaunchConfiguration('cell_x'),
             'cell_y': LaunchConfiguration('cell_y'),
-            'heading': LaunchConfiguration('heading'),
-            'scan_topic': LaunchConfiguration('scan_topic'),
-            'odom_topic': LaunchConfiguration('odom_topic'),
-            'imu_topic': LaunchConfiguration('imu_topic'),
-            'expected_laser_frame': LaunchConfiguration('expected_laser_frame'),
-            'expected_odom_frame': LaunchConfiguration('expected_odom_frame'),
-            'expected_base_frame': LaunchConfiguration('expected_base_frame'),
+            'heading': heading_parameter(),
+            'scan_topic': string_parameter('scan_topic'),
+            'odom_topic': string_parameter('odom_topic'),
+            'imu_topic': string_parameter('imu_topic'),
+            'expected_laser_frame': string_parameter('expected_laser_frame'),
+            'expected_odom_frame': string_parameter('expected_odom_frame'),
+            'expected_base_frame': string_parameter('expected_base_frame'),
             'use_tf_extrinsic': LaunchConfiguration('use_tf_extrinsic'),
-            'laser_extrinsic_yaml': LaunchConfiguration('laser_extrinsic_yaml'),
-            'session_dir': LaunchConfiguration('session_dir'),
+            'laser_extrinsic_yaml': string_parameter('laser_extrinsic_yaml'),
+            'session_dir': string_parameter('session_dir'),
         }],
     )
     return LaunchDescription(args + [node])

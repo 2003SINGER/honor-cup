@@ -24,13 +24,13 @@ ros2 topic list | grep -E "scan|odom|imu"
 
 ```bash
 cd ~/honor-cup
-./software/scripts/field_scan_session.sh --cell 3 2 --heading N --label dead_end_2cells
+# 静止 raw scan 和墙面几何支持本次摆放的车体 +X 对应 N
+./software/scripts/field_scan_session.sh --cell 6 0 --heading N --label boundary_straight
 ```
 
-`N/E/S/W` 是迷宫坐标系固定的四个方向；先选定网格方向锚点，并让 `--cell`/`--heading` 与车的实际格子和朝向一致。入口朝里可以作为你的摆车朝向，但要按已定网格轴换算成对应字母，不能每次把入口方向重新叫作 N。
+本次场地约定是**迷宫坐标方向，不代表地理罗盘方向**：从调试者坐在调试椅上的视角看，上方为 N（入口向里），右方为 E，下方为 S，左方为 W。网格为 7×7、从 0 开始编号，左下角是 `(0,0)`；当前入口处摆车位置是右下角 `(6,0)`。在 `(6,0)` 和向西移一格的 `(5,0)` 获取的静态 raw scan，结合墙面几何，强烈支持本场地中车体/雷达 `+X` 对应迷宫方向 N；因此该静态姿势的 `scan_debug` 锚点使用 `--heading N`。这没有验证电机指令的前进方向或轮子极性。每次摆车都按这套固定坐标填写 `--cell`/`--heading`，使其与实际格子和车体方向一致。脚本从 `/odom_raw` 读取并记录 `header.frame_id` 和 `child_frame_id`，将它们传给 `scan_debug`，作为实际 odom/base frame；读不到就会报错退出。
 
-静止采集用于检查雷达观测经外参投影后的格边关联和统计；它不会根据墙面自动修正车的位置或朝向。脚本默认采集已实测融合话题 `/scan_multi`（与 `nav_runtime.yaml` 一致），同时记录 `/odom_raw`；也可用 `--scan-topic` 覆盖做单雷达实验。脚本自动完成: topic/类型/帧名核对 → maze 锚定 → scan_debug → RViz →
-rosbag → 元数据 (git SHA / ROS distro / 参数) → Ctrl-C 后自动生成 summary。
+静止采集用于检查雷达观测经外参投影后的格边关联和统计；它不会根据墙面自动修正车的位置或朝向。脚本默认采集已实测融合话题 `/scan_multi`（与 `nav_runtime.yaml` 一致），同时记录 `/odom_raw`；也可用 `--scan-topic` 覆盖做单雷达实验。脚本自动完成: topic/类型/帧名核对 → maze 锚定 → scan_debug → rosbag → 元数据 (git SHA / ROS distro / 参数) → Ctrl-C 后生成 summary。需要本机有图形显示时，加 `--rviz` 启动 RViz；默认不额外启动 RViz，适合 SSH/headless。
 
 可附实验模板作为 session 归档元数据。`--config` 只复制模板到 `experiment.yaml`，不读取模板里的 topic、cell/heading 或 `record_seconds` 来配置运行；实际 topic 用 `--scan-topic`/`--odom-topic`，录制时长由操作者按 `Ctrl-C` 决定（模板中的 30 秒仅供记录）。
 

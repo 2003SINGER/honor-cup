@@ -233,6 +233,57 @@ def test_open_edges_along_free_path():
     assert len(edges) == 0                            # 1.2 是 hit 自身, a*b<0 不含
 
 
+def test_outer_perimeter_crossing_never_votes_open():
+    from m3pro_nav.frame_projector import FIELD_SIZE
+
+    # 记录的东墙拟合偏差约 6.16 cm；穿过 x=FIELD_SIZE 的 free path
+    # 不能把东侧场地边界记成 OPEN。
+    ray = _ray_at(FIELD_SIZE + 0.0616, 1.4,
+                  ox=FIELD_SIZE - 0.55, oy=1.4)
+    east_opens = ASSOC.process([ray])[0].open_edges
+    assert ('B', (6, 3), 'E') not in east_opens
+    assert east_opens == (((5, 3), 'E'),)  # 场内 x=2.4 的确被自由路径跨过
+    obs = ASSOC.process([ray])[0]
+    assert obs.reason == 'OUT_OF_FIELD'
+    assert ('B', (6, 3), 'E') not in obs.open_edges
+
+    # 远距离无回波的 capped ray 仍可确认出口；和近边界实体回波区分。
+    ray = _ray_at(FIELD_SIZE + 1.2, 1.4,
+                  ox=FIELD_SIZE - 0.55, oy=1.4)
+    obs = ASSOC.process([ray])[0]
+    assert ('B', (6, 3), 'E') in obs.open_edges
+
+    # 南墙位置误差：同一保护适用于 y=0 外侧。
+    ray = _ray_at(1.4, -0.03, ox=1.4, oy=0.35)
+    obs = ASSOC.process([ray])[0]
+    assert obs.open_edges == ()
+
+    # 内部格线仍正常产生 OPEN，避免把所有边界附近射线都屏蔽。
+    ray = _ray_at(1.6, 1.4, ox=0.9, oy=1.4)
+    assert ASSOC.open_edges_along(ray) == (((2, 3), 'E'),)
+
+
+def test_unique_hit_edge_is_not_also_open():
+    # 终点只越过 x=1.2 线 7 mm，仍在 UNIQUE 残差内；同一条边只记 WALL。
+    ray = _ray_at(1.193, 1.4, ox=1.55, oy=1.4)
+    obs = ASSOC.process([ray])[0]
+    assert obs.outcome == 'UNIQUE'
+    assert obs.candidate.edge_id == ((2, 3), 'E')
+    assert obs.open_edges == ()
+
+
+def test_unique_hit_vetoes_same_edge_open_across_frame():
+    # 射线 A 对 x=1.2 边形成 UNIQUE WALL；射线 B 的自由路径跨过 x=0.8
+    # 和 x=1.2，终点在另一条格线上形成 UNIQUE。整帧只撤销 x=1.2 的 OPEN。
+    wall_ray = _ray_at(1.193, 1.4, ox=1.55, oy=1.4)
+    free_ray = _ray_at(1.6, 1.4, ox=0.5, oy=1.4)
+    wall_obs, free_obs = ASSOC.process([wall_ray, free_ray])
+    assert wall_obs.outcome == 'UNIQUE'
+    assert wall_obs.candidate.edge_id == ((2, 3), 'E')
+    assert ((2, 3), 'E') not in free_obs.open_edges
+    assert ((1, 3), 'E') in free_obs.open_edges
+
+
 def test_invalid_ray_yields_no_evidence():
     from m3pro_nav.frame_projector import WorldRay
     ray = WorldRay(0, 0.9, 1.4, 1.0, 0.0, math.nan, math.nan,
@@ -339,7 +390,7 @@ def test_summary_has_range_bins_and_reasons():
 class _StubLogger:
     def info(self, m): pass
     def warn(self, m): pass
-    def warn_once(self, m, **k): pass
+    def warning(self, m, **k): pass
     def error(self, m): pass
 
 
@@ -367,23 +418,41 @@ class _StubNode:
     def create_subscription(self, msg_type, topic, cb, qos):
         self._subs[topic] = cb
         return None
+    def destroy_subscription(self, subscription):
+        for topic, callback in list(self._subs.items()):
+            if callback is subscription or topic in ('/tf', '/tf_static'):
+                self._subs.pop(topic, None)
+        return True
     def create_timer(self, period, cb):
         return None
     def get_logger(self):
         return _StubLogger()
     def get_clock(self):
         return _StubClock()
+    def destroy_node(self):
+        return True
 
 
 def _install_ros_stubs():
     rclpy = types.ModuleType('rclpy')
+    rclpy.init = lambda **k: None
+    rclpy.spin = lambda node: None
+    rclpy.try_shutdown = lambda: None
+    rclpy.spin_once = lambda node, **kwargs: None
     rclpy.time = types.ModuleType('rclpy.time')
     rclpy.time.Time = lambda *a, **k: None
     node_mod = types.ModuleType('rclpy.node')
     node_mod.Node = _StubNode
+    executors = types.ModuleType('rclpy.executors')
+    executors.ExternalShutdownException = type(
+        'ExternalShutdownException', (Exception,), {})
+    rclpy.executors = executors
     qos_mod = types.ModuleType('rclpy.qos')
     qos_mod.QoSProfile = lambda **k: types.SimpleNamespace(**k)
     qos_mod.ReliabilityPolicy = types.SimpleNamespace(BEST_EFFORT=1)
+    qos_mod.DurabilityPolicy = types.SimpleNamespace(
+        VOLATILE=1, TRANSIENT_LOCAL=2)
+    qos_mod.HistoryPolicy = types.SimpleNamespace(KEEP_LAST=1)
     geom = types.ModuleType('geometry_msgs')
     geom.msg = types.ModuleType('geometry_msgs.msg')
 
@@ -424,6 +493,7 @@ def _install_ros_stubs():
     rclpy.node = node_mod
     rclpy.qos = qos_mod
     for name, mod in [('rclpy', rclpy), ('rclpy.node', node_mod),
+                      ('rclpy.executors', executors),
                       ('rclpy.qos', qos_mod), ('rclpy.time', rclpy.time),
                       ('geometry_msgs', geom), ('geometry_msgs.msg', geom.msg),
                       ('nav_msgs', nav), ('nav_msgs.msg', nav.msg),
@@ -468,6 +538,8 @@ def _make_node(node_mod, **overrides):
     node._laser_frame_hint = defaults['expected_laser_frame']
     node._odom_frame = defaults['expected_odom_frame']
     node._base_frame = defaults['expected_base_frame']
+    node._heading = node_mod.normalize_heading(defaults['heading'])
+    node._shutdown = False
     node._diagnostic_only = defaults['diagnostic_only']
     node._association = GridAssociation()
     ext_path = defaults['laser_extrinsic_yaml']
@@ -509,6 +581,107 @@ def test_node_topics_are_configurable(node_mod):
     node = _make_node(node_mod, scan_topic='/my_scan', odom_topic='/my_odom')
     assert node._scan_topic == '/my_scan'
     assert node._odom_topic == '/my_odom'
+
+
+def test_scan_before_odom_is_dropped_and_warned_once(node_mod):
+    node = _make_node(node_mod)
+    logged = []
+    node.get_logger = lambda: types.SimpleNamespace(
+        warning=lambda message, **kwargs: logged.append((message, kwargs)))
+    node._scan_sub_cb(FakeLaserScan([1.0] * 5))
+    assert node._frame_count == 0
+    assert logged == [('no odom yet: frame dropped', {'once': True})]
+
+
+def test_tf_lookup_pumps_early_tf_without_private_listener_thread(
+        node_mod, monkeypatch):
+    class Buffer:
+        def __init__(self):
+            self.transform = None
+
+        def set_transform(self, transform, authority):
+            self.transform = transform
+
+        def set_transform_static(self, transform, authority):
+            self.transform = transform
+
+        def can_transform(self, target, source, time):
+            return self.transform is not None
+
+        def lookup_transform(self, target, source, time):
+            assert (target, source) == ('base_link', 'laser')
+            return self.transform
+
+    class TFMessage:
+        pass
+
+    tf2_ros = types.ModuleType('tf2_ros')
+    tf2_ros.Buffer = Buffer
+    tf2_msgs = types.ModuleType('tf2_msgs')
+    tf2_msgs.msg = types.ModuleType('tf2_msgs.msg')
+    tf2_msgs.msg.TFMessage = TFMessage
+    monkeypatch.setitem(sys.modules, 'tf2_ros', tf2_ros)
+    monkeypatch.setitem(sys.modules, 'tf2_msgs', tf2_msgs)
+    monkeypatch.setitem(sys.modules, 'tf2_msgs.msg', tf2_msgs.msg)
+
+    node = _make_node(node_mod)
+    translation = types.SimpleNamespace(x=0.12, y=-0.03)
+    rotation = types.SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0)
+    transform = types.SimpleNamespace(
+        transform=types.SimpleNamespace(translation=translation,
+                                        rotation=rotation))
+
+    def pump_once(spin_node, timeout_sec):
+        assert spin_node is node and timeout_sec == 0.1
+        message = TFMessage()
+        message.transforms = [transform]
+        spin_node._subs['/tf_static'](message)
+
+    monkeypatch.setattr(node_mod.rclpy, 'spin_once', pump_once)
+    extrinsic = node._lookup_tf_extrinsic()
+    assert extrinsic.source == 'tf'
+    assert (extrinsic.pose.x, extrinsic.pose.y) == (0.12, -0.03)
+    assert '/tf' not in node._subs and '/tf_static' not in node._subs
+
+
+def test_yaml_safe_heading_words_normalize_to_cardinal_letters(node_mod):
+    for word, letter in (('North', 'N'), ('East', 'E'),
+                         ('South', 'S'), ('West', 'W')):
+        assert node_mod.normalize_heading(word) == letter
+        assert node_mod.normalize_heading(letter) == letter
+
+
+def test_scan_debug_shutdown_is_idempotent(node_mod, tmp_path):
+    node = _make_node(node_mod, session_dir=str(tmp_path))
+    frames_file = node._frames_file
+    node.shutdown()
+    node.shutdown()
+    assert frames_file.closed
+
+
+def test_main_handles_external_shutdown_without_double_shutdown(
+        node_mod, monkeypatch):
+    calls = []
+
+    class FakeNode:
+        def shutdown(self):
+            calls.append('node_shutdown')
+
+        def destroy_node(self):
+            calls.append('destroy_node')
+
+    rclpy = node_mod.rclpy
+    monkeypatch.setattr(node_mod, 'ScanDebugNode', FakeNode)
+    monkeypatch.setattr(rclpy, 'init', lambda **kwargs: calls.append('init'))
+
+    def external_shutdown(_node):
+        raise rclpy.executors.ExternalShutdownException()
+
+    monkeypatch.setattr(rclpy, 'spin', external_shutdown)
+    monkeypatch.setattr(rclpy, 'try_shutdown',
+                        lambda: calls.append('try_shutdown'))
+    node_mod.main()
+    assert calls == ['init', 'node_shutdown', 'destroy_node', 'try_shutdown']
 
 
 def test_node_pipeline_end_to_end_writes_frames(node_mod):

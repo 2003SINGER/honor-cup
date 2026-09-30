@@ -7,7 +7,8 @@
 #       --cell 3 2 --heading N
 #
 # 自动完成: 环境检查 / topic·type·frame 核对 / maze anchor / scan_debug
-#           / RViz / rosbag / git SHA 与参数记录 / 结束后生成 summary
+#           / rosbag / git SHA 与参数记录 / 结束后生成 summary
+# 图形环境下可传 --rviz 启动 RViz; 默认不额外启动 GUI。
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -17,7 +18,7 @@ SCAN_TOPIC="${SCAN_TOPIC:-/scan_multi}"
 ODOM_TOPIC="${ODOM_TOPIC:-/odom_raw}"
 IMU_TOPIC="${IMU_TOPIC:-/imu/data_raw}"
 EXTRINSIC_YAML="${EXTRINSIC_YAML:-}"
-CELL_X="" CELL_Y="" HEADING="N" LABEL="manual" CONFIG=""
+CELL_X="" CELL_Y="" HEADING="N" LABEL="manual" CONFIG="" START_RVIZ=0
 
 log() { echo "[field_session] $*"; }
 die() { echo "[field_session] ERROR: $*" >&2; exit 1; }
@@ -28,6 +29,7 @@ while [[ $# -gt 0 ]]; do
         --heading) HEADING="$2"; shift 2 ;;
         --label) LABEL="$2"; shift 2 ;;
         --config) CONFIG="$2"; shift 2 ;;
+        --rviz) START_RVIZ=1; shift ;;
         --scan-topic) SCAN_TOPIC="$2"; shift 2 ;;
         --odom-topic) ODOM_TOPIC="$2"; shift 2 ;;
         *) die "unknown argument: $1" ;;
@@ -63,6 +65,11 @@ else
 fi
 LASER_FRAME=$(ros2 topic echo --once --field header.frame_id "$SCAN_TOPIC" 2>/dev/null | sed -n '1p' || true)
 log "scan frame_id: ${LASER_FRAME:-<unread>}"
+ODOM_FRAME=$(ros2 topic echo --once --field header.frame_id "$ODOM_TOPIC" 2>/dev/null | sed -n '1p' || true)
+[[ -n "$ODOM_FRAME" ]] || die "cannot read header.frame_id from $ODOM_TOPIC; verify the odometry driver is publishing"
+BASE_FRAME=$(ros2 topic echo --once --field child_frame_id "$ODOM_TOPIC" 2>/dev/null | sed -n '1p' || true)
+[[ -n "$BASE_FRAME" ]] || die "cannot read child_frame_id from $ODOM_TOPIC; verify the odometry driver is publishing"
+log "odom frame_id: $ODOM_FRAME; base child_frame_id: $BASE_FRAME"
 
 # ---- session 目录 ----
 STAMP=$(date +%Y%m%d_%H%M%S)
@@ -85,6 +92,8 @@ scan_topic: ${SCAN_TOPIC}
 odom_topic: ${ODOM_TOPIC}
 imu_topic: ${IMU_RECORD}
 laser_frame: ${LASER_FRAME:-unknown}
+odom_frame: ${ODOM_FRAME}
+base_frame: ${BASE_FRAME}
 extrinsic_yaml: ${EXTRINSIC_YAML:-none}
 config: ${CONFIG:-none}
 EOF
@@ -97,21 +106,46 @@ RECORD_TOPICS="$SCAN_TOPIC $ODOM_TOPIC /tf /tf_static /scan_debug/markers"
 [[ -n "$IMU_RECORD" ]] && RECORD_TOPICS="$RECORD_TOPICS $IMU_RECORD"
 
 cleanup() {
+    local exit_status=$?
+    [[ "${CLEANUP_DONE:-0}" == 1 ]] && return
+    CLEANUP_DONE=1
+    trap - EXIT INT TERM
+    if [[ "${INTERRUPTED:-0}" != 1 && -n "${LAUNCH_PID:-}" ]] \
+            && ! kill -0 "$LAUNCH_PID" 2>/dev/null; then
+        LAUNCH_FAILED=1
+    fi
+    [[ "${LAUNCH_FAILED:-0}" == 1 ]] && exit_status=1
     log "stopping..."
     [[ -n "${BAG_PID:-}" ]] && kill -INT "$BAG_PID" 2>/dev/null || true
     [[ -n "${LAUNCH_PID:-}" ]] && kill -INT "$LAUNCH_PID" 2>/dev/null || true
     [[ -n "${RVIZ_PID:-}" ]] && kill -INT "$RVIZ_PID" 2>/dev/null || true
     wait 2>/dev/null || true
-    log "generating summary..."
-    python3 "$REPO_ROOT/software/tools/scan_session_summary.py" "$SESSION_DIR" || true
-    log "done: $SESSION_DIR"
+    if [[ -s "$SESSION_DIR/frames.jsonl" ]]; then
+        log "generating summary..."
+        python3 "$REPO_ROOT/software/tools/scan_session_summary.py" "$SESSION_DIR" || true
+        if [[ "$exit_status" -eq 0 ]]; then
+            log "done: $SESSION_DIR"
+        else
+            log "session stopped with status $exit_status; partial data: $SESSION_DIR" >&2
+        fi
+    else
+        log "ERROR: frames.jsonl is missing or empty; scan_debug did not produce observations. Session is incomplete: $SESSION_DIR" >&2
+        exit_status=1
+    fi
+    exit "$exit_status"
 }
-trap cleanup EXIT INT TERM
+CLEANUP_DONE=0
+INTERRUPTED=0
+LAUNCH_FAILED=0
+trap cleanup EXIT
+trap 'INTERRUPTED=1; exit 0' INT
+trap 'exit 143' TERM
 
 # ---- 启动: scan_debug + RViz + rosbag ----
 EXTRA_ARGS=()
 [[ -n "$EXTRINSIC_YAML" ]] && EXTRA_ARGS+=(laser_extrinsic_yaml:="$EXTRINSIC_YAML")
 [[ -n "$LASER_FRAME" ]] && EXTRA_ARGS+=(expected_laser_frame:="$LASER_FRAME")
+EXTRA_ARGS+=(expected_odom_frame:="$ODOM_FRAME" expected_base_frame:="$BASE_FRAME")
 
 ros2 launch m3pro_nav scan_debug.launch.py \
     cell_x:="$CELL_X" cell_y:="$CELL_Y" heading:="$HEADING" \
@@ -120,15 +154,26 @@ ros2 launch m3pro_nav scan_debug.launch.py \
     "${EXTRA_ARGS[@]}" &
 LAUNCH_PID=$!
 
-if command -v rviz2 >/dev/null 2>&1; then
-    rviz2 -d "$PACKAGE_DIR/config/scan_debug.rviz" --fullscreen || true &
+if [[ "$START_RVIZ" == 1 ]] && command -v rviz2 >/dev/null 2>&1; then
+    rviz2 -d "$PACKAGE_DIR/config/scan_debug.rviz" || true &
     RVIZ_PID=$!
+elif [[ "$START_RVIZ" == 1 ]]; then
+    log "rviz2 not found — continuing without RViz"
 else
-    log "rviz2 not found — headless session"
+    log "RViz disabled; pass --rviz to start it when a display is available"
 fi
 
 ros2 bag record -o "$SESSION_DIR/bag/record" $RECORD_TOPICS &
 BAG_PID=$!
 
 log "recording — Ctrl-C to stop"
-wait $BAG_PID
+while kill -0 "$BAG_PID" 2>/dev/null; do
+    if ! kill -0 "$LAUNCH_PID" 2>/dev/null; then
+        launch_status=0
+        wait "$LAUNCH_PID" || launch_status=$?
+        LAUNCH_FAILED=1
+        die "scan_debug launch exited while recording (status=$launch_status)"
+    fi
+    sleep 1
+done
+wait "$BAG_PID"

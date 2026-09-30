@@ -21,6 +21,7 @@ import math
 import os
 
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from geometry_msgs.msg import Twist  # noqa: F401  (仅类型存在性检查用)
@@ -36,6 +37,21 @@ from m3pro_nav.pose import Pose2D
 from m3pro_nav.scan_adapter import parse_scan
 from m3pro_nav.scan_debug_markers import build_markers
 from m3pro_nav.scan_diagnostics import FrameAccumulator
+
+HEADING_ALIASES = {
+    'North': 'N',
+    'East': 'E',
+    'South': 'S',
+    'West': 'W',
+}
+
+
+def normalize_heading(heading):
+    """Accept YAML-safe launch words and retain the internal N/E/S/W form."""
+    heading = HEADING_ALIASES.get(str(heading), str(heading))
+    if heading not in ('N', 'E', 'S', 'W'):
+        raise ValueError(f'heading must be N/E/S/W, got {heading!r}')
+    return heading
 
 
 class ScanDebugNode(Node):
@@ -65,6 +81,7 @@ class ScanDebugNode(Node):
         self._laser_frame_hint = str(p('expected_laser_frame'))
         self._odom_frame = str(p('expected_odom_frame'))
         self._base_frame = str(p('expected_base_frame'))
+        self._heading = normalize_heading(p('heading'))
         self._diagnostic_only = bool(p('diagnostic_only'))
         if not self._diagnostic_only:
             raise RuntimeError('scan_debug is diagnostic-only in this '
@@ -77,6 +94,7 @@ class ScanDebugNode(Node):
         self._latest_odom_pose = None
         self._frame_count = 0
         self._frames_file = None
+        self._shutdown = False
         session_dir = str(p('session_dir'))
         if session_dir:
             os.makedirs(session_dir, exist_ok=True)
@@ -96,7 +114,7 @@ class ScanDebugNode(Node):
             f"scan_debug: scan={self._scan_topic} odom={self._odom_topic} "
             f"extrinsic={self._projector.extrinsic.source} "
             f"cell=({int(p('cell_x'))},{int(p('cell_y'))}) "
-            f"heading={p('heading')}")
+            f"heading={self._heading}")
 
     # ---- 外参: TF 优先, 显式 YAML 次之, 缺失 → ABSTAIN ----
 
@@ -115,32 +133,55 @@ class ScanDebugNode(Node):
 
     def _lookup_tf_extrinsic(self):
         try:
-            from tf2_ros import Buffer, TransformListener
+            from tf2_ros import Buffer
+            from tf2_msgs.msg import TFMessage
         except ImportError:
             return None
         try:
             buffer = Buffer()
-            # spin_thread=True: constructor 阶段 executor 尚未 spin, listener
-            # 必须自带线程收 /tf(_static), 否则 TF 存在也会假 missing。
-            TransformListener(buffer, self, spin_thread=True)
-            from rclpy.duration import Duration
-            from time import sleep
-            for _ in range(50):                     # 等 TF 就绪 (≤5s)
-                if buffer.can_transform(self._base_frame,
-                                        self._laser_frame_hint
-                                        or 'laser', rclpy.time.Time()):
-                    break
-                sleep(0.1)
-            tf = buffer.lookup_transform(
-                self._base_frame, self._laser_frame_hint or 'laser',
-                rclpy.time.Time())
+            from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile
+
+            # Pump only the TF subscriptions during construction instead of
+            # starting TransformListener's private executor/thread. This keeps
+            # early TF available and gives the subscriptions a clear lifetime.
+            tf_qos = QoSProfile(
+                depth=100, durability=DurabilityPolicy.VOLATILE,
+                history=HistoryPolicy.KEEP_LAST)
+            static_qos = QoSProfile(
+                depth=100, durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                history=HistoryPolicy.KEEP_LAST)
+
+            def update_dynamic(msg):
+                for transform in msg.transforms:
+                    buffer.set_transform(transform, 'default_authority')
+
+            def update_static(msg):
+                for transform in msg.transforms:
+                    buffer.set_transform_static(transform, 'default_authority')
+
+            tf_sub = self.create_subscription(
+                TFMessage, '/tf', update_dynamic, tf_qos)
+            static_sub = self.create_subscription(
+                TFMessage, '/tf_static', update_static, static_qos)
+            target_frame = self._laser_frame_hint or 'laser'
+            try:
+                for _ in range(50):                 # 等 TF 就绪 (≤5s)
+                    rclpy.spin_once(self, timeout_sec=0.1)
+                    if buffer.can_transform(
+                            self._base_frame, target_frame, rclpy.time.Time()):
+                        break
+                tf = buffer.lookup_transform(
+                    self._base_frame, target_frame, rclpy.time.Time())
+            finally:
+                self.destroy_subscription(tf_sub)
+                self.destroy_subscription(static_sub)
             t = tf.transform.translation
             q = tf.transform.rotation
             yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
                              1.0 - 2.0 * (q.y * q.y + q.z * q.z))
             return LaserExtrinsic.from_tf(t.x, t.y, yaw)
         except Exception as exc:                    # noqa: BLE001
-            self.get_logger().warn(f'TF extrinsic unavailable: {exc}')
+            self.get_logger().warning(f'TF extrinsic unavailable: {exc}')
             return None
 
     def _load_yaml_extrinsic(self, path):
@@ -166,7 +207,7 @@ class ScanDebugNode(Node):
             self._anchor = ManualMazeAnchor(
                 (self.get_parameter('cell_x').value,
                  self.get_parameter('cell_y').value),
-                self.get_parameter('heading').value,
+                self._heading,
                 state.pose,
                 offset=(self.get_parameter('anchor_offset_x').value,
                         self.get_parameter('anchor_offset_y').value,
@@ -205,13 +246,12 @@ class ScanDebugNode(Node):
     def _on_scan(self, msg):
         frame = parse_scan(msg)
         if self._laser_frame_hint and frame.frame_id != self._laser_frame_hint:
-            self.get_logger().warn_once(
+            self.get_logger().warning(
                 f"scan frame_id {frame.frame_id!r} != expected "
-                f"{self._laser_frame_hint!r}")
+                f"{self._laser_frame_hint!r}", once=True)
         odom_pose = self._latest_odom_pose
         if self._anchor is None or odom_pose is None:
-            self.get_logger().warn_once('no odom yet: frame dropped',
-                                        throttle_duration_sec=2.0)
+            self.get_logger().warning('no odom yet: frame dropped', once=True)
             return
         # ---- 与离线重放完全同一管线 ----
         world_rays = self._projector.project(frame, odom_pose, self._anchor)
@@ -256,21 +296,27 @@ class ScanDebugNode(Node):
         self._markers_pub.publish(msg)
 
     def shutdown(self):
-        if self._frames_file is not None:
+        if self._shutdown:
+            return
+        self._shutdown = True
+        if self._frames_file is not None and not self._frames_file.closed:
+            self._frames_file.flush()
             self._frames_file.close()
 
 
 def main(args=None):
     rclpy.init(args=args)
-    node = ScanDebugNode()
+    node = None
     try:
+        node = ScanDebugNode()
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
-        node.shutdown()
-        node.destroy_node()
-        rclpy.shutdown()
+        if node is not None:
+            node.shutdown()
+            node.destroy_node()
+        rclpy.try_shutdown()
 
 
 if __name__ == '__main__':

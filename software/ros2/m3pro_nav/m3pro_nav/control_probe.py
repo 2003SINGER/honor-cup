@@ -11,10 +11,12 @@ import csv
 from dataclasses import dataclass
 import math
 from pathlib import Path
+import signal
+import threading
 import time
 
 from .motion_primitive import MotionPrimitive
-from .pose import Pose2D
+from .pose import Pose2D, norm_angle
 from .frame_transform import RigidFrameTransform
 from .position_controller import PositionController
 from .speed_profile import SpeedProfile
@@ -22,13 +24,115 @@ from .trajectory_reference import TrajectoryReference
 from .odometry_adapter import OdometryMonitor, odometry_from_msg
 
 MAX_DISTANCE_M = 0.03
+MIN_DISTANCE_M = 0.005
+# Local firmware notes list 2464 pulses/rev and 0.2513m wheel circumference
+# (~0.1mm/pulse). This 2mm floor asks for multiple encoder increments; it is
+# not a claim about calibrated odometry accuracy.
+MIN_OBSERVED_PROGRESS_M = 0.002
+MIN_OBSERVED_PROGRESS_FRACTION = 0.75
 MAX_LINEAR_MPS = 0.05
 MAX_ANGULAR_RADPS = 0.15
+MAX_COMMAND_DISTANCE_M = 0.03
 MAX_SENSOR_AGE_S = 0.5
 CONTROL_PERIOD_S = 0.02
 POST_STOP_S = 0.5
 DISCOVERY_S = 1.0
 WAIT_SENSORS_S = 3.0
+
+
+def install_stop_signal_handlers(stop_requested, *, signal_module=signal):
+    """Replace rclpy's shutdown signals with a flag checked by the run loop."""
+    received = {'signal': None}
+
+    def request_stop(signum, _frame):
+        received['signal'] = signum
+        stop_requested.set()
+
+    previous = {
+        signum: signal_module.signal(signum, request_stop)
+        for signum in (signal_module.SIGINT, signal_module.SIGTERM)
+    }
+    return previous, received
+
+
+def restore_signal_handlers(previous, *, signal_module=signal):
+    for signum, handler in previous.items():
+        signal_module.signal(signum, handler)
+
+
+def shutdown_ros_context(rclpy, initialized):
+    """Use rclpy's idempotent shutdown helper exactly once after init."""
+    if initialized:
+        rclpy.try_shutdown()
+
+
+def send_zero_window(publisher, make_zero, *, duration=POST_STOP_S,
+                     period=CONTROL_PERIOD_S, clock=time.monotonic,
+                     sleep=time.sleep, on_publish=None, on_error=None):
+    """Retry zero publishes for a fixed wall-clock window, regardless of rclpy.ok()."""
+    if not math.isfinite(duration) or duration <= 0:
+        raise ValueError('zero window duration must be positive and finite')
+    if not math.isfinite(period) or period <= 0:
+        raise ValueError('zero publish period must be positive and finite')
+    end = clock() + duration
+    successful = 0
+    last_error = None
+    while clock() < end:
+        try:
+            publisher.publish(make_zero())
+            successful += 1
+            if on_publish is not None:
+                try:
+                    on_publish()
+                except Exception as exc:
+                    last_error = exc
+                    if on_error is not None:
+                        try:
+                            on_error(exc)
+                        except Exception:
+                            pass
+        except Exception as exc:
+            last_error = exc
+            if on_error is not None:
+                try:
+                    on_error(exc)
+                except Exception:
+                    pass
+        remaining = end - clock()
+        if remaining > 0:
+            sleep(min(period, remaining))
+    if successful == 0:
+        raise RuntimeError('all emergency zero-command attempts failed') from last_error
+    return successful
+
+
+class CommandDistanceBudget:
+    """Bound integrated linear setpoints at the nominal control period."""
+    def __init__(self, limit=MAX_COMMAND_DISTANCE_M):
+        if not math.isfinite(limit) or limit <= 0:
+            raise ValueError('command distance limit must be positive and finite')
+        self.limit = limit
+        self.used = 0.0
+
+    def account(self, vx, vy, elapsed):
+        if not all(math.isfinite(value) for value in (vx, vy, elapsed)) or elapsed < 0:
+            raise ValueError('command and elapsed time must be finite and valid')
+        self.used += math.hypot(vx, vy) * elapsed
+        if self.used > self.limit + 1e-12:
+            raise RuntimeError('integrated command-distance budget exceeded')
+
+    def limit_next(self, vx, vy, period=CONTROL_PERIOD_S):
+        if not all(math.isfinite(value) for value in (vx, vy, period)) or period <= 0:
+            raise ValueError('command and period must be finite and valid')
+        speed = math.hypot(vx, vy)
+        remaining = max(0.0, self.limit - self.used)
+        allowed = remaining / period
+        if speed > allowed:
+            if allowed <= 0.0:
+                raise RuntimeError('integrated command-distance budget exhausted')
+            scale = allowed / speed
+            vx, vy = vx * scale, vy * scale
+        return vx, vy
 
 
 @dataclass(frozen=True)
@@ -55,6 +159,8 @@ def validate_options(options: ProbeOptions) -> ProbeOptions:
         raise ValueError('--execute requires --axis x|y')
     if options.distance is None or not math.isfinite(options.distance) or options.distance <= 0:
         raise ValueError('--execute requires a positive finite --distance')
+    if options.distance < MIN_DISTANCE_M:
+        raise ValueError(f'distance is below minimum observable trial distance {MIN_DISTANCE_M} m')
     if options.distance > MAX_DISTANCE_M:
         raise ValueError(f'distance exceeds safety cap {MAX_DISTANCE_M} m')
     return options
@@ -87,6 +193,57 @@ def limit_command(vx: float, vy: float, wz: float):
         vx, vy = vx * scale, vy * scale
     wz = max(-MAX_ANGULAR_RADPS, min(MAX_ANGULAR_RADPS, wz))
     return vx, vy, wz
+
+
+def pose_envelope_error(start_pose: Pose2D, measured_pose: Pose2D):
+    """Return displacement and wrapped heading error for trial stop gating."""
+    displacement = math.hypot(measured_pose.x - start_pose.x,
+                              measured_pose.y - start_pose.y)
+    yaw_error = abs(norm_angle(measured_pose.yaw - start_pose.yaw))
+    return displacement, yaw_error
+
+
+def observed_trial_progress(start_pose: Pose2D, measured_pose: Pose2D,
+                            target_pose: Pose2D):
+    """Project measured displacement along/across the commanded trial axis."""
+    tx, ty = target_pose.x - start_pose.x, target_pose.y - start_pose.y
+    distance = math.hypot(tx, ty)
+    if not math.isfinite(distance) or distance <= 0.0:
+        raise ValueError('trial target must be separated from its start')
+    ux, uy = tx / distance, ty / distance
+    dx, dy = measured_pose.x - start_pose.x, measured_pose.y - start_pose.y
+    progress = dx * ux + dy * uy
+    cross_track = abs(-dx * uy + dy * ux)
+    return progress, cross_track
+
+
+def trial_settled(start_pose: Pose2D, measured_pose: Pose2D,
+                  target_pose: Pose2D, *, distance: float, elapsed: float,
+                  duration: float, measured_speed: float,
+                  position_error: float, yaw_error: float):
+    """Require observable forward progress, target accuracy, and low speed."""
+    values = (distance, elapsed, duration, measured_speed, position_error,
+              yaw_error)
+    if not all(math.isfinite(value) for value in values):
+        return False
+    tolerance = min(0.01, max(0.001, distance * 0.25))
+    minimum_progress = max(MIN_OBSERVED_PROGRESS_M,
+                           distance * MIN_OBSERVED_PROGRESS_FRACTION)
+    progress, cross_track = observed_trial_progress(
+        start_pose, measured_pose, target_pose)
+    return (elapsed >= duration and position_error <= tolerance
+            and progress >= minimum_progress and cross_track <= tolerance
+            and measured_speed <= 0.02 and yaw_error <= 0.05)
+
+
+def next_control_deadline(previous_deadline: float, now: float,
+                          period: float = CONTROL_PERIOD_S):
+    """Return the next paced tick, skipping missed slots instead of bursting."""
+    if not all(math.isfinite(value) for value in
+               (previous_deadline, now, period)) or period <= 0:
+        raise ValueError('control deadline inputs must be finite and period positive')
+    candidate = previous_deadline + period
+    return candidate if candidate > now else now + period
 
 
 class StraightTrial:
@@ -263,97 +420,148 @@ def main(args=None):
                        cmd_vy_mps=vy, cmd_wz_radps=wz)
 
         def stop_window(self):
-            end = time.monotonic() + POST_STOP_S
-            last_error = None
-            successful = 0
-            while rclpy.ok() and time.monotonic() < end:
-                try:
-                    self.publish(0.0, 0.0, 0.0, check=False)
-                    successful += 1
-                except Exception as exc:
-                    # A CSV flush or transient publisher error must not suppress
-                    # the remaining emergency zero attempts.
-                    last_error = exc
-                try:
-                    rclpy.spin_once(self, timeout_sec=CONTROL_PERIOD_S)
-                except Exception as exc:
-                    last_error = exc
-            if last_error is not None:
-                self.get_logger().error(f'zero-command retry window saw error: {last_error}')
-            if successful == 0:
-                raise RuntimeError('all emergency zero-command attempts failed') from last_error
+            errors = []
 
-        def run(self):
+            def record_zero():
+                try:
+                    self.write(record_type='cmd_vel_sent', cmd_vx_mps=0.0,
+                               cmd_vy_mps=0.0, cmd_wz_radps=0.0)
+                except Exception as exc:
+                    errors.append(exc)
+
+            try:
+                send_zero_window(self.publisher, Twist, on_publish=record_zero,
+                                 on_error=errors.append)
+            except Exception as exc:
+                errors.append(exc)
+            for exc in errors:
+                self.get_logger().error(f'zero-command retry window error: {exc}')
+
+        def run(self, stop_requested):
             deadline = time.monotonic() + WAIT_SENSORS_S
-            while rclpy.ok() and time.monotonic() < deadline and (self.odom is None or self.imu is None):
+            while (rclpy.ok() and not stop_requested.is_set()
+                   and time.monotonic() < deadline
+                   and (self.odom is None or self.imu is None)):
                 rclpy.spin_once(self, timeout_sec=0.05)
             if not options.execute:
                 self.get_logger().info(f'read-only CSV recording: {self.csv_path}')
-                rclpy.spin(self)
+                while rclpy.ok() and not stop_requested.is_set():
+                    rclpy.spin_once(self, timeout_sec=0.1)
+                return
+            if stop_requested.is_set():
                 return
             if self.odom is None or self.imu is None:
                 raise RuntimeError('odometry and IMU required before execution')
             self.publisher = self.create_publisher(Twist, '/cmd_vel', 10)
             discovery_end = time.monotonic() + DISCOVERY_S
-            while rclpy.ok() and time.monotonic() < discovery_end:
+            while (rclpy.ok() and not stop_requested.is_set()
+                   and time.monotonic() < discovery_end):
                 rclpy.spin_once(self, timeout_sec=0.05)
+            if stop_requested.is_set():
+                return
             allowed, reason = self.gate()
             if not allowed:
                 raise RuntimeError(reason)
             trial = StraightTrial(self.odom.pose, axis=options.axis,
                                   distance=options.distance)
             start = time.monotonic()
+            next_tick = start
+            last_command_time = start
+            last_linear_command = (0.0, 0.0)
+            command_budget = CommandDistanceBudget()
             completed = False
-            failure = None
-            try:
-                while rclpy.ok():
-                    now = time.monotonic()
-                    elapsed = now - start
-                    if elapsed > trial.duration + 2.0:
-                        raise RuntimeError('straight trial timed out')
-                    if self.failure:
-                        raise RuntimeError(self.failure)
-                    target = trial.target_pose
-                    error = math.hypot(self.odom.pose.x-target.x,
-                                       self.odom.pose.y-target.y)
-                    speed = math.hypot(self.odom.vx_world, self.odom.vy_world)
-                    displacement = math.hypot(self.odom.pose.x-trial.start_pose.x,
-                                              self.odom.pose.y-trial.start_pose.y)
-                    yaw_error = abs(norm_angle(self.odom.pose.yaw-trial.start_pose.yaw))
-                    if displacement > 0.08 or yaw_error > 0.2:
-                        raise RuntimeError('trial pose left the short-motion envelope')
-                    if (elapsed >= trial.duration and error <= 0.01 and
-                            speed <= 0.02 and yaw_error <= 0.05):
-                        completed = True
-                        break
-                    cmd = trial.sample(min(elapsed, trial.duration), self.odom.pose,
-                                       (self.odom.vx_world, self.odom.vy_world),
-                                       self.odom.wz)
-                    self.publish(cmd.vx, cmd.vy, cmd.wz)
-                    rclpy.spin_once(self, timeout_sec=CONTROL_PERIOD_S)
-            except Exception as exc:
-                failure = exc
-            finally:
-                # Emergency stop does not depend on sensor/ownership checks.
-                self.stop_window()
-            if failure is not None:
-                raise failure
+            while rclpy.ok() and not stop_requested.is_set():
+                now = time.monotonic()
+                command_budget.account(
+                    *last_linear_command, now - last_command_time)
+                last_command_time = now
+                elapsed = now - start
+                if elapsed > trial.duration + 2.0:
+                    raise RuntimeError('straight trial timed out')
+                if self.failure:
+                    raise RuntimeError(self.failure)
+                target = trial.target_pose
+                error = math.hypot(self.odom.pose.x-target.x,
+                                   self.odom.pose.y-target.y)
+                speed = math.hypot(self.odom.vx_world, self.odom.vy_world)
+                displacement, yaw_error = pose_envelope_error(
+                    trial.start_pose, self.odom.pose)
+                if displacement > 0.08 or yaw_error > 0.2:
+                    raise RuntimeError('trial pose left the short-motion envelope')
+                if trial_settled(
+                        trial.start_pose, self.odom.pose, target,
+                        distance=options.distance, elapsed=elapsed,
+                        duration=trial.duration, measured_speed=speed,
+                        position_error=error, yaw_error=yaw_error):
+                    completed = True
+                    break
+                cmd = trial.sample(min(elapsed, trial.duration), self.odom.pose,
+                                   (self.odom.vx_world, self.odom.vy_world),
+                                   self.odom.wz)
+                vx, vy = command_budget.limit_next(cmd.vx, cmd.vy)
+                self.publish(vx, vy, cmd.wz)
+                last_linear_command = (vx, vy)
+                rclpy.spin_once(self, timeout_sec=0.0)
+                next_tick = next_control_deadline(
+                    next_tick, time.monotonic())
+                remaining = next_tick - time.monotonic()
+                if remaining > 0 and stop_requested.wait(remaining):
+                    break
+            if stop_requested.is_set():
+                return
             if not completed:
                 raise RuntimeError('trial ended without settling')
 
         def close(self):
             self.file.close()
 
-    rclpy.init(args=ros_args)
-    node = ControlProbeNode()
+    from rclpy.executors import ExternalShutdownException
+    from rclpy.signals import SignalHandlerOptions
+
+    stop_requested = threading.Event()
+    previous_handlers = None
+    received_signal = {'signal': None}
+    node = None
+    initialized = False
+    unexpected_shutdown = False
     try:
-        node.run()
-    finally:
+        rclpy.init(args=ros_args,
+                   signal_handler_options=SignalHandlerOptions.NO)
+        initialized = True
+        previous_handlers, received_signal = install_stop_signal_handlers(
+            stop_requested)
+        node = ControlProbeNode()
         try:
-            node.close()
+            node.run(stop_requested)
+        except ExternalShutdownException:
+            # Unexpected context shutdown still enters the single best-effort
+            # emergency-zero path in finally below.
+            stop_requested.set()
+            unexpected_shutdown = True
+    finally:
+        if node is not None:
+            if options.execute and node.publisher is not None:
+                try:
+                    node.stop_window()
+                except Exception as exc:
+                    node.get_logger().error(f'emergency zero window failed: {exc}')
+            try:
+                node.close()
+            except Exception as exc:
+                node.get_logger().error(f'CSV close failed: {exc}')
+            try:
+                node.destroy_node()
+            except Exception as exc:
+                node.get_logger().error(f'node destroy failed: {exc}')
+        try:
+            shutdown_ros_context(rclpy, initialized)
         finally:
-            node.destroy_node()
-            rclpy.shutdown()
+            if previous_handlers is not None:
+                restore_signal_handlers(previous_handlers)
+    if unexpected_shutdown and received_signal['signal'] is None:
+        return 1
+    if received_signal['signal'] is not None:
+        return 128 + int(received_signal['signal'])
 
 
 if __name__ == '__main__':

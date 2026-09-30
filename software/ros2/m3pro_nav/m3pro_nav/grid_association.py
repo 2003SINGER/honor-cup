@@ -29,6 +29,7 @@ DEFAULT_CORNER_GUARD = 0.05      # 投影点离格角小于此 → NEAR_CORNER
 UNIQUE, AMBIGUOUS, NONE = 'UNIQUE', 'AMBIGUOUS', 'NONE'
 
 _CROSS_TOL = 1e-6                # 端点"恰在线上"容差 (浮点噪声远小于此)
+_OUTER_WALL_GUARD = 0.5 * C      # 临时半格保护, 待实测场地几何替代
 
 
 def edge_id_for_line(orientation, line_k, seg_j):
@@ -190,6 +191,26 @@ class GridAssociation:
         for ray in world_rays:
             obs = self.associate_hit(ray)
             edges = self.open_edges_along(ray)
+            outside_depth = max(0.0, -ray.hx, ray.hx - FIELD_SIZE,
+                                -ray.hy, ray.hy - FIELD_SIZE)
+            if (obs.reason == 'OUT_OF_FIELD'
+                    and outside_depth <= _OUTER_WALL_GUARD):
+                # A physical perimeter wall can sit just outside the ideal
+                # field rectangle. Until surveyed geometry is available, use
+                # a conservative half-cell ambiguity band and do not report
+                # that perimeter crossing as OPEN. Far out-of-field endpoints
+                # can be capped no-return rays that establish an exit, so
+                # retain their boundary evidence. Keep interior free-path
+                # edges in either case.
+                edges = tuple(e for e in edges
+                              if not (e[0] == 'B'))
+            # A hit accepted as UNIQUE can land a little past its canonical
+            # line because the real wall is offset. That same edge is WALL
+            # evidence for this ray and must not also receive an OPEN vote.
+            if (obs.outcome == UNIQUE and obs.candidate is not None
+                    and obs.candidate.edge_id in edges):
+                edges = tuple(e for e in edges
+                              if e != obs.candidate.edge_id)
             if edges and obs.outcome != NONE:
                 obs = DiagnosticObservation(
                     obs.ray_index, obs.outcome, obs.reason,
@@ -202,4 +223,20 @@ class GridAssociation:
                         obs.ray_index, obs.outcome, obs.reason,
                         obs.candidate, obs.candidates, edges)
             results.append(obs)
+        # FrameAccumulator consumes observations across the whole scan. A
+        # different ray in the same frame may hit a wall uniquely even when
+        # this ray's endpoint lies beyond that edge; the confirmed wall must
+        # veto every same-frame OPEN vote for that physical edge.
+        unique_edges = {obs.candidate.edge_id for obs in results
+                        if obs.outcome == UNIQUE and obs.candidate is not None}
+        if unique_edges:
+            results = [
+                DiagnosticObservation(
+                    obs.ray_index, obs.outcome, obs.reason,
+                    obs.candidate, obs.candidates,
+                    tuple(edge for edge in obs.open_edges
+                          if edge not in unique_edges))
+                if any(edge in unique_edges for edge in obs.open_edges)
+                else obs
+                for obs in results]
         return results

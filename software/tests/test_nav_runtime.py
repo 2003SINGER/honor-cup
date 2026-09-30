@@ -345,13 +345,17 @@ def test_nav_node_preflight_gates_real_run():
     assert 'publisher conflict' in src
 
 
-def test_tf_listener_self_spins_before_executor():
-    """TF listener 必须显式 spin_thread=True: constructor 阶段 executor 尚未
-    spin, 默认 listener 不处理 /tf(_static) → TF 存在也假 missing
-    (GPT 审查: 启动时序修复)。nav_runtime 与 scan_debug 两处都要覆盖。"""
+def test_tf_sources_handle_pre_spin_startup():
+    """Runtime self-spins its listener; scan_debug pumps scoped TF subscriptions."""
     base = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         '..', 'ros2', 'm3pro_nav', 'm3pro_nav')
-    for name in ('nav_runtime_node.py', 'scan_debug_node.py'):
-        src = open(os.path.join(base, name)).read()
-        assert 'TransformListener(buffer, self, spin_thread=True)' in src, \
-            f'{name}: TF listener must self-spin (executor not running yet)'
+    nav_src = open(os.path.join(base, 'nav_runtime_node.py')).read()
+    assert 'TransformListener(buffer, self, spin_thread=True)' in nav_src, \
+        'nav_runtime listener must self-spin before its executor starts'
+
+    scan_src = open(os.path.join(base, 'scan_debug_node.py')).read()
+    assert "TFMessage, '/tf'" in scan_src
+    assert "TFMessage, '/tf_static'" in scan_src
+    assert 'buffer.set_transform_static' in scan_src
+    assert 'rclpy.spin_once(self, timeout_sec=0.1)' in scan_src
+    assert 'TransformListener(' not in scan_src

@@ -142,7 +142,11 @@ class RealObservationAdapter:
                 edge = (ev[0], ev[1])
                 if edge not in open_best or ev[3] < open_best[edge][3]:
                     open_best[edge] = ev
-        opens = list(open_best.values())
+        # A frame can contain internally conflicting evidence: one ray may
+        # uniquely hit an edge while another ray's free path crosses it. Keep
+        # accepted WALL evidence authoritative for that frame and discard only
+        # OPEN votes for the same canonical edge. Other edges remain usable.
+        opens = [ev for edge, ev in open_best.items() if edge not in hits]
         stats.n_open_edges = len(opens)
         return hits, opens, stats
 

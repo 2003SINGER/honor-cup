@@ -264,19 +264,20 @@ def test_speed_and_command_cap_allow_bounded_high_speed_profile():
 
 
 def test_field_trial_default_gains_and_overrides_are_bounded():
-    # Keep defaults at the prior baseline until controlled data supports tuning.
-    assert validate_controller_gains(1.0, 0.2) == (1.0, 0.2)
+    # User-selected position gain; leave velocity damping unchanged.
+    assert validate_controller_gains(1.4, 0.2) == (1.4, 0.2)
     defaults = parser().parse_args([
         '--run', '--expected-odom-frame', 'odom',
         '--expected-base-frame', 'base_footprint'])
-    assert (defaults.kp_pos, defaults.kd_vel) == (1.0, 0.2)
+    assert (defaults.kp_pos, defaults.kd_vel) == (1.4, 0.2)
+    assert 'position gain (default 1.4; allowed range 0..2)' in parser().format_help()
     overrides = parser().parse_args([
         '--run', '--expected-odom-frame', 'odom',
         '--expected-base-frame', 'base_footprint',
         '--kp-pos', '1.25', '--kd-vel', '0.3'])
     assert (overrides.kp_pos, overrides.kd_vel) == (1.25, 0.3)
-    for kp, kd in ((-0.01, 0.2), (2.01, 0.2), (1.0, -0.01),
-                   (1.0, 1.01), (math.inf, 0.2), (1.0, math.nan)):
+    for kp, kd in ((-0.01, 0.2), (2.01, 0.2), (1.4, -0.01),
+                   (1.4, 1.01), (math.inf, 0.2), (1.4, math.nan)):
         try:
             validate_controller_gains(kp, kd)
         except ValueError:

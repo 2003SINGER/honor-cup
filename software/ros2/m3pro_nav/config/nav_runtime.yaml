@@ -44,7 +44,7 @@ perception:                        # —— 现场待审参数 (scan_debug 工�
 control:
   a_acc: 1.0                       # 保守初值; 阶跃标定后修订
   a_dec: 1.0
-  # kp_pos / kp_yaw: MotionRuntimeCore 默认 (PositionController);
+  # PositionController defaults: kp_pos=1.4, kp_yaw=2.0;
   # 阶跃实验 (control_probe / commission) 后修订
 
 safety:

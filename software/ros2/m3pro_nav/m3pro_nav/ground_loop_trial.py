@@ -38,7 +38,7 @@ DECEL_MPS2 = 0.60
 # feedback requested positive braking on the 2026-10-01 dorm run. This is a
 # command limit, not a claim about achieved chassis deceleration.
 COMMAND_DECEL_MPS2 = 3.00
-POSITION_GAIN = 1.0
+POSITION_GAIN = 1.4
 VELOCITY_DAMPING = 0.20
 YAW_POSITION_GAIN = 2.0
 YAW_RATE_DAMPING = 0.0
@@ -353,7 +353,7 @@ def parser():
     p.add_argument('--kd-yaw', type=float, default=YAW_RATE_DAMPING,
                    help='bias-corrected yaw-rate damping gain (default 0; allowed range 0..2)')
     p.add_argument('--kp-pos', type=float, default=POSITION_GAIN,
-                   help='position gain (default 1.0; allowed range 0..2)')
+                   help='position gain (default 1.4; allowed range 0..2)')
     p.add_argument('--kd-vel', type=float, default=VELOCITY_DAMPING,
                    help='velocity damping gain (default 0.2; allowed range 0..1)')
     return p

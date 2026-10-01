@@ -29,6 +29,11 @@ def test_reference_samples_straight_and_world_feedforward():
     assert ref.curvature == 0.0
 
 
+def test_shared_position_controller_default_position_gain_is_1_4():
+    assert PositionController().kp_pos == 1.4
+    assert PositionController().kd_vel == 0.0
+
+
 def test_reference_arc_tangent_does_not_change_body_yaw():
     trajectory = TrajectoryReference([quarter_arc()], yaw_ref=0.0)
     ref = trajectory.sample(ARC_RADIUS * math.pi / 4, speed=0.2)

@@ -9,7 +9,7 @@ from .trajectory_reference import ReferenceState
 
 @dataclass
 class PositionController:
-    kp_pos: float = 1.0
+    kp_pos: float = 1.4
     kd_vel: float = 0.0
     kp_yaw: float = 2.0
     kd_yaw: float = 0.0

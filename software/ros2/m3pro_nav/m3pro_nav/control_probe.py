@@ -70,7 +70,6 @@ GROUND_ODOM_DEFAULT_SPEED_MPS = 0.15
 GROUND_ODOM_DEFAULT_ACCEL_MPS2 = 0.20
 GROUND_ODOM_DEFAULT_DECEL_MPS2 = 0.20
 GROUND_ODOM_MAX_WALL_S = 12.0
-GROUND_ODOM_COMMAND_ALLOWANCE_M = 0.05
 GROUND_ODOM_MAX_OVERSHOOT_M = 0.08
 GROUND_ODOM_MAX_CROSS_TRACK_M = 0.05
 GROUND_ODOM_MAX_YAW_ERROR_RAD = 0.15
@@ -171,6 +170,14 @@ class CommandDistanceBudget:
             scale = allowed / speed
             vx, vy = vx * scale, vy * scale
         return vx, vy
+
+
+def integrate_command_distance(total, vx, vy, elapsed):
+    """Accumulate commanded linear distance for telemetry without limiting it."""
+    if not all(math.isfinite(value) for value in (total, vx, vy, elapsed)) \
+            or total < 0 or elapsed < 0:
+        raise ValueError('command integral inputs must be finite and nonnegative')
+    return total + math.hypot(vx, vy) * elapsed
 
 
 class WheelSpinMonitor:
@@ -783,7 +790,10 @@ def main(args=None):
             self.publisher.publish(msg)
             self.write(record_type='cmd_vel_sent', cmd_vx_mps=vx,
                        cmd_vy_mps=vy, cmd_wz_radps=wz,
-                       command_integral_m=(getattr(self, '_wheels_budget', None).used
+                       command_integral_m=(
+                           getattr(self, '_ground_command_integral_m', '')
+                           if options.ground_odom_straight else
+                           getattr(self, '_wheels_budget', None).used
                            if getattr(self, '_wheels_budget', None) is not None else ''))
 
         def stop_window(self):
@@ -921,18 +931,17 @@ def main(args=None):
             next_tick = start
             last_command_time = start
             last_command = (0.0, 0.0)
-            budget = CommandDistanceBudget(
-                options.distance + GROUND_ODOM_COMMAND_ALLOWANCE_M)
+            command_integral_m = 0.0
+            self._ground_command_integral_m = command_integral_m
             settle_state = (None, None, 0)
             stop_reason = 'unknown'
             try:
                 while rclpy.ok() and not stop_requested.is_set():
                     now = time.monotonic()
-                    try:
-                        budget.account(*last_command, now - last_command_time)
-                    except RuntimeError as exc:
-                        stop_reason = 'command_path_limit'
-                        raise RuntimeError('ground trial command path limit exceeded') from exc
+                    command_integral_m = integrate_command_distance(
+                        command_integral_m, *last_command,
+                        now - last_command_time)
+                    self._ground_command_integral_m = command_integral_m
                     last_command_time = now
                     elapsed = now - start
                     if elapsed > GROUND_ODOM_MAX_WALL_S:
@@ -989,7 +998,7 @@ def main(args=None):
                         odom_wz_radps=self.odom.wz,
                         odom_forward_path_m=progress,
                         odom_lateral_path_m=cross_track,
-                        command_integral_m=budget.used,
+                        command_integral_m=command_integral_m,
                         **self.ground_gate_diagnostics(),
                         ref_x_m=reference.x, ref_y_m=reference.y,
                         ref_yaw_rad=reference.yaw_ref,
@@ -1002,7 +1011,9 @@ def main(args=None):
                         return
                     command = trial.sample(min(elapsed, trial.duration), measured,
                         (self.odom.vx_world, self.odom.vy_world), self.odom.wz)
-                    vx, vy = budget.limit_next(command.vx, command.vy)
+                    vx, vy, _ = limit_command(
+                        command.vx, command.vy, command.wz,
+                        max_linear=GROUND_ODOM_MAX_COMMAND_SPEED_MPS)
                     self.publish(vx, vy, command.wz)
                     last_command = (vx, vy)
                     rclpy.spin_once(self, timeout_sec=0.0)
@@ -1019,16 +1030,20 @@ def main(args=None):
                     f'ground trial ended before settling: {stop_reason}')
             except Exception as exc:
                 if stop_reason == 'unknown':
-                    stop_reason = f'error:{type(exc).__name__}'
+                    stop_reason = f'error:{type(exc).__name__}:{exc}'
                 raise
             finally:
+                command_integral_m = integrate_command_distance(
+                    command_integral_m, *last_command,
+                    max(0.0, time.monotonic() - last_command_time))
+                self._ground_command_integral_m = command_integral_m
                 self.write(record_type='ground_trial_stop',
                     source_stamp_s=(self.odom.stamp if self.odom else ''),
                     reason=stop_reason,
                     pose_x_m=(self.odom.pose.x if self.odom else ''),
                     pose_y_m=(self.odom.pose.y if self.odom else ''),
                     pose_yaw_rad=(self.odom.pose.yaw if self.odom else ''),
-                    command_integral_m=budget.used,
+                    command_integral_m=command_integral_m,
                     **self.ground_gate_diagnostics())
 
         def run_wheels_up(self, stop_requested):

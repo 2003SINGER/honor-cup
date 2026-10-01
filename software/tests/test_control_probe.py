@@ -20,7 +20,7 @@ from m3pro_nav.control_probe import (
     restore_signal_handlers,
     send_zero_window, shutdown_ros_context, source_stamp_gate, validate_options,
     ground_odom_gate, source_stamp_age,
-    trial_settled, update_settle_dwell, _parser,
+    trial_settled, update_settle_dwell, integrate_command_distance, _parser,
 )
 from m3pro_nav.pose import Pose2D
 
@@ -131,6 +131,18 @@ def test_ground_odom_trial_requires_explicit_opt_in_and_stays_within_0p4m_caps()
     ):
         with pytest.raises(ValueError):
             validate_options(bad)
+
+
+def test_ground_command_integral_is_unbounded_telemetry_and_linear_command_stays_capped():
+    # A 0.4m trial may need more than 0.45m of integrated commands to settle.
+    total = integrate_command_distance(0.0, 0.2, 0.0, 2.5)
+    total = integrate_command_distance(total, 0.1, 0.0, 1.0)
+    assert total == pytest.approx(0.6)
+    capped = limit_command(0.3, 0.0, 0.0,
+                           max_linear=GROUND_ODOM_MAX_COMMAND_SPEED_MPS)
+    assert math.hypot(capped[0], capped[1]) == pytest.approx(0.2)
+    with pytest.raises(ValueError, match='finite and nonnegative'):
+        integrate_command_distance(0.0, 0.1, 0.0, -0.1)
 
 
 def test_ground_odom_straight_reuses_profile_and_controller_with_trial_overrides():

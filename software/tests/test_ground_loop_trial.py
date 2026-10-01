@@ -7,8 +7,13 @@ from m3pro_nav.ground_loop_trial import (ARC_SPEED_MPS, compile_loop_route,
                                          nominal_route_end,
                                          validate_controller_gains,
                                          split_route_at_west_center,
-                                         validate_trial_limits, parser)
-from m3pro_nav.feedback_trajectory_follower import FeedbackTrajectoryFollower
+                                         validate_trial_limits, parser,
+                                         control_update_permissions,
+                                         yaw_only_control_state,
+                                         control_mode_log_value)
+from m3pro_nav.feedback_trajectory_follower import (FeedbackTrajectoryFollower,
+                                                     FollowerState,
+                                                     FollowerPhase)
 from m3pro_nav.frame_transform import RigidFrameTransform
 from m3pro_nav.ground_loop_trial import (distance_to_polyline,
                                          route_corridor_waypoints)
@@ -19,7 +24,7 @@ from m3pro_nav.ground_loop_trial import (CSV_FIELDS,
                                          source_stamp_is_newer)
 from m3pro_nav.motion_planner import MotionPlanner
 from m3pro_nav.odometry_adapter import OdometryState
-from m3pro_nav.pose import Pose2D
+from m3pro_nav.pose import Pose2D, Twist2D
 from m3pro_nav.position_controller import PositionController
 from m3pro_nav.speed_profile import SpeedProfile
 from m3pro_nav.trajectory_reference import TrajectoryReference
@@ -307,6 +312,39 @@ def test_odom_synchronous_control_reuses_command_until_stamp_advances_and_stop_w
 
     assert select_control_command(candidate, previous,
         update_allowed=False, stop_requested=True) == (0.0, 0.0, 0.0)
+
+
+def test_imu_source_can_refresh_yaw_without_advancing_odom_owned_follower():
+    assert control_update_permissions(True, 'imu', 10.0, 10.0,
+                                      20.0, 20.01) == (False, True, False, True)
+    assert control_update_permissions(True, 'imu', 10.0, 10.0,
+                                      20.01, 20.01) == (False, False, False, False)
+    assert control_update_permissions(True, 'imu', 10.0, 10.01,
+                                      20.0, 20.01) == (True, False, True, True)
+    assert control_update_permissions(True, 'odom', 10.0, 10.0,
+                                      20.0, 20.01) == (False, False, False, False)
+    assert control_update_permissions(False, 'imu', 10.0, 10.0,
+                                      20.0, 20.01) == (True, False, False, True)
+
+    reference = type('Reference', (), {'yaw_ref': 0.4})()
+    state = FollowerState(1.0, reference, Twist2D(0.12, -0.03, 0.0),
+        0.01, -0.02, 0.03, 0.0, False, False, FollowerPhase.TRACKING,
+        object(), 0.25)
+    feedback = OdometryState(Pose2D(1.0, 2.0, 0.1), 0.2, -0.1, 0.05,
+                             10.0, 'odom', 'base_footprint')
+    controller = PositionController(kp_yaw=2.0, kd_yaw=0.4)
+    refreshed = yaw_only_control_state(state, feedback, controller)
+    assert (refreshed.command.vx, refreshed.command.vy) == (0.12, -0.03)
+    assert refreshed.command.wz == pytest.approx(2.0 * 0.3 - 0.4 * 0.05)
+    assert refreshed.yaw_error == pytest.approx(0.3)
+    assert refreshed.reference is state.reference
+    assert refreshed.speed_sample is state.speed_sample
+    assert state.command.wz == 0.0
+
+
+def test_trial_start_logs_explicit_odom_synchronous_control_mode():
+    assert control_mode_log_value(False) == 'odom_synchronous_control=false'
+    assert control_mode_log_value(True) == 'odom_synchronous_control=true'
 
 
 def test_odom_sample_log_keeps_source_and_receipt_times_and_planar_twist():

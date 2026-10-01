@@ -409,14 +409,39 @@ class FeedbackTrajectoryFollower:
                 dx = command.vx - self._previous_command.vx
                 dy = command.vy - self._previous_command.vy
                 delta = math.hypot(dx, dy)
-                previous_speed = math.hypot(self._previous_command.vx,
-                                            self._previous_command.vy)
-                requested_speed = math.hypot(command.vx, command.vy)
-                limit = (self.max_command_decel_mps2
-                         if requested_speed < previous_speed
-                         else self.max_command_accel_mps2)
-                if limit is not None and delta > limit * dt:
-                    scale = limit * dt / delta
+                # Follow the straight vector path from the prior command to
+                # the requested command. If that path reaches its minimum
+                # speed inside this tick (zero for a direct reversal), spend
+                # time braking to the minimum, then use the remaining time to
+                # accelerate away from it. Comparing endpoint magnitudes alone
+                # misclassifies a faster reverse command as acceleration.
+                dx_dot_prev = (self._previous_command.vx * dx +
+                               self._previous_command.vy * dy)
+                turn = (-dx_dot_prev / (delta * delta)
+                        if delta > 0.0 else math.inf)
+                if dx_dot_prev < 0.0 and 0.0 < turn < 1.0:
+                    to_turn = delta * turn
+                    decel = self.max_command_decel_mps2
+                    accel = self.max_command_accel_mps2
+                    if decel is None:
+                        distance = to_turn
+                        time_to_turn = 0.0
+                    else:
+                        distance = min(to_turn, decel * dt)
+                        time_to_turn = distance / decel
+                    remaining = max(0.0, dt - time_to_turn)
+                    allowed = distance
+                    if accel is None:
+                        allowed += delta - to_turn
+                    else:
+                        allowed += min(delta - to_turn, accel * remaining)
+                else:
+                    limit = (self.max_command_decel_mps2
+                             if dx_dot_prev < 0.0
+                             else self.max_command_accel_mps2)
+                    allowed = delta if limit is None else limit * dt
+                if delta > allowed:
+                    scale = allowed / delta
                     command = Twist2D(
                         self._previous_command.vx + dx * scale,
                         self._previous_command.vy + dy * scale,

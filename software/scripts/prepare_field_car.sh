@@ -47,6 +47,8 @@ rsync -a "$REPO_ROOT/software/scripts/field_scan_session.sh" \
     "$CAR_HOST:$CAR_REPO_PATH/software/scripts/field_scan_session.sh"
 rsync -a "$REPO_ROOT/software/scripts/field_scan_cleanup_watchdog.sh" \
     "$CAR_HOST:$CAR_REPO_PATH/software/scripts/field_scan_cleanup_watchdog.sh"
+rsync -a "$REPO_ROOT/software/scripts/ground_loop_trial.sh" \
+    "$CAR_HOST:$CAR_REPO_PATH/software/scripts/ground_loop_trial.sh"
 rsync -a "$REPO_ROOT/software/tools/scan_session_summary.py" \
     "$CAR_HOST:$CAR_REPO_PATH/software/tools/scan_session_summary.py"
 rsync -a "$REPO_ROOT/software/tools/m3.sh" "$CAR_HOST:/tmp/codex-m3.sh"

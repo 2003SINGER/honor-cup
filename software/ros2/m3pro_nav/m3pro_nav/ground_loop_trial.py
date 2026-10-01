@@ -7,6 +7,7 @@ rosbag is responsible for preserving raw scan data.
 
 import argparse
 import csv
+from dataclasses import replace
 import math
 from pathlib import Path
 import signal
@@ -17,7 +18,7 @@ from .motion_planner import MotionPlanner, validate_geometry
 from .motion_primitive import MotionPrimitive
 from .odometry_adapter import (OdometryMonitor, OdometryState,
                                odometry_from_msg)
-from .pose import Pose2D, norm_angle
+from .pose import Pose2D, Twist2D, norm_angle
 from .position_controller import PositionController
 from .relative_yaw import RelativeYawEstimator
 from .speed_profile import SpeedProfile
@@ -144,6 +145,42 @@ def select_control_command(candidate, previous, *, update_allowed,
     if stop_requested:
         return (0.0, 0.0, 0.0)
     return candidate if update_allowed else previous
+
+
+def yaw_only_control_state(state, feedback, controller):
+    """Refresh yaw feedback without advancing odom-owned follower state.
+
+    The cached reference and translational command remain tied to the latest
+    odometry update. Only heading error, yaw rate damping and angular command
+    use the newly arrived IMU-derived feedback.
+    """
+    if state is None:
+        raise ValueError('an odometry-updated follower state is required')
+    if state.complete:
+        return state
+    yaw_error = norm_angle(state.reference.yaw_ref - feedback.pose.yaw)
+    yaw_command = (controller.kp_yaw * yaw_error
+                   - controller.kd_yaw * feedback.wz)
+    return replace(state,
+        command=Twist2D(state.command.vx, state.command.vy, yaw_command),
+        yaw_error=yaw_error)
+
+
+def control_update_permissions(odom_synchronous, yaw_source,
+                              last_odom_stamp, odom_stamp,
+                              last_imu_stamp=None, imu_stamp=None):
+    """Return (follower_update, yaw_only_update) for the latest samples."""
+    new_odom = source_stamp_is_newer(last_odom_stamp, odom_stamp)
+    follower_update = not odom_synchronous or new_odom
+    new_imu = (yaw_source == 'imu' and
+               source_stamp_is_newer(last_imu_stamp, imu_stamp))
+    yaw_only_update = (odom_synchronous and yaw_source == 'imu'
+                       and not new_odom and new_imu)
+    return follower_update, yaw_only_update, new_odom, new_imu
+
+
+def control_mode_log_value(odom_synchronous):
+    return f'odom_synchronous_control={str(bool(odom_synchronous)).lower()}'
 
 
 def require_fresh_imu_yaw(imu_estimator, imu_received_s, now_s,
@@ -418,6 +455,7 @@ def main(args=None):
             self._zero_sent = False
             self._last_cmd = None
             self._last_control_source_stamp = None
+            self._last_yaw_imu_source_stamp = None
             self._held_control_ticks = 0
             self._last_control_state = None
             if options.odom_synchronous_control:
@@ -672,6 +710,7 @@ def main(args=None):
                         f'command_decel={COMMAND_DECEL_MPS2:.3f};'
                         f'midpoint_stop=true;'
                         f'yaw_source={options.yaw_source};'
+                        f'{control_mode_log_value(options.odom_synchronous_control)};'
                         f'command_cap={options.command_cap:.3f};'
                         f'kp_pos={options.kp_pos:.3f};kd_vel={options.kd_vel:.3f};'
                         f'kp_yaw={options.kp_yaw:.3f};kd_yaw={options.kd_yaw:.3f}'))
@@ -720,16 +759,27 @@ def main(args=None):
                             raise RuntimeError(str(exc)) from exc
                     else:
                         control_feedback = yaw_feedback_state(self.odom, 'odom')
-                    update_allowed = (
-                        not options.odom_synchronous_control or
-                        source_stamp_is_newer(self._last_control_source_stamp,
-                                              control_feedback.stamp))
+                    imu_source_stamp = (self.imu[0]
+                                        if self.imu is not None else None)
+                    (update_allowed, yaw_only_update, new_odom_sample,
+                     new_imu_sample) = control_update_permissions(
+                        options.odom_synchronous_control, options.yaw_source,
+                        self._last_control_source_stamp, self.odom.stamp,
+                        self._last_yaw_imu_source_stamp, imu_source_stamp)
                     if update_allowed:
                         if options.odom_synchronous_control:
-                            self._last_control_source_stamp = control_feedback.stamp
+                            self._last_control_source_stamp = self.odom.stamp
                         state = follower.update(elapsed, control_feedback)
                         if options.odom_synchronous_control:
                             self._last_control_state = state
+                        if options.odom_synchronous_control and new_imu_sample:
+                            self._last_yaw_imu_source_stamp = imu_source_stamp
+                    elif yaw_only_update:
+                        state = yaw_only_control_state(
+                            self._last_control_state, control_feedback,
+                            controller)
+                        self._last_control_state = state
+                        self._last_yaw_imu_source_stamp = imu_source_stamp
                     else:
                         state = self._last_control_state
                         if state is None:
@@ -765,7 +815,7 @@ def main(args=None):
                     if abs(yaw_error) > MAX_YAW_ERROR_RAD:
                         reason = 'yaw_envelope'
                         raise RuntimeError(f'yaw error {yaw_error:.3f}rad exceeded {MAX_YAW_ERROR_RAD:.2f}rad')
-                    if not update_allowed:
+                    if not update_allowed and not yaw_only_update:
                         held = select_control_command(
                             None, self._last_cmd, update_allowed=False,
                             stop_requested=stop['requested'])
@@ -780,7 +830,9 @@ def main(args=None):
                             repeated_control_ticks=self._held_control_ticks,
                             cmd_vx_mps=held[0], cmd_vy_mps=held[1],
                             cmd_wz_radps=held[2],
-                            reason='waiting for a strictly newer odometry source stamp')
+                            **control_imu_log_fields(
+                                self.imu, self.imu_estimator, now),
+                            reason='waiting for a new control source sample')
                         msg = Twist()
                         msg.linear.x, msg.linear.y, msg.angular.z = held
                         self.publisher.publish(msg)
@@ -832,7 +884,7 @@ def main(args=None):
                         self.imu, self.imu_estimator, now)
                     vx, vy, wz = limit_command(command.vx, command.vy,
                                                command.wz, options.command_cap)
-                    if options.odom_synchronous_control:
+                    if options.odom_synchronous_control and update_allowed:
                         selected = select_control_command(
                             (vx, vy, wz), self._last_cmd,
                             update_allowed=update_allowed,

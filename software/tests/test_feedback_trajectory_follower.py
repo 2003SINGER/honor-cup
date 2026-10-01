@@ -209,6 +209,58 @@ def test_first_tick_is_acceleration_limited_and_frozen_odom_cannot_advance_route
     assert not state.complete
 
 
+def command_limiter(accel=3.0, decel=0.5):
+    source = Pose2D(0.0, 0.0, 0.0)
+    stop = MotionPrimitive('STOP', source.copy(), p0=(0.0, 0.0), yaw0=0.0,
+                           duration=0.0)
+    return FeedbackTrajectoryFollower(
+        [stop], planner_start=source, odom_start=source,
+        a_acc=1.0, a_dec=1.0, controller=PositionController(),
+        position_tolerance=0.01, yaw_tolerance=0.02,
+        velocity_tolerance=0.01, yaw_rate_tolerance=0.02, settle_time=0.1,
+        max_command_accel_mps2=accel, max_command_decel_mps2=decel)
+
+
+def test_command_limiter_reversal_brakes_through_zero_then_accelerates():
+    follow = command_limiter(accel=3.0, decel=0.5)
+    follow._previous_command = type(follow._previous_command)(0.1, 0.0, 0.0)
+    follow._previous_command_elapsed = 0.0
+
+    # It takes 0.2 s to brake 0.1 m/s, then the remaining time is
+    # enough to reach the requested 0.2 m/s in reverse.
+    result = follow._limit_command(
+        type(follow._previous_command)(-0.2, 0.0, 0.0), 0.3)
+    assert result.vx == pytest.approx(-0.2)
+    assert result.vy == pytest.approx(0.0)
+
+
+def test_command_limiter_partial_reverse_preserves_vector_path_and_limits():
+    follow = command_limiter(accel=3.0, decel=0.5)
+    follow._previous_command = type(follow._previous_command)(0.1, 0.0, 0.0)
+    follow._previous_command_elapsed = 0.0
+    requested = type(follow._previous_command)(-0.1, 0.1, 0.0)
+
+    result = follow._limit_command(requested, 0.1)
+    # The vector path has its minimum at s=0.5. Deceleration allows 0.05 m/s
+    # of path travel this tick, preserving the requested vector direction.
+    assert (result.vx, result.vy) == pytest.approx((0.05527864045,
+                                                    0.02236067978))
+    assert math.hypot(result.vx - 0.1, result.vy) <= 0.5 * 0.1 + 1e-9
+
+
+def test_command_limiter_uses_accel_and_decel_for_same_direction_speed_changes():
+    follow = command_limiter(accel=0.4, decel=0.3)
+    command_type = type(follow._previous_command)
+    follow._previous_command = command_type(0.1, 0.0, 0.0)
+    follow._previous_command_elapsed = 0.0
+    accelerated = follow._limit_command(command_type(0.2, 0.0, 0.0), 0.1)
+    assert accelerated.vx == pytest.approx(0.14)
+
+    follow._previous_command_elapsed = 0.1
+    decelerated = follow._limit_command(command_type(0.1, 0.0, 0.0), 0.2)
+    assert decelerated.vx == pytest.approx(0.11)
+
+
 def test_slow_plant_tracks_target_and_brakes_from_measured_progress():
     """A 0.4 m/s plant lags a 0.5 m/s plan but still stops at the target."""
     start = Pose2D(0.0, 0.0, 0.0)

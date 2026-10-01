@@ -150,17 +150,44 @@ cleanup() {
     local exit_status=$?
     [[ "${CLEANUP_DONE:-0}" == 1 ]] && return
     CLEANUP_DONE=1
-    trap - EXIT INT TERM
+    trap - EXIT INT HUP TERM
+    set +e
     if [[ "${INTERRUPTED:-0}" != 1 && -n "${LAUNCH_PID:-}" ]] \
             && ! kill -0 "$LAUNCH_PID" 2>/dev/null; then
         LAUNCH_FAILED=1
     fi
     [[ "${LAUNCH_FAILED:-0}" == 1 ]] && exit_status=1
     log "stopping..."
-    [[ -n "${BAG_PID:-}" ]] && kill -INT "$BAG_PID" 2>/dev/null || true
-    [[ -n "${LAUNCH_PID:-}" ]] && kill -INT "$LAUNCH_PID" 2>/dev/null || true
-    [[ -n "${RVIZ_PID:-}" ]] && kill -INT "$RVIZ_PID" 2>/dev/null || true
-    wait 2>/dev/null || true
+
+    # Each long-running child is started with setsid below, so its PID is also
+    # its process-group ID. Stop rosbag first and wait for its SQLite metadata
+    # to finalize before tearing down scan_debug or attempting the summary.
+    stop_group() {
+        local pid="$1" label="$2" remaining
+        [[ -n "$pid" ]] || return 0
+        kill -0 -- "-$pid" 2>/dev/null || { wait "$pid" 2>/dev/null; return 0; }
+        kill -INT -- "-$pid" 2>/dev/null || true
+        for remaining in {1..10}; do
+            kill -0 -- "-$pid" 2>/dev/null || break
+            sleep 1
+        done
+        if kill -0 -- "-$pid" 2>/dev/null; then
+            log "$label did not stop after SIGINT; sending SIGTERM"
+            kill -TERM -- "-$pid" 2>/dev/null || true
+            for remaining in {1..3}; do
+                kill -0 -- "-$pid" 2>/dev/null || break
+                sleep 1
+            done
+        fi
+        if kill -0 -- "-$pid" 2>/dev/null; then
+            log "$label did not stop after SIGTERM; sending SIGKILL"
+            kill -KILL -- "-$pid" 2>/dev/null || true
+        fi
+        wait "$pid" 2>/dev/null || true
+    }
+    stop_group "${BAG_PID:-}" "rosbag"
+    stop_group "${LAUNCH_PID:-}" "scan_debug launch"
+    stop_group "${RVIZ_PID:-}" "RViz"
     if [[ -s "$SESSION_DIR/frames.jsonl" ]]; then
         log "generating summary..."
         python3 "$REPO_ROOT/software/tools/scan_session_summary.py" "$SESSION_DIR" || true
@@ -180,7 +207,8 @@ INTERRUPTED=0
 LAUNCH_FAILED=0
 trap cleanup EXIT
 trap 'INTERRUPTED=1; exit 0' INT
-trap 'exit 143' TERM
+trap 'INTERRUPTED=1; exit 129' HUP
+trap 'INTERRUPTED=1; exit 143' TERM
 
 # ---- 启动: scan_debug + RViz + rosbag ----
 EXTRA_ARGS=()
@@ -188,7 +216,8 @@ EXTRA_ARGS=()
 [[ -n "$LASER_FRAME" ]] && EXTRA_ARGS+=(expected_laser_frame:="$LASER_FRAME")
 EXTRA_ARGS+=(expected_odom_frame:="$ODOM_FRAME" expected_base_frame:="$BASE_FRAME")
 
-ros2 launch m3pro_nav scan_debug.launch.py \
+command -v setsid >/dev/null 2>&1 || die "setsid not found; cannot isolate capture process groups"
+setsid ros2 launch m3pro_nav scan_debug.launch.py \
     cell_x:="$CELL_X" cell_y:="$CELL_Y" heading:="$HEADING" \
     scan_topic:="$SCAN_TOPIC" odom_topic:="$ODOM_TOPIC" \
     session_dir:="$SESSION_DIR" \
@@ -196,7 +225,7 @@ ros2 launch m3pro_nav scan_debug.launch.py \
 LAUNCH_PID=$!
 
 if [[ "$START_RVIZ" == 1 ]] && command -v rviz2 >/dev/null 2>&1; then
-    rviz2 -d "$PACKAGE_DIR/config/scan_debug.rviz" || true &
+    setsid rviz2 -d "$PACKAGE_DIR/config/scan_debug.rviz" &
     RVIZ_PID=$!
 elif [[ "$START_RVIZ" == 1 ]]; then
     log "rviz2 not found — continuing without RViz"
@@ -204,7 +233,7 @@ else
     log "RViz disabled; pass --rviz to start it when a display is available"
 fi
 
-ros2 bag record -o "$SESSION_DIR/bag/record" $RECORD_TOPICS &
+setsid ros2 bag record -o "$SESSION_DIR/bag/record" $RECORD_TOPICS &
 BAG_PID=$!
 
 log "recording — Ctrl-C to stop"

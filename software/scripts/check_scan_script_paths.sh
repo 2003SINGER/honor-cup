@@ -24,6 +24,17 @@ grep -Fq 'RECORD_TOPICS="$RECORD_TOPICS $JOY_RECORD"' "$SCRIPT_DIR/field_scan_se
     echo "field session rosbag must retain the /joy discovery request" >&2
     exit 1
 }
+grep -Fq "trap 'INTERRUPTED=1; exit 0' INT" "$SCRIPT_DIR/field_scan_session.sh" \
+    && grep -Fq "trap 'INTERRUPTED=1; exit 129' HUP" "$SCRIPT_DIR/field_scan_session.sh" \
+    && grep -Fq "trap 'INTERRUPTED=1; exit 143' TERM" "$SCRIPT_DIR/field_scan_session.sh" || {
+    echo "field session must route INT/HUP/TERM through EXIT cleanup" >&2
+    exit 1
+}
+grep -Fq 'stop_group "${BAG_PID:-}" "rosbag"' "$SCRIPT_DIR/field_scan_session.sh" \
+    && grep -Fq 'setsid ros2 bag record' "$SCRIPT_DIR/field_scan_session.sh" || {
+    echo "field session must isolate and finalize rosbag before summarizing" >&2
+    exit 1
+}
 [[ -d "$PACKAGE_DIR" ]] || { echo "package path missing: $PACKAGE_DIR" >&2; exit 1; }
 [[ -f "$SUMMARY_TOOL" ]] || { echo "summary tool missing: $SUMMARY_TOOL" >&2; exit 1; }
 printf 'scan script paths OK\nrepo: %s\npackage: %s\nsummary: %s\n' "$REPO_ROOT" "$PACKAGE_DIR" "$SUMMARY_TOOL"

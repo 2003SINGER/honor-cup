@@ -20,6 +20,7 @@ setup(
         'console_scripts': [
             'driver_probe = m3pro_nav.driver_probe:main',
             'control_probe = m3pro_nav.control_probe:main',
+            'ground_loop_trial = m3pro_nav.ground_loop_trial:main',
             'motion_runtime = m3pro_nav.motion_runtime_node:main',
             'scan_debug = m3pro_nav.scan_debug_node:main',
             'nav_runtime = m3pro_nav.nav_runtime_node:main',

@@ -18,6 +18,7 @@ from .motion_primitive import MotionPrimitive
 from .odometry_adapter import OdometryMonitor, odometry_from_msg
 from .pose import Pose2D
 from .position_controller import PositionController
+from .trajectory_reference import TrajectoryReference
 
 from .control_probe import (CONTROL_PERIOD_S, MAX_SENSOR_AGE_S,
     ground_odom_gate, limit_command, next_control_deadline, send_zero_window)
@@ -29,7 +30,7 @@ ACCEL_MPS2 = 1.00
 POSITION_GAIN = 1.0
 VELOCITY_DAMPING = 0.20
 MAX_DISPLACEMENT_M = 0.65
-MAX_REFERENCE_ERROR_M = 0.12
+MAX_CORRIDOR_ERROR_M = 0.08
 MAX_YAW_ERROR_RAD = 0.25
 MAX_COMMAND_MPS = 0.70
 MAX_COMMAND_CAP_MPS = 0.70
@@ -42,7 +43,7 @@ CSV_FIELDS = (
     'pose_x_m', 'pose_y_m', 'pose_yaw_rad', 'world_vx_mps',
     'world_vy_mps', 'odom_wz_radps', 'ref_x_m', 'ref_y_m',
     'ref_yaw_rad', 'ref_vx_mps', 'ref_vy_mps', 'position_error_m',
-    'yaw_error_rad', 'cmd_vx_mps', 'cmd_vy_mps', 'cmd_wz_radps',
+    'corridor_error_m', 'yaw_error_rad', 'cmd_vx_mps', 'cmd_vy_mps', 'cmd_wz_radps',
     'displacement_from_start_m', 'reason')
 
 
@@ -140,6 +141,37 @@ def nominal_route_end(primitives):
             y = primitive.p0[1] + radius * math.sin(angle)
             length += primitive.length
     return (x, y), length
+
+
+def route_corridor_waypoints(primitives, transform, *, samples=240):
+    """Sample the fixed geometric path and map it into the odometry frame."""
+    if samples < 2:
+        raise ValueError('at least two route corridor samples are required')
+    reference = TrajectoryReference(primitives, yaw_ref=math.pi / 2)
+    points = []
+    for index in range(samples + 1):
+        state = reference.sample(reference.length * index / samples)
+        pose = transform.transform_pose(Pose2D(state.x, state.y, state.yaw_ref))
+        points.append((pose.x, pose.y))
+    return tuple(points)
+
+
+def distance_to_polyline(point, waypoints):
+    """Euclidean distance from a point to a sampled route polyline."""
+    if len(waypoints) < 2:
+        raise ValueError('route polyline requires at least two waypoints')
+    px, py = point
+    if not all(math.isfinite(value) for value in (px, py)):
+        raise ValueError('query point must be finite')
+    nearest_sq = math.inf
+    for a, b in zip(waypoints, waypoints[1:]):
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        length_sq = dx * dx + dy * dy
+        fraction = 0.0 if length_sq <= 1e-18 else max(0.0, min(1.0,
+            ((px - a[0]) * dx + (py - a[1]) * dy) / length_sq))
+        ex, ey = px - (a[0] + fraction * dx), py - (a[1] + fraction * dy)
+        nearest_sq = min(nearest_sq, ex * ex + ey * ey)
+    return math.sqrt(nearest_sq)
 
 
 def parser():
@@ -251,6 +283,8 @@ def main(args=None):
                 yaw_rate_tolerance=0.15, settle_time=0.30,
                 expected_odom_frame=options.expected_odom_frame,
                 expected_base_frame=options.expected_base_frame)
+            corridor = route_corridor_waypoints(
+                primitives, follower.transform, samples=240)
             profile_duration = follower.profile.duration
             self.get_logger().info(
                 f'out-and-back: length={follower.profile.length:.3f}m, '
@@ -289,9 +323,13 @@ def main(args=None):
                     if displacement > MAX_DISPLACEMENT_M:
                         reason = 'displacement_envelope'
                         raise RuntimeError(f'pose displacement {displacement:.3f}m exceeded {MAX_DISPLACEMENT_M:.2f}m')
-                    if state.position_error > MAX_REFERENCE_ERROR_M:
-                        reason = 'tracking_error_envelope'
-                        raise RuntimeError(f'track error {state.position_error:.3f}m exceeded {MAX_REFERENCE_ERROR_M:.2f}m')
+                    corridor_error = distance_to_polyline(
+                        (self.odom.pose.x, self.odom.pose.y), corridor)
+                    if corridor_error > MAX_CORRIDOR_ERROR_M:
+                        reason = 'geometric_corridor_envelope'
+                        raise RuntimeError(
+                            f'geometric route deviation {corridor_error:.3f}m '
+                            f'exceeded {MAX_CORRIDOR_ERROR_M:.2f}m')
                     if abs(state.yaw_error) > MAX_YAW_ERROR_RAD:
                         reason = 'yaw_envelope'
                         raise RuntimeError(f'yaw error {state.yaw_error:.3f}rad exceeded {MAX_YAW_ERROR_RAD:.2f}rad')
@@ -327,6 +365,7 @@ def main(args=None):
                         ref_vx_mps=reference.vx_world,
                         ref_vy_mps=reference.vy_world,
                         position_error_m=state.position_error,
+                        corridor_error_m=corridor_error,
                         yaw_error_rad=state.yaw_error,
                         cmd_vx_mps=vx, cmd_vy_mps=vy, cmd_wz_radps=wz,
                         displacement_from_start_m=displacement,

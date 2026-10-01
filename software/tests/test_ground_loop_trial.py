@@ -3,6 +3,9 @@ import math
 from m3pro_nav.ground_loop_trial import (compile_loop_route, nominal_route_end,
                                          validate_trial_limits)
 from m3pro_nav.feedback_trajectory_follower import FeedbackTrajectoryFollower
+from m3pro_nav.frame_transform import RigidFrameTransform
+from m3pro_nav.ground_loop_trial import (distance_to_polyline,
+                                         route_corridor_waypoints)
 from m3pro_nav.motion_planner import MotionPlanner
 from m3pro_nav.odometry_adapter import OdometryState
 from m3pro_nav.pose import Pose2D
@@ -86,3 +89,16 @@ def test_follower_accumulates_settle_time_after_profile_duration():
     assert states[-1].complete
     assert states[-1].command.vx == 0.0
     assert states[-1].command.vy == 0.0
+
+
+def test_geometric_corridor_accepts_time_lag_on_route_and_rejects_lateral_deviation():
+    primitives = compile_loop_route(speed=0.50)
+    anchor = Pose2D(6.5 * 0.4, 2.5 * 0.4, math.pi / 2)
+    corridor = route_corridor_waypoints(
+        primitives, RigidFrameTransform(anchor, anchor), samples=240)
+    # This point lies on the westward half-cell segment but is behind a later
+    # time reference; the geometric gate deliberately accepts it.
+    on_route_behind_reference = (2.30, 1.40)
+    assert distance_to_polyline(on_route_behind_reference, corridor) < 0.002
+    off_route = (2.30, 1.50)
+    assert distance_to_polyline(off_route, corridor) > 0.08

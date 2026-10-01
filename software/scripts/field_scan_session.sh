@@ -2,8 +2,8 @@
 # field_scan_session.sh —— 现场一键采集 (只做实验, 不做软件开发)
 #
 # 用法:
-#   ./software/scripts/field_scan_session.sh --cell 3 2 --heading N --label dead_end_2cells
-#   ./software/scripts/field_scan_session.sh --config configs/scan_experiments/dead_end_2cells.yaml \
+#   bash ~/honor-cup/software/scripts/field_scan_session.sh --cell 3 2 --heading N --label dead_end_2cells
+#   bash ~/honor-cup/software/scripts/field_scan_session.sh --config configs/scan_experiments/dead_end_2cells.yaml \
 #       --cell 3 2 --heading N
 #
 # 自动完成: 环境检查 / topic·type·frame 核对 / maze anchor / scan_debug
@@ -22,6 +22,18 @@ CELL_X="" CELL_Y="" HEADING="N" LABEL="manual" CONFIG="" START_RVIZ=0
 
 log() { echo "[field_session] $*"; }
 die() { echo "[field_session] ERROR: $*" >&2; exit 1; }
+
+# This session runs on the car, where the ROS graph and sensors are available.
+[[ -f /opt/ros/humble/setup.bash ]] || die "ROS Humble setup not found on car"
+set +u
+source /opt/ros/humble/setup.bash
+[[ -f "$HOME/yahboomcar_ws/install/setup.bash" ]] && source "$HOME/yahboomcar_ws/install/setup.bash"
+[[ -f "$HOME/M3Pro_ws/install/setup.bash" ]] && source "$HOME/M3Pro_ws/install/setup.bash"
+[[ -f "$REPO_ROOT/software/ros2/install/setup.bash" ]] \
+    || die "m3pro_nav install missing; run prepare_field_car.sh from the Mac first"
+source "$REPO_ROOT/software/ros2/install/setup.bash"
+set -u
+export ROS_DOMAIN_ID=30
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -48,7 +60,7 @@ if [[ -n "${ROS_LOCALHOST_ONLY:-}" ]]; then log "ROS_LOCALHOST_ONLY=$ROS_LOCALHO
 check_topic() {
     local topic="$1" expected_type="$2"
     local info
-    info=$(ros2 topic info -v "$topic" 2>/dev/null || true)
+    info=$(timeout 8 ros2 topic info -v "$topic" 2>/dev/null || true)
     [[ -n "$info" ]] || die "topic $topic not found — start the robot drivers first"
     echo "$info" | grep -q "Type: ${expected_type}" \
         || die "topic $topic is not ${expected_type}: $(echo "$info" | grep 'Type:')"
@@ -56,18 +68,18 @@ check_topic() {
 }
 check_topic "$SCAN_TOPIC" "sensor_msgs/msg/LaserScan"
 check_topic "$ODOM_TOPIC" "nav_msgs/msg/Odometry"
-if ros2 topic list 2>/dev/null | grep -q "^${IMU_TOPIC}$"; then
+if timeout 8 ros2 topic list 2>/dev/null | grep -q "^${IMU_TOPIC}$"; then
     check_topic "$IMU_TOPIC" "sensor_msgs/msg/Imu"
     IMU_RECORD="$IMU_TOPIC"
 else
     log "imu topic $IMU_TOPIC absent — skipping imu record"
     IMU_RECORD=""
 fi
-LASER_FRAME=$(ros2 topic echo --once --field header.frame_id "$SCAN_TOPIC" 2>/dev/null | sed -n '1p' || true)
+LASER_FRAME=$(timeout 5 ros2 topic echo --once --field header.frame_id "$SCAN_TOPIC" 2>/dev/null | sed -n '1p' || true)
 log "scan frame_id: ${LASER_FRAME:-<unread>}"
-ODOM_FRAME=$(ros2 topic echo --once --field header.frame_id "$ODOM_TOPIC" 2>/dev/null | sed -n '1p' || true)
+ODOM_FRAME=$(timeout 5 ros2 topic echo --once --field header.frame_id "$ODOM_TOPIC" 2>/dev/null | sed -n '1p' || true)
 [[ -n "$ODOM_FRAME" ]] || die "cannot read header.frame_id from $ODOM_TOPIC; verify the odometry driver is publishing"
-BASE_FRAME=$(ros2 topic echo --once --field child_frame_id "$ODOM_TOPIC" 2>/dev/null | sed -n '1p' || true)
+BASE_FRAME=$(timeout 5 ros2 topic echo --once --field child_frame_id "$ODOM_TOPIC" 2>/dev/null | sed -n '1p' || true)
 [[ -n "$BASE_FRAME" ]] || die "cannot read child_frame_id from $ODOM_TOPIC; verify the odometry driver is publishing"
 log "odom frame_id: $ODOM_FRAME; base child_frame_id: $BASE_FRAME"
 
@@ -81,10 +93,13 @@ mkdir -p "$SESSION_DIR/bag"
 
 # ---- 元数据 ----
 GIT_SHA=$(cd "$REPO_ROOT" && git rev-parse HEAD 2>/dev/null || echo "unknown")
+DEPLOYED_GIT_SHA="$(cat "$REPO_ROOT/software/ros2/install/deployed_git_sha" 2>/dev/null || true)"
+[[ -n "$DEPLOYED_GIT_SHA" ]] || DEPLOYED_GIT_SHA="$GIT_SHA"
 cat > "$SESSION_DIR/session.yaml" << EOF
 label: ${LABEL}
 timestamp: ${STAMP}
 git_sha: ${GIT_SHA}
+deployed_git_sha: ${DEPLOYED_GIT_SHA}
 ros_distro: ${ROS_DISTRO:-unknown}
 cell: [${CELL_X}, ${CELL_Y}]
 heading: ${HEADING}
@@ -98,7 +113,7 @@ extrinsic_yaml: ${EXTRINSIC_YAML:-none}
 config: ${CONFIG:-none}
 EOF
 cp "${CONFIG:-/dev/null}" "$SESSION_DIR/experiment.yaml" 2>/dev/null || true
-ros2 topic list -v > "$SESSION_DIR/topics.txt" 2>/dev/null || true
+timeout 8 ros2 topic list -v > "$SESSION_DIR/topics.txt" 2>/dev/null || true
 log "session dir: $SESSION_DIR"
 
 # ---- 采集主题 ----

@@ -1,0 +1,14 @@
+
+
+.metadata
+*.log
+.settings
+
+
+Drivers
+
+Debug/*
+!Debug/*.hex
+
+*Debug.launch
+

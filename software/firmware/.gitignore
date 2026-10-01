@@ -1,0 +1,8 @@
+# 每个 STM32 工程各自携带的公共库，26 个工程完全重复，合计约 426 MB。
+# 可从 .ioc 用 STM32CubeMX 重新生成，或从原始包取回：
+#   24.程序源码汇总/Board_Samples.zip
+# 仓库只收录应用层源码（APP/ + Core/ + 工程配置），保证可在线阅读。
+Board_Samples/**/Drivers/
+Board_Samples/**/Middlewares/
+Board_Samples/**/Microros/
+Board_Samples/**/Debug/

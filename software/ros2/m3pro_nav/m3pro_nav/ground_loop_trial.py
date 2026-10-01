@@ -23,16 +23,16 @@ from .control_probe import (CONTROL_PERIOD_S, MAX_SENSOR_AGE_S,
     ground_odom_gate, limit_command, next_control_deadline, send_zero_window)
 
 CELL_M = 0.4
-SPEED_MPS = 0.15
-MAX_REFERENCE_SPEED_MPS = 0.25
-ACCEL_MPS2 = 0.20
+SPEED_MPS = 0.50
+MAX_REFERENCE_SPEED_MPS = 0.50
+ACCEL_MPS2 = 1.00
 POSITION_GAIN = 1.0
 VELOCITY_DAMPING = 0.20
 MAX_DISPLACEMENT_M = 0.65
 MAX_REFERENCE_ERROR_M = 0.12
 MAX_YAW_ERROR_RAD = 0.25
-MAX_COMMAND_MPS = 0.20
-MAX_COMMAND_CAP_MPS = 0.30
+MAX_COMMAND_MPS = 0.70
+MAX_COMMAND_CAP_MPS = 0.70
 MAX_WALL_S = 18.0
 SETTLE_TIMEOUT_S = 5.0
 
@@ -98,15 +98,17 @@ def compile_loop_route(start_cell=(6, 2), speed=SPEED_MPS):
     primitives.append(MotionPrimitive('STOP', pose, duration=0.0,
                                       meta={'field_trial_terminal': True}))
 
-    # Apply the field-trial speed to both straight and fixed-radius arc pieces.
+    # Straight speed is configurable; arcs retain the planner's V_ARC ceiling.
     # Keep the two direction reversals stopped at the intermediate cell center.
     for primitive in primitives:
         if primitive.kind != 'STOP':
-            primitive.v_max = speed
+            primitive.v_max = min(speed, planner.v_arc) if primitive.kind == 'ARC' else speed
             if primitive.meta.get('field_trial_segment') == 'west_to_cell_center':
                 primitive.v_end = 0.0
             elif primitive.meta.get('field_trial_segment') == 'south_back_to_start':
                 primitive.v_end = 0.0
+            elif primitive.kind == 'ARC':
+                primitive.v_end = primitive.v_max
             else:
                 primitive.v_end = speed
     validate_geometry(primitives)
@@ -149,7 +151,7 @@ def parser():
     p.add_argument('--csv', default='/tmp/ground_loop_trial.csv')
     p.add_argument('--speed', type=float, default=SPEED_MPS)
     p.add_argument('--command-cap', type=float, default=MAX_COMMAND_MPS,
-                   help='linear command cap in m/s (must be >= speed and <= 0.30)')
+                   help='linear command cap in m/s (must be >= speed and <= 0.70)')
     return p
 
 

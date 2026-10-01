@@ -12,7 +12,7 @@ from m3pro_nav.trajectory_reference import TrajectoryReference
 
 
 def test_ground_loop_route_uses_fixed_left_and_reverse_turn_templates_and_closes():
-    primitives = compile_loop_route()
+    primitives = compile_loop_route(speed=0.15)
     start = (6.5 * 0.4, 2.5 * 0.4)
     end, length = nominal_route_end(primitives)
     assert math.dist(end, start) < 1e-9
@@ -26,11 +26,13 @@ def test_ground_loop_route_uses_fixed_left_and_reverse_turn_templates_and_closes
 
 
 def test_ground_loop_profile_fits_one_closed_route_and_holds_heading():
-    primitives = compile_loop_route()
-    profile = SpeedProfile(primitives, start_speed=0.0, a_acc=0.20, a_dec=0.20)
+    primitives = compile_loop_route(speed=0.50)
+    profile = SpeedProfile(primitives, start_speed=0.0, a_acc=1.0, a_dec=1.0)
     reference = TrajectoryReference(primitives, yaw_ref=math.pi / 2)
-    assert profile.duration > 11.0
-    assert profile.duration < 12.0
+    assert profile.duration < 5.0
+    assert max(profile.sample(profile.duration * tick / 1000).speed
+               for tick in range(1001)) >= 0.499
+    assert [p.v_max for p in primitives if p.kind == 'ARC'] == [0.45, 0.45]
     for s in (0.2, 0.2 + math.pi * 0.2 / 4, 0.2 + math.pi * 0.2 / 2,
               1.0, profile.length):
         sample = reference.sample(s)
@@ -45,19 +47,20 @@ def test_route_builder_rejects_wrong_origin_or_unbounded_speed():
     else:
         raise AssertionError('wrong origin accepted')
     try:
-        compile_loop_route(speed=0.26)
+        compile_loop_route(speed=0.51)
     except ValueError as exc:
         assert 'speed must be in' in str(exc)
     else:
         raise AssertionError('speed above field cap accepted')
 
 
-def test_speed_and_command_cap_allow_bounded_gradual_increase():
+def test_speed_and_command_cap_allow_bounded_high_speed_profile():
     assert validate_trial_limits(0.15, 0.25) == (0.15, 0.25)
     assert validate_trial_limits(0.20, 0.25) == (0.20, 0.25)
-    assert validate_trial_limits(0.25, 0.30) == (0.25, 0.30)
-    compile_loop_route(speed=0.25)
-    for speed, cap in ((0.20, 0.19), (0.26, 0.30), (0.15, 0.31)):
+    assert validate_trial_limits(0.50, 0.50) == (0.50, 0.50)
+    assert validate_trial_limits(0.50, 0.70) == (0.50, 0.70)
+    compile_loop_route(speed=0.50)
+    for speed, cap in ((0.50, 0.49), (0.51, 0.70), (0.15, 0.71)):
         try:
             validate_trial_limits(speed, cap)
         except ValueError:

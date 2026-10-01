@@ -118,10 +118,24 @@ def odom_state(pose, stamp, frame='odom', child='base_link'):
 def make_runtime(walls_entry_ex, *, task_mode=False, required=None,
                  extrinsic=(0.0, 0.0, 0.0)):
     walls, entry, ex = walls_entry_ex
+    # This ray-cast fixture supplies exact, simultaneous geometry from its
+    # perfect plant. Explicitly calibrate the trust gate for the fixture;
+    # production defaults remain diagnostic-only and reject moving scans.
+    synthetic_perception = {
+        'trust': {'diagnostic_only': False,
+                  'max_residual_m': 0.05,
+                  'max_incidence_rad': math.pi / 2,
+                  'max_range_m': 8.0,
+                  'min_uniqueness_margin_m': 0.02,
+                  'min_corner_distance_m': 0.05,
+                  'min_votes': 1},
+        'sync': {'max_trust_motion_mps': 1.0,
+                 'max_trust_yaw_rate_radps': 1.0}}
     rt = NavRuntime(
         entry=entry, order='LFR', cell=entry, heading='N',
         dry_run=True, task_mode=task_mode, required_blocks=required,
-        extrinsic=LaserExtrinsic.from_yaml(*extrinsic))
+        extrinsic=LaserExtrinsic.from_yaml(*extrinsic),
+        perception=synthetic_perception)
     rt.set_anchor_spec(entry, 'N')
     return rt, walls, entry, ex
 
@@ -138,6 +152,54 @@ def test_dry_run_control_loop_reports_commands_without_publishers():
     assert out.safety in (SafetyState.DISARMED, SafetyState.ARMED)
     assert all(math.isfinite(v) for v in
                (out.command.vx, out.command.vy, out.command.wz))
+
+
+def test_pose_overlay_applies_only_at_stop_without_changing_topological_cell(
+        monkeypatch):
+    from m3pro_nav import nav_runtime as runtime_module
+    from m3pro_nav.pose_correction import PoseCorrectionResult
+    walls, entry, ex, side = maze_sim.gen_maze(0)
+    rt, _, _, _ = make_runtime((walls, entry, ex))
+    rt.on_odom(odom_state(Pose2D(0.0, 0.0, 0.0), 1.0))
+    odom_pose = rt.latest_odom[1]
+    original = rt.anchor.maze_pose(odom_pose)
+    rt.correction_enabled = True
+
+    def proposal(dx):
+        corrected = Pose2D(original.x + dx, original.y, original.yaw)
+        return PoseCorrectionResult(True, 'OK', corrected,
+                                    dx=dx, n_walls=2, n_inliers=12)
+
+    monkeypatch.setattr(runtime_module, 'propose_pose_correction',
+                        lambda *_args: proposal(0.03))
+    assert rt._maybe_correct_pose(1.1, odom_pose, original, [])
+    assert rt.anchor.maze_pose(odom_pose).x == pytest.approx(original.x + 0.03)
+    assert rt.latest_odom[1].x == odom_pose.x  # wheel odom unchanged
+
+    original = rt.anchor.maze_pose(odom_pose)
+    monkeypatch.setattr(runtime_module, 'propose_pose_correction',
+                        lambda *_args: proposal(C))
+    assert not rt._maybe_correct_pose(2.0, odom_pose, original, [])
+    assert rt.anchor.maze_pose(odom_pose).x == pytest.approx(original.x)
+
+
+def test_zero_time_increment_scan_waits_for_future_stationary_odom():
+    walls, entry, ex, side = maze_sim.gen_maze(0)
+    rt, _, _, _ = make_runtime((walls, entry, ex))
+    pose = Pose2D(0.0, 0.0, 0.0)
+    for stamp in (0.7, 0.8, 0.9, 1.0):
+        rt.on_odom(odom_state(pose, stamp))
+    scan = FakeLaserScan([0.4, 0.6], stamp=1.0)
+    scan.time_increment = 0.0
+    scan.scan_time = 0.0
+    assert rt.on_scan(scan) is None
+    assert not rt.frames
+    assert rt.on_odom(odom_state(pose, 1.1)) == []
+    assert rt.on_odom(odom_state(pose, 1.2)) == []
+    delayed = rt.on_odom(odom_state(pose, 1.3))
+    assert len(delayed) == 1
+    assert delayed[0] is rt.frames[-1]
+    assert 'SCAN_DURATION_UNKNOWN' not in delayed[0].reject_reasons
 
 
 def test_missing_extrinsic_abstains_and_runtime_waits():

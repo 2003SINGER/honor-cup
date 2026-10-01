@@ -4,8 +4,7 @@
 #   已实测冻结的硬件事实 (topic 名 / 帧名 / 雷达安装) 直接填值;
 #   需现场标定/审查的项填 __CALIBRATE__ 或 __MEASURE__ 占位 ——
 #   dry_run 允许带占位运行; 正式运行 (dry_run:=false) 遇占位即拒绝启动。
-#   雷达可信遮罩等感知参数先用仿真默认值跑通, 现场用 scan_debug 工作台
-#   采数后人工修订 —— 这正是 field_data 回来后 LLM 分析的对象。
+#   网格关联阈值只用于诊断；TrustPolicy 未标定前不写传感器地图。
 
 ros:
   scan_topic: /scan_multi          # 已实测: laser_driver.launch.py 拉起
@@ -32,12 +31,36 @@ anchor:                            # 人工摆车: 车中心所在格 + 车头�
   cell_y: 0
   heading: N
   order: LFR
+  offset_x_m: __CALIBRATE__       # 启动静态摆位偏差，maze 世界坐标系
+  offset_y_m: __CALIBRATE__
+  offset_yaw_rad: __CALIBRATE__
 
 perception:                        # —— 现场待审参数 (scan_debug 工作台) ——
   dphi_deg: 0.30                   # 入射角噪声模型 (rad·deg)
   gate: 0.06                       # 观测误差门 (m)
   rng: 0.02                        # 距离噪声底 (m)
   confirm_near: 0.6                # 近场置信增强距离 (m)
+  association:
+    max_residual_m: 0.05           # 仅诊断分层；不是可信证据门
+    ambiguity_margin_m: 0.02
+    corner_guard_m: 0.05
+  trust:
+    diagnostic_only: true          # 校准前不得改为 false
+    max_residual_m: __CALIBRATE__
+    max_incidence_rad: __CALIBRATE__
+    max_range_m: __CALIBRATE__
+    min_uniqueness_margin_m: __CALIBRATE__
+    min_corner_distance_m: __CALIBRATE__
+    min_votes: __CALIBRATE__
+  sync:
+    history_s: 1.0
+    max_bracket_gap_s: 0.15
+    max_extrapolation_s: 0.03
+    static_window_fallback_s: 0.25 # /scan_multi has no beam timing; require stationary odom before and after stamp
+    max_trust_motion_mps: 0.03      # 无逐束 deskew 前，只接受近静止扫描
+    max_trust_yaw_rate_radps: 0.05
+  correction:
+    enabled: false                 # 校准可信阈值、静止双向墙验证后启用
   # trusted_forward_m: __CALIBRATE__   # 可信遮罩 (实装 trusted mask 时启用)
   # unknown_margin_m: __CALIBRATE__
 

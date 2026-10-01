@@ -90,6 +90,20 @@ def test_open_edges_are_not_walked_and_walked_edges_are_hard_open():
     assert em.state((2, 2), 'E', tr) == OPEN
 
 
+def test_edge_map_requires_distinct_scans_and_bounds_score():
+    em = EdgeMap(7)
+    em.observe_wall((2, 2), 'E', 0.1, stamp=10.0)
+    assert em.state((2, 2), 'E') != WALL  # one near hit is one vote
+    em.observe_wall((2, 2), 'E', 0.1, stamp=10.0)
+    assert em.state((2, 2), 'E') != WALL  # duplicate beam/frame ignored
+    em.observe_wall((2, 2), 'E', 0.1, stamp=10.1)
+    assert em.state((2, 2), 'E') == WALL
+    for i in range(20):
+        em.observe_open((2, 2), 'E', 0.1, stamp=20.0 + i)
+    key = em.edge_key((2, 2), 'E')
+    assert em.soft[key]['score'] == -T_FLIP
+
+
 def test_sensor_edge_reversal_removes_frontier():
     em, tr = EdgeMap(7), TraversalMap(7)
     for _ in range(2):
@@ -227,21 +241,13 @@ def test_running_horizon_extends_after_new_map_without_replanning_started_motion
     assert executor.pose.yaw == pytest.approx(start.yaw)
 
 
-def test_runtime_uses_new_map_before_motion_queue_becomes_idle(monkeypatch):
+def test_delayed_independent_scan_vote_keeps_runtime_consistent():
     import run_semantic_gate as gate
-    from m3pro_nav.motion_executor import MotionExecutor
-
-    original = MotionExecutor.extend_plan
-    moving_extensions = []
-
-    def record_extension(self, prims):
-        if self.queue[0].kind != 'STOP':
-            moving_extensions.append(tuple(p.kind for p in prims))
-        return original(self, prims)
-
-    monkeypatch.setattr(MotionExecutor, 'extend_plan', record_extension)
+    # A near edge now needs two distinct scans. In seed 11 the second scan
+    # arrives after the old moving-extension window; a WAIT is acceptable,
+    # provided exploration still finishes with a consistent map.
     result = gate.run_seed(11, False)
-    assert moving_extensions
+    assert result['wait_ticks'] > 0
     assert gate.check(result, False) == []
 
 

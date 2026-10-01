@@ -324,17 +324,19 @@ class StreamNav:
         D = max(0.05, dist * math.cos(a))
         return max(self.rng, D * self.DPHI / max(math.cos(a) ** 2, 1e-3))
 
-    def observe(self, hits, opens):
+    def observe(self, hits, opens, *, stamp=None):
         for (ck, axis), (dist, alpha) in hits.items():
             if self._err(dist, alpha) >= self.gate:
                 continue
             if self.traversal.is_walked(ck, axis):
                 self.edges.contradictions += 1
-            self.edges.observe_wall(ck, axis, dist, self.confirm_near)
+            self.edges.observe_wall(ck, axis, dist, self.confirm_near,
+                                    stamp=stamp)
         for (ck, axis, dist, alpha) in opens:
             if self._err(dist, alpha) >= self.gate:
                 continue
-            self.edges.observe_open(ck, axis, dist, self.confirm_near)
+            self.edges.observe_open(ck, axis, dist, self.confirm_near,
+                                    stamp=stamp)
         self.edges.derived = tree_inference.recompute_derived(self.edges, self.traversal)
 
     # ---- 出口 / 返航 (唯一允许 BFS 的非探索任务) ----

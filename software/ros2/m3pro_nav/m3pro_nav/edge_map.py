@@ -76,6 +76,9 @@ class EdgeMap:
         self.hard = {}                 # key -> (state, prov)  (WALKED/BOUNDARY)
         self.derived = {}              # key -> WALL (TREE, 每帧重算)
         self.contradictions = 0
+        self._last_stamp = {}
+        self._unknown_votes = {}
+        self._implicit_stamp = 0
 
     # ---- key (TraversalMap 同构, 独立实现避免互相依赖) ----
     def edge_key(self, c, d):
@@ -85,23 +88,38 @@ class EdgeMap:
         return (c, d) if c <= nb else (nb, OPP[d])
 
     # ---- 观测 (soft, 每帧都更新) ----
-    def observe_wall(self, c, d, dist=1.0, confirm_near=0.6):
-        return self._observe(c, d, +1, dist, confirm_near)
+    def observe_wall(self, c, d, dist=1.0, confirm_near=0.6, stamp=None):
+        return self._observe(c, d, +1, dist, confirm_near, stamp)
 
-    def observe_open(self, c, d, dist=1.0, confirm_near=0.6):
-        return self._observe(c, d, -1, dist, confirm_near)
+    def observe_open(self, c, d, dist=1.0, confirm_near=0.6, stamp=None):
+        return self._observe(c, d, -1, dist, confirm_near, stamp)
 
-    def _observe(self, c, d, sign, dist, confirm_near):
+    def _observe(self, c, d, sign, dist, confirm_near, stamp):
         key = self.edge_key(c, d)
+        # One scan contributes at most one vote to a physical edge. Explicit
+        # stamps are required by live callers; implicit stamps retain the old
+        # one-call/one-observation behavior for simulations and legacy clients.
+        if stamp is None:
+            self._implicit_stamp += 1
+            stamp = ('implicit', self._implicit_stamp)
+        if self._last_stamp.get(key) == stamp:
+            return False
+        self._last_stamp[key] = stamp
         bel = self.soft.setdefault(key, {'score': 0.0, 'state': UNKNOWN})
-        mag = float(T_CONFIRM) if dist < confirm_near else 1.0
-        bel['score'] += sign * mag
+        # Near evidence gets additional weight but still needs two independent
+        # scans to resolve UNKNOWN. This keeps one close return from deciding.
+        mag = 2.0 if dist < confirm_near else 1.0
+        bel['score'] = max(-T_FLIP, min(T_FLIP,
+                                        bel['score'] + sign * mag))
         old = bel['state']
         s = bel['score']
         if bel['state'] == UNKNOWN:
-            if s >= T_CONFIRM:
+            prior_sign, votes = self._unknown_votes.get(key, (0, 0))
+            votes = min(2, votes + 1) if sign == prior_sign else 1
+            self._unknown_votes[key] = (sign, votes)
+            if s >= T_CONFIRM and votes >= 2:
                 bel['state'] = WALL
-            elif s <= -T_CONFIRM:
+            elif s <= -T_CONFIRM and votes >= 2:
                 bel['state'] = OPEN
         elif bel['state'] == WALL:
             if s <= -T_FLIP:
@@ -211,4 +229,7 @@ class EdgeMap:
         self.soft = {self._pk(k): v for k, v in d['soft'].items()}
         self.hard = {self._pk(k): tuple(v) for k, v in d['hard'].items()}
         self.derived = {}
+        self._last_stamp = {}
+        self._unknown_votes = {}
+        self._implicit_stamp = 0
         return self

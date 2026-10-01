@@ -24,6 +24,7 @@ from m3pro_nav.scan_adapter import parse_scan
 from m3pro_nav.scan_debug_markers import build_markers
 from m3pro_nav.scan_diagnostics import FrameAccumulator, summarize_frames
 from m3pro_nav.trust_policy import TrustPolicy, TrustThresholds
+from m3pro_nav.observation_adapter import RealObservationAdapter
 
 
 # ---- LaserScan stub ----
@@ -321,6 +322,91 @@ def test_trust_policy_diagnostic_only_never_commits():
     d3 = TrustPolicy(diagnostic_only=False,
                      thresholds=th).evaluate(obs)
     assert d3.accepted and d3.observation.edge_id == ((2, 1), 'E')
+
+
+def test_trust_policy_min_votes_requires_distinct_stamps():
+    th = TrustThresholds(max_residual_m=0.01, max_incidence_rad=math.pi,
+                         max_range_m=2.0, min_uniqueness_margin_m=0.01,
+                         min_corner_distance_m=0.05, min_votes=2)
+    policy = TrustPolicy(diagnostic_only=False, thresholds=th)
+    obs = ASSOC.associate_hit(_ray_at(1.207, 0.75))
+    assert policy.evaluate(obs, stamp=4.0).reason == 'MIN_VOTES'
+    assert policy.evaluate(obs, stamp=4.0).reason == 'DUPLICATE_STAMP'
+    accepted = policy.evaluate(obs, stamp=4.1)
+    assert accepted.accepted and accepted.reason == 'OK'
+
+
+def test_calibrated_policy_can_accept_raw_candidate_rejected_by_diagnostics():
+    ray = _ray_at(1.26, 0.6)
+    obs = ASSOC.associate_hit(ray)
+    assert obs.reason == 'LARGE_RESIDUAL'
+    assert obs.candidates and obs.candidate is None
+    th = TrustThresholds(max_residual_m=0.08, max_incidence_rad=math.pi,
+                         max_range_m=2.0, min_uniqueness_margin_m=0.02,
+                         min_corner_distance_m=0.05, min_votes=1)
+    policy = TrustPolicy(diagnostic_only=False, thresholds=th)
+    assert policy.evaluate(obs, stamp=3.0).accepted
+    # Verify the production adapter uses the same policy, instead of
+    # silently filtering to GridAssociation.UNIQUE first.
+    adapter = RealObservationAdapter(ASSOC,
+                                     trust_policy=TrustPolicy(
+                                         diagnostic_only=False,
+                                         thresholds=th))
+    hits, _, stats = adapter.to_nav_observation(
+        [ray], Pose2D(1.4, 1.4, 0.0), stamp=3.0)
+    assert hits and stats.n_trusted_wall_edges == 1
+
+
+def test_frame_record_keeps_rejected_raw_features_for_offline_calibration():
+    rejected = ASSOC.associate_hit(_ray_at(1.26, 0.6))
+    record = FrameAccumulator()
+    record.accumulate([rejected], stamp=3.0)
+    raw = record.to_json()['raw_candidates']
+    assert len(raw) == 1
+    assert raw[0]['reason'] == 'LARGE_RESIDUAL'
+    assert raw[0]['best_residual_m'] == pytest.approx(0.06)
+    assert raw[0]['edge_id'] == str(rejected.candidates[0].edge_id)
+    json.dumps(record.to_json(), allow_nan=False)
+
+
+@pytest.mark.parametrize('bad', [float('nan'), float('inf'), -0.1, True])
+def test_trust_thresholds_reject_nonfinite_or_negative_geometry(bad):
+    with pytest.raises(ValueError, match='max_residual_m'):
+        TrustThresholds(max_residual_m=bad)
+
+
+def test_open_edge_policy_uses_grid_association_edges_and_one_vote_per_scan():
+    th = TrustThresholds(max_residual_m=0.01, max_incidence_rad=math.pi,
+                         max_range_m=2.0, min_uniqueness_margin_m=0.01,
+                         min_corner_distance_m=0.05, min_votes=2)
+    policy = TrustPolicy(diagnostic_only=False, thresholds=th)
+    ray = _ray_at(1.6, 1.4, ox=0.9, oy=1.4)
+    produced = ASSOC.process([ray])[0]
+    edge = ((2, 3), 'E')
+    assert edge in produced.open_edges
+
+    def vote(stamp):
+        return policy.evaluate_open_edge(
+            edge, stamp=stamp, range_m=ray.range, incidence_angle=0.0,
+            corner_distance_m=0.2)
+
+    assert vote(8.0).reason == 'MIN_VOTES'
+    assert vote(8.0).reason == 'DUPLICATE_STAMP'  # same scan counts once
+    accepted = vote(8.1)
+    assert accepted.accepted and accepted.observation.state == 'OPEN'
+    assert vote(8.1).reason == 'DUPLICATE_STAMP'
+
+
+@pytest.mark.parametrize('min_votes', [0, -1, 1.5, True])
+def test_trust_thresholds_reject_invalid_vote_counts(min_votes):
+    with pytest.raises(ValueError, match='min_votes'):
+        TrustThresholds(min_votes=min_votes)
+
+
+@pytest.mark.parametrize('stamp', [math.nan, math.inf, '8.0', True])
+def test_trust_policy_rejects_invalid_stamps(stamp):
+    with pytest.raises(ValueError, match='stamp'):
+        TrustPolicy().evaluate(None, stamp=stamp)
 
 
 # =========== 验收 9: 批量 markers ===========

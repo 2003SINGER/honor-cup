@@ -43,6 +43,8 @@ class FrameAccumulator:
         self.n_valid = 0
         self.outcomes = {UNIQUE: 0, AMBIGUOUS: 0, NONE: 0, 'OPEN': 0}
         self.reasons = {}
+        self.rejected_candidate_stats = {}
+        self.raw_candidates = []
         self.edge_counts = {}
         self.open_edge_counts = {}
         self.bins = [{'n': 0, 'unique': 0, 'ambiguous': 0,
@@ -63,6 +65,38 @@ class FrameAccumulator:
             self.outcomes[obs.outcome] = self.outcomes.get(obs.outcome, 0) + 1
             if obs.reason:
                 self.reasons[obs.reason] = self.reasons.get(obs.reason, 0) + 1
+            if obs.candidates:
+                ordered = sorted(obs.candidates, key=lambda c: c.residual)
+                best = ordered[0]
+                self.raw_candidates.append({
+                    'ray_index': obs.ray_index,
+                    'outcome': obs.outcome,
+                    'reason': obs.reason,
+                    'edge_id': str(best.edge_id),
+                    'best_residual_m': best.residual,
+                    'second_residual_m': (ordered[1].residual
+                                          if len(ordered) > 1 else None),
+                    'uniqueness_margin_m': (ordered[1].residual - best.residual
+                                            if len(ordered) > 1 else None),
+                    'range_m': best.range,
+                    'incidence_rad': best.incidence_angle,
+                    'corner_distance_m': best.distance_to_corner,
+                })
+            if obs.outcome != UNIQUE and obs.candidates:
+                stats = self.rejected_candidate_stats.setdefault(
+                    obs.reason or 'UNSPECIFIED',
+                    {'rays': 0, 'candidates': 0, 'residual_sum': 0.0,
+                     'residual_max': 0.0, 'range_sum': 0.0,
+                     'incidence_sum': 0.0, 'corner_distance_sum': 0.0})
+                stats['rays'] += 1
+                for cand in obs.candidates:
+                    stats['candidates'] += 1
+                    stats['residual_sum'] += cand.residual
+                    stats['residual_max'] = max(stats['residual_max'],
+                                                cand.residual)
+                    stats['range_sum'] += cand.range
+                    stats['incidence_sum'] += cand.incidence_angle
+                    stats['corner_distance_sum'] += cand.distance_to_corner
             if obs.candidate is not None:
                 cand = obs.candidate
                 b = self.bins[_bin_index(cand.range)]
@@ -90,6 +124,8 @@ class FrameAccumulator:
             'n_valid': self.n_valid,
             'outcomes': self.outcomes,
             'reasons': self.reasons,
+            'rejected_candidate_stats': self.rejected_candidate_stats,
+            'raw_candidates': self.raw_candidates,
             'edge_counts': self.edge_counts,
             'open_edge_counts': self.open_edge_counts,
             'bins': [{'n': b['n'], 'unique': b['unique'],
@@ -109,6 +145,7 @@ def summarize_frames(frames):
     total = {'n_rays': 0, 'n_valid': 0}
     outcomes = {UNIQUE: 0, AMBIGUOUS: 0, NONE: 0, 'OPEN': 0}
     reasons = {}
+    rejected_candidate_stats = {}
     edge_counts = {}
     open_edge_counts = {}
     bin_stats = [{'n': 0, 'unique': 0, 'ambiguous': 0,
@@ -125,6 +162,16 @@ def summarize_frames(frames):
             outcomes[k] = outcomes.get(k, 0) + v
         for k, v in f.get('reasons', {}).items():
             reasons[k] = reasons.get(k, 0) + v
+        for k, v in f.get('rejected_candidate_stats', {}).items():
+            target = rejected_candidate_stats.setdefault(
+                k, {'rays': 0, 'candidates': 0, 'residual_sum': 0.0,
+                    'residual_max': 0.0, 'range_sum': 0.0,
+                    'incidence_sum': 0.0, 'corner_distance_sum': 0.0})
+            for field in ('rays', 'candidates', 'residual_sum', 'range_sum',
+                          'incidence_sum', 'corner_distance_sum'):
+                target[field] += v.get(field, 0)
+            target['residual_max'] = max(target['residual_max'],
+                                         v.get('residual_max', 0.0))
         for k, v in f.get('edge_counts', {}).items():
             edge_counts[k] = edge_counts.get(k, 0) + v
         for k, v in f.get('open_edge_counts', {}).items():
@@ -176,6 +223,11 @@ def summarize_frames(frames):
         'outcomes': outcomes,
         'reject_reasons': dict(sorted(reasons.items(),
                                       key=lambda kv: -kv[1])),
+        'rejected_candidate_stats': dict(sorted(
+            rejected_candidate_stats.items())),
+        'by_range_bin_scope': ('diagnostic UNIQUE candidates only; '
+                               'use frames.jsonl raw_candidates for '
+                               'unbiased threshold sweeps'),
         'by_range_bin': bin_out,
         'per_edge_counts': dict(sorted(edge_counts.items(),
                                        key=lambda kv: -kv[1])),

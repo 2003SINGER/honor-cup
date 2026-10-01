@@ -15,20 +15,34 @@ MotionRuntimeCore 的 follower 锚定 (planner(maze)→odom 刚性变换)。
 
 import math
 import time as _time
+from collections import deque
 
 from .action_horizon import ActionHorizon
 from .event_detector import GridEventDetector
 from .frame_projector import FrameProjector, LaserExtrinsic, ManualMazeAnchor
+from .frame_transform import RigidFrameTransform
 from .grid_association import GridAssociation
 from .motion_planner import MotionPlanner, _primitive_end
 from .motion_primitive import MotionPrimitive
 from .motion_runtime import (FeedbackSample, MotionRuntimeCore, RuntimeState,
                              SafetyState)
-from .observation_adapter import RealObservationAdapter
-from .pose import Pose2D, TH
+from .observation_adapter import FrameObservationStats, RealObservationAdapter
+from .pose import C, Pose2D, TH
+from .pose_correction import (KnownWallSegment, ProjectedEndpoint,
+                              propose_pose_correction)
 from .position_controller import PositionController
 from .scan_adapter import parse_scan
+from .scan_time_alignment import OdomPoseHistory, ScanTimeAligner
 from .stream_nav import StreamNav
+from .trust_policy import TrustPolicy, TrustThresholds
+
+
+def _calibrated(value, cast=float):
+    if value is None or (isinstance(value, str) and
+                         any(token in value for token in
+                             ('__CALIBRATE__', '__MEASURE__'))):
+        return None
+    return cast(value)
 
 
 def _ensure_terminal_stop(prims, cursor_cell):
@@ -77,10 +91,44 @@ class NavRuntime:
             else PositionController(),
             max_feedback_age_s=max_feedback_age_s)
         self.detector = GridEventDetector(n)
-        self.association = GridAssociation()
-        self.adapter = RealObservationAdapter(self.association)
+        assoc = perc.get('association', {})
+        self.association = GridAssociation(
+            max_residual=float(assoc.get('max_residual_m', 0.05)),
+            ambiguity_margin=float(assoc.get('ambiguity_margin_m', 0.02)),
+            corner_guard=float(assoc.get('corner_guard_m', 0.05)))
+        trust = perc.get('trust', {})
+        thresholds = TrustThresholds(
+            max_residual_m=_calibrated(trust.get('max_residual_m')),
+            max_incidence_rad=_calibrated(trust.get('max_incidence_rad')),
+            max_range_m=_calibrated(trust.get('max_range_m')),
+            min_uniqueness_margin_m=_calibrated(
+                trust.get('min_uniqueness_margin_m')),
+            min_corner_distance_m=_calibrated(
+                trust.get('min_corner_distance_m')),
+            min_votes=_calibrated(trust.get('min_votes'), int))
+        self.trust_policy = TrustPolicy(
+            diagnostic_only=bool(trust.get('diagnostic_only', True)),
+            thresholds=thresholds)
+        self.adapter = RealObservationAdapter(
+            self.association, trust_policy=self.trust_policy)
         self.projector = FrameProjector(
             extrinsic if extrinsic is not None else LaserExtrinsic.missing())
+        sync = perc.get('sync', {})
+        self.odom_history = OdomPoseHistory(
+            history_s=float(sync.get('history_s', 1.0)))
+        self.scan_aligner = ScanTimeAligner(
+            self.odom_history,
+            max_bracket_gap_s=float(sync.get('max_bracket_gap_s', 0.15)),
+            max_extrapolation_s=float(sync.get('max_extrapolation_s', 0.03)),
+            max_trust_motion_mps=float(sync.get('max_trust_motion_mps', 0.03)),
+            max_trust_yaw_rate_radps=float(
+                sync.get('max_trust_yaw_rate_radps', 0.05)),
+            static_window_fallback_s=float(
+                sync.get('static_window_fallback_s', 0.25)))
+        self._pending_scans = deque()
+        self.correction_enabled = bool(
+            perc.get('correction', {}).get('enabled', False))
+        self._last_correction_stamp = None
         self.entry = entry
         self.dry_run = dry_run
         self.required_blocks = required_blocks
@@ -106,6 +154,12 @@ class NavRuntime:
         反馈缓存. receive_stamp: 节点收到消息的时刻 (反馈钟, None=odom stamp)."""
         odom_pose = odom_state.pose
         stamp = receive_stamp if receive_stamp is not None else odom_state.stamp
+        try:
+            self.odom_history.add(odom_state.stamp, odom_pose, stamp)
+        except ValueError as exc:
+            # A repeated/regressed source stamp cannot calibrate a scan. The
+            # feedback path still sees this callback and has its own watchdog.
+            self._log_event('odom_history_rejected', stamp, error=str(exc))
         if self.anchor is None:
             self.anchor = ManualMazeAnchor(
                 self._anchor_cell, self._anchor_heading, odom_pose,
@@ -133,6 +187,16 @@ class NavRuntime:
                                 **{'from': list(ev.from_cell),
                                    'to': list(ev.to_cell)})
         self.prev_maze_pose = maze_pose
+        # The real /scan_multi publisher leaves both timing fields at zero.
+        # Its scans can only be trusted after future odom confirms a stationary
+        # window around the source stamp, so process queued scans with delay.
+        processed = []
+        guard = self.scan_aligner.static_window_fallback_s
+        while (self._pending_scans and
+               self._pending_scans[0].stamp + guard <= odom_state.stamp):
+            processed.append(self._process_scan_frame(
+                self._pending_scans.popleft()))
+        return [stats for stats in processed if stats is not None]
 
     def _verify_plan(self, entered_cell, stamp):
         """实际进入格必须符合计划序列 (mismatch = 定位/执行/事件链故障)."""
@@ -146,24 +210,127 @@ class NavRuntime:
                             planned=[list(c) for c in self.planned_cells[:3]])
 
     def on_scan(self, scan_msg, *, cell_hint=None):
-        """LaserScan 形状消息 → 离散观测 → nav.observe (diagnostic 同源)."""
+        """Time-aligned diagnostic rays → trust gate → bounded edge evidence."""
         if self.anchor is None or self.latest_odom is None:
             return None                     # 传感器未就绪: 丢弃
         frame = parse_scan(scan_msg)
-        _, odom_pose, _, _, _ = self.latest_odom
+        if len(frame.rays) > 1 and frame.time_increment == 0.0:
+            if len(self._pending_scans) >= 32:
+                dropped = self._pending_scans.popleft()
+                self._log_event('scan_abstain', dropped.stamp,
+                                reason='PENDING_SCAN_OVERFLOW')
+            self._pending_scans.append(frame)
+            return None
+        return self._process_scan_frame(frame)
+
+    def _process_scan_frame(self, frame):
+        if not self.projector.extrinsic.available:
+            self._log_event('no_transform', frame.stamp)
+            return None
+        alignment = self.scan_aligner.align(frame)
+        if not alignment.accepted:
+            self._log_event('scan_abstain', frame.stamp,
+                            reason=alignment.reason,
+                            scan_end=alignment.scan_end,
+                            odom_skew_s=alignment.max_nearest_odom_skew)
+            stats = FrameObservationStats(
+                n_rays=len(frame.rays), n_rejected=len(frame.rays),
+                reject_reasons={alignment.reason: len(frame.rays)})
+            stats.alignment_mode = alignment.mode
+            stats.odom_skew_s = alignment.max_nearest_odom_skew
+            stats.stamp = frame.stamp
+            self.frames.append(stats)
+            return stats
+        odom_pose = alignment.pose
         maze_pose = self.anchor.maze_pose(odom_pose)
         world_rays = self.projector.project(frame, odom_pose, self.anchor)
         if world_rays is None:
             self._log_event('no_transform', frame.stamp)
             return None
+        if self.correction_enabled:
+            if self._maybe_correct_pose(frame.stamp, odom_pose, maze_pose,
+                                        world_rays):
+                maze_pose = self.anchor.maze_pose(odom_pose)
+                world_rays = self.projector.project(
+                    frame, odom_pose, self.anchor)
         hits, opens, stats = self.adapter.to_nav_observation(world_rays,
-                                                             maze_pose)
-        self.nav.observe(hits, opens)
+                                                             maze_pose,
+                                                             stamp=frame.stamp)
+        stats.alignment_mode = alignment.mode
+        stats.odom_skew_s = alignment.max_nearest_odom_skew
+        self.nav.observe(hits, opens, stamp=frame.stamp)
         for cell in list(self.nav.visits.cells):
             self.nav.refresh_branch(cell)
         stats.stamp = frame.stamp
         self.frames.append(stats)
         return stats
+
+    def _known_wall_segments(self):
+        """Use pre-existing sensor-confirmed walls, never current-scan votes."""
+        segments = []
+        for key, belief in self.nav.edges.soft.items():
+            if belief.get('state') != 'WALL':
+                continue
+            if key[0] == 'B':
+                _, (i, j), direction = key
+            else:
+                (i, j), direction = key
+            if direction in ('E', 'W'):
+                x = (i + (direction == 'E')) * C
+                start, end = (x, j * C), (x, (j + 1) * C)
+            else:
+                y = (j + (direction == 'N')) * C
+                start, end = (i * C, y), ((i + 1) * C, y)
+            segments.append(KnownWallSegment(
+                start, end, confirmed=True, wall_id=str(key)))
+        return segments
+
+    def _maybe_correct_pose(self, stamp, odom_pose, maze_pose, world_rays):
+        """At a measured stop, re-anchor maze<-odom and replan from zero."""
+        if self.core.state not in (RuntimeState.IDLE, RuntimeState.HOLDING,
+                                   RuntimeState.FINISHED):
+            return False
+        if (self._last_correction_stamp is not None and
+                stamp - self._last_correction_stamp < 0.5):
+            return False
+        _, _, vx, vy, wz = self.latest_odom
+        if math.hypot(vx, vy) > 0.025 or abs(wz) > 0.05:
+            return False
+        walls = self._known_wall_segments()
+        points = [ProjectedEndpoint(ray.hx, ray.hy)
+                  for ray in world_rays if ray.valid]
+        result = propose_pose_correction(points, walls, maze_pose)
+        self._log_event('pose_correction_proposal', stamp,
+                        accepted=result.accepted, reason=result.reason,
+                        dx=result.dx, dy=result.dy, dyaw=result.dyaw,
+                        walls=result.n_walls, inliers=result.n_inliers)
+        if not result.accepted:
+            return False
+        if math.hypot(result.dx, result.dy) < 0.01 and abs(result.dyaw) < 0.01:
+            return False
+        corrected_cell = (int(math.floor(result.corrected_pose.x / C)),
+                          int(math.floor(result.corrected_pose.y / C)))
+        if corrected_cell != self.cursor[1]:
+            self._log_event('pose_correction_rejected', stamp,
+                            reason='WOULD_CHANGE_TOPOLOGICAL_CELL',
+                            corrected_cell=list(corrected_cell),
+                            cursor_cell=list(self.cursor[1]))
+            return False
+        # Never change the wheel odometry. The overlay is changed only while
+        # stopped; an old follower retains its frame, so discard that plan
+        # before allowing the next planner tick to compile under the new one.
+        self.core.reset()
+        self.anchor.transform = RigidFrameTransform(
+            odom_pose, result.corrected_pose)
+        self.anchor.maze_anchor = self.anchor.maze_pose(self.anchor.odom_anchor)
+        self.prev_maze_pose = self.anchor.maze_pose(self.latest_odom[1])
+        self.planned_cells = [self.cursor[1]]
+        self._last_correction_stamp = stamp
+        self._log_event('pose_correction_applied', stamp,
+                        maze=[self.prev_maze_pose.x,
+                              self.prev_maze_pose.y,
+                              self.prev_maze_pose.yaw])
+        return True
 
     # ---- 规划 tick (10Hz 级) ----
 

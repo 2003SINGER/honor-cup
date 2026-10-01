@@ -39,6 +39,7 @@ from m3pro_nav.motion_runtime import SafetyState
 
 CONTROL_PERIOD_S = 0.02          # 50 Hz
 PLANNER_PERIOD_S = 0.10          # 10 Hz
+_PLACEHOLDERS = ('__CALIBRATE__', '__MEASURE__')
 
 class NavRuntimeNode(Node):
     def __init__(self):
@@ -101,10 +102,21 @@ class NavRuntimeNode(Node):
             max_feedback_age_s=float(
                 config.get('safety', {}).get('max_feedback_age_s', 0.5)),
         )
+        if not self._dry_run and (
+                self.runtime.trust_policy.diagnostic_only or
+                not self.runtime.trust_policy.thresholds.calibrated):
+            raise RuntimeError(
+                'preflight FAIL (real run): perception trust thresholds '
+                'must be calibrated and diagnostic_only must be false')
         self.runtime.set_anchor_spec(
             (int(anchor_cfg.get('cell_x', 0)),
              int(anchor_cfg.get('cell_y', 0))),
-            str(anchor_cfg.get('heading', 'N')))
+            str(anchor_cfg.get('heading', 'N')),
+            offset=tuple(
+                0.0 if isinstance(anchor_cfg.get(key), str)
+                and any(token in anchor_cfg[key] for token in _PLACEHOLDERS)
+                else float(anchor_cfg.get(key, 0.0))
+                for key in ('offset_x_m', 'offset_y_m', 'offset_yaw_rad')))
 
         # ---- evidence 目录 (每次运行一份, 供 LLM 分析) ----
         import time
@@ -214,8 +226,20 @@ class NavRuntimeNode(Node):
             self.get_logger().warn(f'odom rejected: {exc}', 
                                    throttle_duration_sec=5.0)
             return
-        self.runtime.on_odom(state, receive_stamp=
-                             self.get_clock().now().nanoseconds * 1e-9)
+        try:
+            delayed_scans = self.runtime.on_odom(
+                state, receive_stamp=
+                self.get_clock().now().nanoseconds * 1e-9)
+        except Exception as exc:                          # noqa: BLE001
+            self.get_logger().error(f'odom processing error: {exc}')
+            self.runtime.core.report_fault(f'odom processing exception: {exc}')
+            if self._cmd_pub is not None:
+                self._cmd_pub.publish(Twist())
+            return
+        for stats in delayed_scans or ():
+            self._events_file.write(json.dumps({
+                't': stats.stamp, 'kind': 'scan',
+                **stats.to_json()}) + '\n')
         self._flush_events()
 
     def _on_scan(self, msg):
@@ -236,7 +260,14 @@ class NavRuntimeNode(Node):
                     'scan frame mismatch in real run')
                 self._cmd_pub.publish(Twist())
                 return
-        stats = self.runtime.on_scan(msg)
+        try:
+            stats = self.runtime.on_scan(msg)
+        except Exception as exc:                          # noqa: BLE001
+            self.get_logger().error(f'scan processing error: {exc}')
+            self.runtime.core.report_fault(f'scan processing exception: {exc}')
+            if self._cmd_pub is not None:
+                self._cmd_pub.publish(Twist())
+            return
         if stats is not None:
             self._events_file.write(json.dumps({
                 't': stats.stamp, 'kind': 'scan',
@@ -248,6 +279,9 @@ class NavRuntimeNode(Node):
                 self.get_clock().now().nanoseconds * 1e-9)
         except Exception as exc:                          # noqa: BLE001
             self.get_logger().error(f'planner tick error: {exc}')
+            self.runtime.core.report_fault(f'planner tick exception: {exc}')
+            if self._cmd_pub is not None:
+                self._cmd_pub.publish(Twist())
             self._events_file.write(json.dumps(
                 {'t': self.get_clock().now().nanoseconds * 1e-9,
                  'kind': 'planner_error', 'error': str(exc)}) + '\n')
@@ -267,6 +301,19 @@ class NavRuntimeNode(Node):
             out = self.runtime.control_tick(now)
         except Exception as exc:                          # noqa: BLE001
             self.get_logger().error(f'control tick error: {exc}')
+            # A control exception is a safety fault, not a skipped sample.
+            # report_fault is latched by MotionRuntimeCore until explicit reset.
+            try:
+                self.runtime.core.report_fault(
+                    f'control tick exception: {type(exc).__name__}: {exc}')
+            except Exception as fault_exc:                # noqa: BLE001
+                self.get_logger().error(f'could not latch control fault: {fault_exc}')
+            if self._cmd_pub is not None:
+                try:
+                    self._cmd_pub.publish(Twist())
+                except Exception as publish_exc:          # noqa: BLE001
+                    self.get_logger().error(
+                        f'immediate zero publish failed: {publish_exc}')
             return
         fs = out.follower
         self._csv.writerow([
@@ -293,9 +340,15 @@ class NavRuntimeNode(Node):
             self._last_flushed_event += 1
 
     def shutdown(self):
-        if self._cmd_pub is not None:          # 关闭: 连发零指令 ~0.5s
-            for _ in range(25):
+        if self._cmd_pub is not None:
+            # spin has ended before shutdown() is called, so this bounded wait
+            # cannot starve subscriptions/timers. Publish throughout a real
+            # 0.5 s wall-clock window instead of bursting 25 messages at once.
+            import time
+            for index in range(25):
                 self._cmd_pub.publish(Twist())
+                if index < 24:
+                    time.sleep(CONTROL_PERIOD_S)
         self._flush_events()
         snapshot = self.runtime.evidence_snapshot()
         with open(os.path.join(self._run_dir, 'summary.json'), 'w') as f:

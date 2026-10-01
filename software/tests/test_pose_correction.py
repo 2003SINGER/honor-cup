@@ -98,6 +98,29 @@ def test_insufficient_hits_abstains():
     assert result.reason == 'INSUFFICIENT_HITS'
 
 
+def test_wall_extension_near_corner_cannot_support_a_pose_correction():
+    walls = [KnownWallSegment((1.0, .2), (1.0, .6), True),
+             KnownWallSegment((.2, 1.0), (.6, 1.0), True)]
+    # The first group lies 8 cm beyond a finite wall endpoint. Its distance
+    # from the infinite line is only 5 mm, but it must not count as a wall hit.
+    endpoints = [ProjectedEndpoint(1.005, .68) for _ in range(8)]
+    endpoints += [ProjectedEndpoint(.26 + .04 * i, 1.0)
+                  for i in range(8)]
+    result = propose_pose_correction(endpoints, walls, Pose2D(.5, .5, 0.0))
+    assert not result.accepted
+    assert result.n_associated == 8
+    assert result.reason == 'INSUFFICIENT_WALL_SUPPORT'
+
+
+def test_wall_direction_observability_is_independent_of_wall_order():
+    walls = [KnownWallSegment((0, 0),
+                              (math.cos(math.radians(a)),
+                               math.sin(math.radians(a))), True)
+             for a in (10, 0, 20)]
+    assert pose_correction._diverse_normals(walls, 15)
+    assert pose_correction._diverse_normals(tuple(reversed(walls)), 15)
+
+
 def test_final_inliers_must_still_support_two_wall_directions(monkeypatch):
     walls = [KnownWallSegment((1.0, .1), (1.0, 1.4), True, 'vertical'),
              KnownWallSegment((.1, 1.0), (1.4, 1.0), True, 'horizontal')]
@@ -138,6 +161,7 @@ def test_minimum_inlier_fraction_is_checked_per_wall(monkeypatch):
     {'inlier_gate_m': .13, 'association_gate_m': .12},
     {'max_median_residual_m': .05, 'max_p90_residual_m': .04},
     {'min_wall_angle_deg': 90},
+    {'endpoint_guard_m': 0},
 ])
 def test_rejects_internally_inconsistent_fit_thresholds(kwargs):
     with pytest.raises(ValueError):

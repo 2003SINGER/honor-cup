@@ -46,6 +46,7 @@ class PoseCorrectionConfig:
     min_hits: int = 8
     min_hits_per_wall: int = 3
     association_gate_m: float = 0.12
+    endpoint_guard_m: float = 0.05
     inlier_gate_m: float = 0.035
     max_median_residual_m: float = 0.018
     max_p90_residual_m: float = 0.04
@@ -60,7 +61,8 @@ class PoseCorrectionConfig:
     def __post_init__(self):
         if self.min_hits < 3 or self.min_hits_per_wall < 1:
             raise ValueError('hit-count limits must be positive')
-        positive = (self.association_gate_m, self.inlier_gate_m,
+        positive = (self.association_gate_m, self.endpoint_guard_m,
+                    self.inlier_gate_m,
                     self.max_median_residual_m, self.max_p90_residual_m,
                     self.min_wall_angle_deg, self.max_translation_m,
                     self.max_yaw_rad, self.huber_delta_m)
@@ -153,10 +155,15 @@ def _diverse_normals(walls, min_angle_deg):
         vx = wall.end[0] - wall.start[0]
         vy = wall.end[1] - wall.start[1]
         n = (-vy / math.hypot(vx, vy), vx / math.hypot(vx, vy))
-        if all(abs(n[0] * m[0] + n[1] * m[1]) <
-               math.cos(math.radians(min_angle_deg)) for m in normals):
-            normals.append(n)
-    return len(normals) >= 2
+        normals.append(n)
+    threshold = math.cos(math.radians(min_angle_deg))
+    return any(abs(a[0] * b[0] + a[1] * b[1]) < threshold
+               for i, a in enumerate(normals) for b in normals[i + 1:])
+
+
+def _within_segment_interior(along, length, cfg):
+    """Endcaps and extensions cannot provide reliable wall-normal residuals."""
+    return cfg.endpoint_guard_m <= along <= length - cfg.endpoint_guard_m
 
 
 def propose_pose_correction(endpoints: Iterable[ProjectedEndpoint],
@@ -194,7 +201,10 @@ def propose_pose_correction(endpoints: Iterable[ProjectedEndpoint],
         for wall in wall_list:
             residual, along, length, normal, tangent = \
                 _signed_distance_and_tangent(p, wall)
-            if -cfg.association_gate_m <= along <= length + cfg.association_gate_m:
+            if (_within_segment_interior(along, length, cfg)
+                    and math.hypot(residual, max(-along, 0.0,
+                                                 along - length))
+                    <= cfg.association_gate_m):
                 candidates.append((abs(residual), wall, normal, tangent))
         candidates.sort(key=lambda item: item[0])
         if not candidates or candidates[0][0] > cfg.association_gate_m:
@@ -239,7 +249,7 @@ def propose_pose_correction(endpoints: Iterable[ProjectedEndpoint],
             qx = current_pose.x + dx + c * rx - s * ry
             qy = current_pose.y + dy + s * rx + c * ry
             r, along, length, _, _ = _signed_distance_and_tangent((qx, qy), wall)
-            if not -cfg.association_gate_m <= along <= length + cfg.association_gate_m:
+            if not _within_segment_interior(along, length, cfg):
                 continue
             residuals.append((r, p, wall, normal, rx, ry, c, s))
         # Use the gated correspondences with Huber weights during fitting.
@@ -288,8 +298,7 @@ def propose_pose_correction(endpoints: Iterable[ProjectedEndpoint],
         q = (current_pose.x + dx + c * rx - s * ry,
              current_pose.y + dy + s * rx + c * ry)
         r, along, length, _, _ = _signed_distance_and_tangent(q, wall)
-        if (-cfg.association_gate_m <= along <=
-                length + cfg.association_gate_m and
+        if (_within_segment_interior(along, length, cfg) and
                 abs(r) <= cfg.inlier_gate_m):
             final_residuals.append(abs(r))
             final_wall_counts[wall] = final_wall_counts.get(wall, 0) + 1

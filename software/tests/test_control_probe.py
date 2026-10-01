@@ -309,13 +309,12 @@ def test_wheels_up_source_stamp_gate_rejects_stale_or_future_queued_samples():
 
 
 def test_ground_odom_gate_uses_only_exclusive_fresh_odometry():
-    assert ground_odom_gate(10.1, 10.0, 0, 100.2, 100.1) == (True, 'ready')
-    assert ground_odom_gate(10.1, 10.0, 0, 100.2, 99.6)[0] is False
-    assert ground_odom_gate(10.1, 10.0, 0, 100.2, 100.4)[0] is False
-    assert ground_odom_gate(10.1, 10.0, 0, 100.7, 100.1)[0] is False
-    assert ground_odom_gate(10.1, 10.0, 0, 100.2, None)[0] is False
-    assert ground_odom_gate(10.6, 10.0, 0, 100.2, 100.1)[0] is False
-    assert ground_odom_gate(10.1, 10.0, 1, 100.2, 100.1)[0] is False
+    # Source-stamp monotonicity is enforced by OdometryMonitor; this gate
+    # uses monotonic callback receipt age, not an assumed ROS clock alignment.
+    assert ground_odom_gate(10.1, 10.0, 0) == (True, 'ready')
+    assert ground_odom_gate(10.1, None, 0)[0] is False
+    assert ground_odom_gate(10.1, 10.0, 1)[0] is False
+    assert ground_odom_gate(10.7, 10.0, 0)[0] is False
 
 
 def test_ground_odom_gate_has_no_imu_dependency_and_stamp_age_is_diagnostic():

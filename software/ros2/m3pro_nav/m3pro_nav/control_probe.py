@@ -364,10 +364,14 @@ def source_stamp_gate(ros_now: float, odom_stamp: float | None,
 
 
 def ground_odom_gate(monotonic_now: float, odom_received: float | None,
-                     foreign_publishers: int, ros_now: float,
-                     odom_stamp: float | None,
-                     max_age=MAX_SENSOR_AGE_S):
-    """Ground trial gate for exclusive commands and fresh odometry only."""
+                     foreign_publishers: int, max_age=MAX_SENSOR_AGE_S):
+    """Gate on exclusive commands and recent odom callback receipt.
+
+    OdometryMonitor validates each sample's frame and strictly advancing
+    source stamp before it can become the node's current odometry. Comparing
+    that source clock against this node's ROS clock is diagnostic only: those
+    clocks can have a stable offset even while samples arrive in order.
+    """
     if not math.isfinite(monotonic_now):
         return False, 'invalid monotonic time'
     if foreign_publishers != 0:
@@ -377,15 +381,8 @@ def ground_odom_gate(monotonic_now: float, odom_received: float | None,
         return False, 'odometry missing or invalid receipt time'
     if monotonic_now - odom_received > max_age:
         return False, 'odometry receipt is stale'
-    if not math.isfinite(ros_now) or not math.isfinite(max_age) or max_age <= 0:
-        return False, 'invalid ROS clock or source-stamp age limit'
-    if odom_stamp is None or not math.isfinite(odom_stamp):
-        return False, 'odometry source stamp missing or invalid'
-    age = ros_now - odom_stamp
-    if age < -0.1:
-        return False, 'odometry source stamp is in the future'
-    if age > max_age:
-        return False, 'odometry source stamp is stale'
+    if not math.isfinite(max_age) or max_age <= 0:
+        return False, 'invalid odometry receipt age limit'
     return True, 'ready'
 
 
@@ -752,10 +749,8 @@ def main(args=None):
                     return False, f'/cmd_vel has {foreign} other publisher(s)'
                 return True, 'exclusive /cmd_vel ownership'
             if options.ground_odom_straight:
-                ros_now = self.get_clock().now().nanoseconds / 1e9
                 return ground_odom_gate(time.monotonic(), self.odom_received,
-                    self.foreign_publishers(), ros_now,
-                    self.odom.stamp if self.odom else None)
+                    self.foreign_publishers())
             if options.wheels_up_odom:
                 allowed, reason = command_gate(time.monotonic(), self.odom_received,
                     self.imu_received, self.foreign_publishers())

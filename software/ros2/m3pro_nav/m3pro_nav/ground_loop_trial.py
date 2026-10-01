@@ -18,6 +18,7 @@ from .motion_primitive import MotionPrimitive
 from .odometry_adapter import OdometryMonitor, odometry_from_msg
 from .pose import Pose2D
 from .position_controller import PositionController
+from .speed_profile import SpeedProfile
 from .trajectory_reference import TrajectoryReference
 
 from .control_probe import (CONTROL_PERIOD_S, MAX_SENSOR_AGE_S,
@@ -27,7 +28,8 @@ CELL_M = 0.4
 SPEED_MPS = 0.50
 MAX_REFERENCE_SPEED_MPS = 0.50
 ACCEL_MPS2 = 1.00
-POSITION_GAIN = 1.5
+DECEL_MPS2 = 0.60
+POSITION_GAIN = 1.0
 VELOCITY_DAMPING = 0.20
 MAX_DISPLACEMENT_M = 0.65
 MAX_CORRIDOR_ERROR_M = 0.08
@@ -39,6 +41,7 @@ SETTLE_TIMEOUT_S = 5.0
 
 CSV_FIELDS = (
     'monotonic_s', 'record_type', 'segment', 'primitive_index',
+    'phase',
     'source_stamp_s', 'frame_id', 'child_frame_id',
     'pose_x_m', 'pose_y_m', 'pose_yaw_rad', 'world_vx_mps',
     'world_vy_mps', 'odom_wz_radps', 'ref_x_m', 'ref_y_m',
@@ -115,6 +118,28 @@ def compile_loop_route(start_cell=(6, 2), speed=SPEED_MPS):
                 primitive.v_end = speed
     validate_geometry(primitives)
     return tuple(primitives)
+
+
+def split_route_at_west_center(primitives):
+    """Split the fixed loop at its planned zero-speed west-center seam."""
+    segments = [p.meta.get('field_trial_segment') for p in primitives]
+    try:
+        stop_index = segments.index('west_to_cell_center')
+        return_index = segments.index('east_back_to_arc')
+    except ValueError as exc:
+        raise ValueError('route is missing the west-center phase seam') from exc
+    if return_index != stop_index + 1:
+        raise ValueError('west-center stop and return segments must be adjacent')
+    if primitives[stop_index].v_end != 0.0:
+        raise ValueError('west-center seam must have a zero terminal speed')
+    midpoint_pose = primitives[return_index].start_pose
+    midpoint_stop = MotionPrimitive('STOP', midpoint_pose, duration=0.0,
+        meta={'field_trial_terminal': True, 'field_trial_phase_stop': 'midpoint'})
+    outbound = tuple(primitives[:return_index]) + (midpoint_stop,)
+    returning = tuple(primitives[return_index:])
+    validate_geometry(outbound)
+    validate_geometry(returning)
+    return outbound, returning, return_index, midpoint_pose
 
 
 def validate_trial_limits(speed, command_cap):
@@ -195,7 +220,7 @@ def parser():
     p.add_argument('--command-cap', type=float, default=MAX_COMMAND_MPS,
                    help='linear command cap in m/s (must be >= speed and <= 0.70)')
     p.add_argument('--kp-pos', type=float, default=POSITION_GAIN,
-                   help='position gain (default 1.5; allowed range 0..2)')
+                   help='position gain (default 1.0; allowed range 0..2)')
     p.add_argument('--kd-vel', type=float, default=VELOCITY_DAMPING,
                    help='velocity damping gain (default 0.2; allowed range 0..1)')
     return p
@@ -315,43 +340,75 @@ def main(args=None):
 
             start_odom = self.odom
             initial_center = (6.5 * CELL_M, 2.5 * CELL_M)
-            follower = FeedbackTrajectoryFollower(
-                primitives, planner_start=Pose2D(*initial_center, math.pi / 2),
-                odom_start=start_odom.pose, a_acc=ACCEL_MPS2,
-                a_dec=ACCEL_MPS2,
-                controller=PositionController(kp_pos=options.kp_pos,
-                                              kd_vel=options.kd_vel),
-                start_speed=0.0, position_tolerance=0.025,
-                yaw_tolerance=0.06, velocity_tolerance=0.025,
-                yaw_rate_tolerance=0.15, settle_time=0.30,
-                expected_odom_frame=options.expected_odom_frame,
-                expected_base_frame=options.expected_base_frame)
+            outbound, returning, return_index, midpoint_pose = \
+                split_route_at_west_center(primitives)
+            controller = PositionController(kp_pos=options.kp_pos,
+                                            kd_vel=options.kd_vel)
+
+            def build_follower(route, planner_start, *, odom_start=None,
+                               transform=None):
+                return FeedbackTrajectoryFollower(
+                    route, planner_start=planner_start, odom_start=odom_start,
+                    transform=transform, a_acc=ACCEL_MPS2, a_dec=DECEL_MPS2,
+                    controller=controller, start_speed=0.0,
+                    position_tolerance=0.025, yaw_tolerance=0.06,
+                    velocity_tolerance=0.025, yaw_rate_tolerance=0.15,
+                    settle_time=0.30,
+                    expected_odom_frame=options.expected_odom_frame,
+                    expected_base_frame=options.expected_base_frame)
+
+            follower = build_follower(
+                outbound, Pose2D(*initial_center, math.pi / 2),
+                odom_start=start_odom.pose)
             corridor = route_corridor_waypoints(
                 primitives, follower.transform, samples=240)
-            profile_duration = follower.profile.duration
+            outbound_duration = follower.profile.duration
+            returning_start = Pose2D(midpoint_pose.x, midpoint_pose.y,
+                                     math.pi / 2)
+            returning_profile = SpeedProfile(
+                returning, start_speed=0.0, a_acc=ACCEL_MPS2,
+                a_dec=DECEL_MPS2)
+            profile_duration = outbound_duration + returning_profile.duration
             self.get_logger().info(
-                f'out-and-back: length={follower.profile.length:.3f}m, '
-                f'profile={profile_duration:.2f}s, start=(6,2) N, '
+                f'out-and-back: length={nominal_route_end(primitives)[1]:.3f}m, '
+                f'profile={profile_duration:.2f}s, midpoint stop enabled, '
+                f'start=(6,2) N, '
                 f'CSV={self.csv_path}')
             self.write('trial_start', source_stamp_s=start_odom.stamp,
                 frame_id=start_odom.frame_id, child_frame_id=start_odom.child_frame_id,
                 pose_x_m=start_odom.pose.x, pose_y_m=start_odom.pose.y,
                 pose_yaw_rad=start_odom.pose.yaw,
-                reason=(f'route_length_m={follower.profile.length:.6f};'
+                reason=(f'route_length_m={nominal_route_end(primitives)[1]:.6f};'
                         f'profile_s={profile_duration:.6f};speed={options.speed:.3f};'
+                        f'a_acc={ACCEL_MPS2:.3f};a_dec={DECEL_MPS2:.3f};'
+                        f'midpoint_stop=true;'
                         f'command_cap={options.command_cap:.3f};'
                         f'kp_pos={options.kp_pos:.3f};kd_vel={options.kd_vel:.3f}'))
             started = time.monotonic()
+            phase_started = started
+            phase_index = 0
+            phase_name = 'outbound'
+            primitive_offset = 0
+            phase_primitives = outbound
+            phase_hold_logged = False
             deadline = started
             last_primitive = None
             reason = 'unknown'
             try:
                 while rclpy.ok() and not stop['requested']:
                     now = time.monotonic()
-                    elapsed = now - started
-                    if elapsed > min(MAX_WALL_S, profile_duration + SETTLE_TIMEOUT_S):
-                        reason = 'settle_timeout'
-                        raise RuntimeError('trajectory did not settle before timeout')
+                    elapsed = now - phase_started
+                    total_elapsed = now - started
+                    if total_elapsed > MAX_WALL_S:
+                        reason = 'wall_timeout'
+                        raise RuntimeError('trajectory exceeded the wall-time limit')
+                    phase_duration = follower.profile.duration
+                    if elapsed > phase_duration + SETTLE_TIMEOUT_S:
+                        reason = ('midpoint_settle_timeout' if phase_index == 0
+                                  else 'settle_timeout')
+                        raise RuntimeError(
+                            f'{phase_name} phase did not settle within '
+                            f'{SETTLE_TIMEOUT_S:.1f}s after its profile')
                     if self.failure:
                         reason = 'invalid_odometry'
                         raise RuntimeError(self.failure)
@@ -376,19 +433,39 @@ def main(args=None):
                     if abs(state.yaw_error) > MAX_YAW_ERROR_RAD:
                         reason = 'yaw_envelope'
                         raise RuntimeError(f'yaw error {state.yaw_error:.3f}rad exceeded {MAX_YAW_ERROR_RAD:.2f}rad')
-                    sample = follower.profile.sample(min(elapsed, profile_duration))
-                    primitive = primitives[sample.primitive_index]
+                    sample = follower.profile.sample(min(elapsed, phase_duration))
+                    primitive = phase_primitives[sample.primitive_index]
                     segment = primitive.meta.get('field_trial_segment',
                         ('north_out', 'left_arc_out', 'west_to_cell_center',
                          'east_back_to_arc', 'right_arc_back',
                          'south_back_to_start', 'settle')[sample.primitive_index])
+                    global_primitive_index = primitive_offset + sample.primitive_index
+                    if primitive.meta.get('field_trial_phase_stop') == 'midpoint':
+                        segment = 'midpoint_stop'
+                    elif primitive.kind == 'STOP':
+                        segment = 'settle'
                     if sample.primitive_index != last_primitive:
                         self.write('segment_enter', segment=segment,
-                            primitive_index=sample.primitive_index,
+                            primitive_index=global_primitive_index,
+                            phase=phase_name,
                             source_stamp_s=self.odom.stamp,
                             pose_x_m=self.odom.pose.x, pose_y_m=self.odom.pose.y,
                             pose_yaw_rad=self.odom.pose.yaw)
                         last_primitive = sample.primitive_index
+                    if state.phase.value == 'HOLDING' and not phase_hold_logged:
+                        self.write('phase_hold_start', segment=segment,
+                            primitive_index=global_primitive_index,
+                            phase=phase_name, source_stamp_s=self.odom.stamp,
+                            pose_x_m=self.odom.pose.x, pose_y_m=self.odom.pose.y,
+                            pose_yaw_rad=self.odom.pose.yaw,
+                            position_error_m=state.position_error,
+                            yaw_error_rad=state.yaw_error,
+                            world_vx_mps=self.odom.vx_world,
+                            world_vy_mps=self.odom.vy_world,
+                            odom_wz_radps=self.odom.wz,
+                            corridor_error_m=corridor_error,
+                            reason='profile complete; waiting for measured settle')
+                        phase_hold_logged = True
                     reference = state.reference
                     command = state.command
                     imu_values = {}
@@ -401,7 +478,8 @@ def main(args=None):
                     vx, vy, wz = limit_command(command.vx, command.vy,
                                                command.wz, options.command_cap)
                     self.write('control_sample', segment=segment,
-                        primitive_index=sample.primitive_index,
+                        primitive_index=global_primitive_index,
+                        phase=phase_name,
                         source_stamp_s=self.odom.stamp,
                         frame_id=self.odom.frame_id,
                         child_frame_id=self.odom.child_frame_id,
@@ -425,6 +503,33 @@ def main(args=None):
                     msg.linear.x, msg.linear.y, msg.angular.z = vx, vy, wz
                     self.publisher.publish(msg)
                     if state.complete:
+                        self.write('phase_hold_complete', segment=segment,
+                            primitive_index=global_primitive_index,
+                            phase=phase_name, source_stamp_s=self.odom.stamp,
+                            pose_x_m=self.odom.pose.x, pose_y_m=self.odom.pose.y,
+                            pose_yaw_rad=self.odom.pose.yaw,
+                            position_error_m=state.position_error,
+                            yaw_error_rad=state.yaw_error,
+                            world_vx_mps=self.odom.vx_world,
+                            world_vy_mps=self.odom.vy_world,
+                            odom_wz_radps=self.odom.wz,
+                            corridor_error_m=corridor_error,
+                            reason='position, speed, yaw and dwell tolerances met')
+                        if phase_index == 0:
+                            phase_index = 1
+                            phase_name = 'return'
+                            primitive_offset = return_index
+                            phase_primitives = returning
+                            follower = build_follower(
+                                returning, returning_start,
+                                transform=follower.transform)
+                            phase_started = time.monotonic()
+                            phase_hold_logged = False
+                            last_primitive = None
+                            rclpy.spin_once(self, timeout_sec=0.0)
+                            deadline = next_control_deadline(
+                                deadline, time.monotonic())
+                            continue
                         reason = 'settled'
                         return
                     rclpy.spin_once(self, timeout_sec=0.0)

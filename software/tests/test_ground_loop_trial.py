@@ -2,6 +2,7 @@ import math
 
 from m3pro_nav.ground_loop_trial import (compile_loop_route, nominal_route_end,
                                          validate_controller_gains,
+                                         split_route_at_west_center,
                                          validate_trial_limits, parser)
 from m3pro_nav.feedback_trajectory_follower import FeedbackTrajectoryFollower
 from m3pro_nav.frame_transform import RigidFrameTransform
@@ -43,6 +44,66 @@ def test_ground_loop_profile_fits_one_closed_route_and_holds_heading():
         assert math.isclose(sample.yaw_ref, math.pi / 2)
 
 
+def test_west_center_split_preserves_route_and_adds_zero_speed_terminal_stop():
+    primitives = compile_loop_route(speed=0.50)
+    outbound, returning, return_index, midpoint = \
+        split_route_at_west_center(primitives)
+    assert return_index == 3
+    assert [p.meta.get('field_trial_segment') for p in outbound[:-1]] == [
+        None, 'left_arc_out', 'west_to_cell_center']
+    assert outbound[-1].kind == 'STOP'
+    assert outbound[-1].meta['field_trial_phase_stop'] == 'midpoint'
+    assert outbound[-2].v_end == 0.0
+    assert returning[0].meta['field_trial_segment'] == 'east_back_to_arc'
+    assert math.dist((outbound[-1].start_pose.x, outbound[-1].start_pose.y),
+                     (midpoint.x, midpoint.y)) < 1e-12
+    assert math.dist((returning[0].p0[0], returning[0].p0[1]),
+                     (midpoint.x, midpoint.y)) < 1e-12
+    original_length = nominal_route_end(primitives)[1]
+    split_length = nominal_route_end(outbound)[1] + nominal_route_end(returning)[1]
+    assert math.isclose(split_length, original_length, abs_tol=1e-12)
+
+
+def test_midpoint_phase_holds_for_measured_settle_and_return_reuses_transform():
+    primitives = compile_loop_route(speed=0.50)
+    outbound, returning, _, midpoint = split_route_at_west_center(primitives)
+    start = Pose2D(6.5 * 0.4, 2.5 * 0.4, math.pi / 2)
+    outbound_follower = FeedbackTrajectoryFollower(
+        outbound, planner_start=start, odom_start=start,
+        a_acc=1.0, a_dec=0.6, controller=PositionController(kp_pos=1.0,
+        kd_vel=0.2), start_speed=0.0, position_tolerance=0.025,
+        yaw_tolerance=0.06, velocity_tolerance=0.025,
+        yaw_rate_tolerance=0.15, settle_time=0.30,
+        expected_odom_frame='odom', expected_base_frame='base_footprint')
+    midpoint_odom_pose = outbound_follower.transform.transform_pose(midpoint)
+    moving = OdometryState(midpoint_odom_pose, 0.0, 0.40, 0.0, 1.0,
+                           'odom', 'base_footprint')
+    held = outbound_follower.update(outbound_follower.profile.duration, moving)
+    assert held.phase.name == 'HOLDING'
+    assert not held.complete
+
+    stopped = OdometryState(midpoint_odom_pose, 0.0, 0.0, 0.0, 1.1,
+                            'odom', 'base_footprint')
+    for tick in range(17):
+        held = outbound_follower.update(
+            outbound_follower.profile.duration + 0.02 * tick, stopped)
+    assert held.complete
+
+    returning_follower = FeedbackTrajectoryFollower(
+        returning, planner_start=Pose2D(midpoint.x, midpoint.y, math.pi / 2),
+        odom_start=None, transform=outbound_follower.transform,
+        a_acc=1.0, a_dec=0.6,
+        controller=outbound_follower.controller, start_speed=0.0,
+        position_tolerance=0.025, yaw_tolerance=0.06,
+        velocity_tolerance=0.025, yaw_rate_tolerance=0.15,
+        settle_time=0.30, expected_odom_frame='odom',
+        expected_base_frame='base_footprint')
+    state = returning_follower.update(0.0, stopped)
+    assert math.dist((state.reference.x, state.reference.y),
+                     (midpoint_odom_pose.x, midpoint_odom_pose.y)) < 1e-12
+    assert returning_follower.transform is outbound_follower.transform
+
+
 def test_route_builder_rejects_wrong_origin_or_unbounded_speed():
     try:
         compile_loop_route(start_cell=(5, 2))
@@ -74,13 +135,13 @@ def test_speed_and_command_cap_allow_bounded_high_speed_profile():
 
 
 def test_field_trial_default_gains_change_kp_only_and_overrides_are_bounded():
-    # The saved 0.5 m/s baseline used kp=1.0, kd=0.2. The next default run
-    # isolates the kp change; CLI overrides retain bounded follow-up tuning.
-    assert validate_controller_gains(1.5, 0.2) == (1.5, 0.2)
+    # Restore the successful 0.5 m/s baseline after kp=1.5 exceeded the
+    # geometric corridor; CLI overrides retain bounded follow-up tuning.
+    assert validate_controller_gains(1.0, 0.2) == (1.0, 0.2)
     defaults = parser().parse_args([
         '--run', '--expected-odom-frame', 'odom',
         '--expected-base-frame', 'base_footprint'])
-    assert (defaults.kp_pos, defaults.kd_vel) == (1.5, 0.2)
+    assert (defaults.kp_pos, defaults.kd_vel) == (1.0, 0.2)
     overrides = parser().parse_args([
         '--run', '--expected-odom-frame', 'odom',
         '--expected-base-frame', 'base_footprint',

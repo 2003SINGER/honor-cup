@@ -17,7 +17,7 @@ from .motion_planner import MotionPlanner, validate_geometry
 from .motion_primitive import MotionPrimitive
 from .odometry_adapter import (OdometryMonitor, OdometryState,
                                odometry_from_msg)
-from .pose import Pose2D
+from .pose import Pose2D, norm_angle
 from .position_controller import PositionController
 from .relative_yaw import RelativeYawEstimator
 from .speed_profile import SpeedProfile
@@ -52,7 +52,7 @@ SETTLE_TIMEOUT_S = 5.0
 
 CSV_FIELDS = (
     'monotonic_s', 'record_type', 'segment', 'primitive_index',
-    'phase',
+    'phase', 'repeated_control_ticks',
     'source_stamp_s', 'receipt_monotonic_s', 'frame_id', 'child_frame_id',
     'odom_body_vx_mps', 'odom_body_vy_mps',
     'pose_x_m', 'pose_y_m', 'pose_yaw_rad', 'world_vx_mps',
@@ -128,6 +128,22 @@ def odometry_sample_log_fields(sample, receipt_monotonic_s, body_vx, body_vy):
         odom_body_vy_mps=float(body_vy),
         world_vx_mps=sample.vx_world, world_vy_mps=sample.vy_world,
         odom_wz_radps=sample.wz)
+
+
+def source_stamp_is_newer(previous_stamp, source_stamp):
+    """Return whether a finite odometry source stamp advances the control input."""
+    if (not isinstance(source_stamp, (int, float)) or
+            not math.isfinite(source_stamp)):
+        return False
+    return previous_stamp is None or source_stamp > previous_stamp
+
+
+def select_control_command(candidate, previous, *, update_allowed,
+                           stop_requested=False):
+    """Prefer an immediate zero on stop, else update only on an allowed tick."""
+    if stop_requested:
+        return (0.0, 0.0, 0.0)
+    return candidate if update_allowed else previous
 
 
 def require_fresh_imu_yaw(imu_estimator, imu_received_s, now_s,
@@ -343,6 +359,8 @@ def parser():
     p.add_argument('--expected-odom-frame', required=True)
     p.add_argument('--expected-base-frame', required=True)
     p.add_argument('--csv', default='/tmp/ground_loop_trial.csv')
+    p.add_argument('--odom-synchronous-control', action='store_true',
+                   help='update control only on a newer /odom_raw source stamp')
     p.add_argument('--speed', type=float, default=SPEED_MPS)
     p.add_argument('--command-cap', type=float, default=MAX_COMMAND_MPS,
                    help='linear command cap in m/s (must be >= speed and <= 0.50)')
@@ -399,6 +417,11 @@ def main(args=None):
             self.publisher = None
             self._zero_sent = False
             self._last_cmd = None
+            self._last_control_source_stamp = None
+            self._held_control_ticks = 0
+            self._last_control_state = None
+            if options.odom_synchronous_control:
+                self._last_cmd = (0.0, 0.0, 0.0)
             self.create_subscription(Odometry, '/odom_raw', self.on_odom, 10)
             self.create_subscription(Imu, '/imu/data_raw', self.on_imu, 10)
 
@@ -664,6 +687,7 @@ def main(args=None):
             last_progress_s = 0.0
             progress_stall_since = started
             reason = 'unknown'
+            state = None
             try:
                 while rclpy.ok() and not stop['requested']:
                     now = time.monotonic()
@@ -696,11 +720,26 @@ def main(args=None):
                             raise RuntimeError(str(exc)) from exc
                     else:
                         control_feedback = yaw_feedback_state(self.odom, 'odom')
-                    state = follower.update(elapsed, control_feedback)
+                    update_allowed = (
+                        not options.odom_synchronous_control or
+                        source_stamp_is_newer(self._last_control_source_stamp,
+                                              control_feedback.stamp))
+                    if update_allowed:
+                        if options.odom_synchronous_control:
+                            self._last_control_source_stamp = control_feedback.stamp
+                        state = follower.update(elapsed, control_feedback)
+                        if options.odom_synchronous_control:
+                            self._last_control_state = state
+                    else:
+                        state = self._last_control_state
+                        if state is None:
+                            raise RuntimeError(
+                                'no initial control state for repeated odometry stamp')
                     yaw_log_values = control_yaw_log_fields(
                         options.yaw_source, control_feedback,
                         self.imu_estimator)
-                    if state.measured_progress_s >= last_progress_s + 0.01:
+                    if (update_allowed and
+                            state.measured_progress_s >= last_progress_s + 0.01):
                         last_progress_s = state.measured_progress_s
                         progress_stall_since = now
                     elif now - progress_stall_since > SETTLE_TIMEOUT_S:
@@ -721,9 +760,37 @@ def main(args=None):
                         raise RuntimeError(
                             f'geometric route deviation {corridor_error:.3f}m '
                             f'exceeded {MAX_CORRIDOR_ERROR_M:.2f}m')
-                    if abs(state.yaw_error) > MAX_YAW_ERROR_RAD:
+                    yaw_error = norm_angle(
+                        state.reference.yaw_ref - control_feedback.pose.yaw)
+                    if abs(yaw_error) > MAX_YAW_ERROR_RAD:
                         reason = 'yaw_envelope'
-                        raise RuntimeError(f'yaw error {state.yaw_error:.3f}rad exceeded {MAX_YAW_ERROR_RAD:.2f}rad')
+                        raise RuntimeError(f'yaw error {yaw_error:.3f}rad exceeded {MAX_YAW_ERROR_RAD:.2f}rad')
+                    if not update_allowed:
+                        held = select_control_command(
+                            None, self._last_cmd, update_allowed=False,
+                            stop_requested=stop['requested'])
+                        if stop['requested']:
+                            reason = 'operator_interrupt'
+                            self.zero()
+                            break
+                        self._held_control_ticks += 1
+                        self.write('control_hold',
+                            phase=phase_name,
+                            source_stamp_s=control_feedback.stamp,
+                            repeated_control_ticks=self._held_control_ticks,
+                            cmd_vx_mps=held[0], cmd_vy_mps=held[1],
+                            cmd_wz_radps=held[2],
+                            reason='waiting for a strictly newer odometry source stamp')
+                        msg = Twist()
+                        msg.linear.x, msg.linear.y, msg.angular.z = held
+                        self.publisher.publish(msg)
+                        self.service_callbacks()
+                        deadline = next_control_deadline(deadline,
+                                                         time.monotonic())
+                        remaining = deadline - time.monotonic()
+                        if remaining > 0 and stop_requested_wait(remaining):
+                            break
+                        continue
                     sample = state.speed_sample
                     primitive = phase_primitives[sample.primitive_index]
                     segment = primitive.meta.get('field_trial_segment',
@@ -765,6 +832,18 @@ def main(args=None):
                         self.imu, self.imu_estimator, now)
                     vx, vy, wz = limit_command(command.vx, command.vy,
                                                command.wz, options.command_cap)
+                    if options.odom_synchronous_control:
+                        selected = select_control_command(
+                            (vx, vy, wz), self._last_cmd,
+                            update_allowed=update_allowed,
+                            stop_requested=stop['requested'])
+                        vx, vy, wz = selected
+                        self._last_cmd = selected
+                        self._held_control_ticks = 0
+                    if stop['requested'] and options.odom_synchronous_control:
+                        reason = 'operator_interrupt'
+                        self.zero()
+                        break
                     self.write('control_sample', segment=segment,
                         primitive_index=global_primitive_index,
                         phase=phase_name,

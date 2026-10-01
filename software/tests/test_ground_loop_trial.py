@@ -14,7 +14,9 @@ from m3pro_nav.ground_loop_trial import (distance_to_polyline,
                                          route_corridor_waypoints)
 from m3pro_nav.ground_loop_trial import (CSV_FIELDS,
                                          odometry_sample_log_fields,
-                                         service_ros_callbacks)
+                                         service_ros_callbacks,
+                                         select_control_command,
+                                         source_stamp_is_newer)
 from m3pro_nav.motion_planner import MotionPlanner
 from m3pro_nav.odometry_adapter import OdometryState
 from m3pro_nav.pose import Pose2D
@@ -270,12 +272,15 @@ def test_field_trial_default_gains_and_overrides_are_bounded():
         '--run', '--expected-odom-frame', 'odom',
         '--expected-base-frame', 'base_footprint'])
     assert (defaults.kp_pos, defaults.kd_vel) == (1.4, 0.2)
+    assert defaults.odom_synchronous_control is False
     assert 'position gain (default 1.4; allowed range 0..2)' in parser().format_help()
     overrides = parser().parse_args([
         '--run', '--expected-odom-frame', 'odom',
         '--expected-base-frame', 'base_footprint',
-        '--kp-pos', '1.25', '--kd-vel', '0.3'])
+        '--kp-pos', '1.25', '--kd-vel', '0.3',
+        '--odom-synchronous-control'])
     assert (overrides.kp_pos, overrides.kd_vel) == (1.25, 0.3)
+    assert overrides.odom_synchronous_control is True
     for kp, kd in ((-0.01, 0.2), (2.01, 0.2), (1.4, -0.01),
                    (1.4, 1.01), (math.inf, 0.2), (1.4, math.nan)):
         try:
@@ -284,6 +289,24 @@ def test_field_trial_default_gains_and_overrides_are_bounded():
             pass
         else:
             raise AssertionError(f'unsafe gain override accepted: kp={kp}, kd={kd}')
+
+
+def test_odom_synchronous_control_reuses_command_until_stamp_advances_and_stop_wins():
+    previous = (0.12, -0.03, 0.04)
+    candidate = (-0.08, 0.02, -0.01)
+    last_stamp = 123.456
+
+    assert not source_stamp_is_newer(last_stamp, last_stamp)
+    assert select_control_command(candidate, previous,
+        update_allowed=source_stamp_is_newer(last_stamp, last_stamp)) == previous
+
+    next_stamp = last_stamp + 0.001
+    assert source_stamp_is_newer(last_stamp, next_stamp)
+    assert select_control_command(candidate, previous,
+        update_allowed=source_stamp_is_newer(last_stamp, next_stamp)) == candidate
+
+    assert select_control_command(candidate, previous,
+        update_allowed=False, stop_requested=True) == (0.0, 0.0, 0.0)
 
 
 def test_odom_sample_log_keeps_source_and_receipt_times_and_planar_twist():

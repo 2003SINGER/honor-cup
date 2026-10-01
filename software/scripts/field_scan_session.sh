@@ -17,6 +17,7 @@ FIELD_DATA="$REPO_ROOT/field_data"
 SCAN_TOPIC="${SCAN_TOPIC:-/scan_multi}"
 ODOM_TOPIC="${ODOM_TOPIC:-/odom_raw}"
 IMU_TOPIC="${IMU_TOPIC:-/imu/data_raw}"
+JOY_TOPIC="${JOY_TOPIC:-/joy}"
 EXTRINSIC_YAML="${EXTRINSIC_YAML:-}"
 CELL_X="" CELL_Y="" HEADING="N" LABEL="manual" CONFIG="" START_RVIZ=0
 
@@ -75,6 +76,15 @@ else
     log "imu topic $IMU_TOPIC absent — skipping imu record"
     IMU_RECORD=""
 fi
+if timeout 8 ros2 topic list 2>/dev/null | grep -q "^${JOY_TOPIC}$"; then
+    check_topic "$JOY_TOPIC" "sensor_msgs/msg/Joy"
+    JOY_VISIBLE_AT_START=true
+    log "joy is visible at capture start"
+else
+    JOY_VISIBLE_AT_START=false
+    log "joy topic $JOY_TOPIC absent at capture start — rosbag will keep discovering it if the controller starts later"
+fi
+JOY_RECORD="$JOY_TOPIC"
 LASER_FRAME=$(timeout 5 ros2 topic echo --once --field header.frame_id "$SCAN_TOPIC" 2>/dev/null | sed -n '1p' || true)
 log "scan frame_id: ${LASER_FRAME:-<unread>}"
 ODOM_FRAME=$(timeout 5 ros2 topic echo --once --field header.frame_id "$ODOM_TOPIC" 2>/dev/null | sed -n '1p' || true)
@@ -85,8 +95,15 @@ log "odom frame_id: $ODOM_FRAME; base child_frame_id: $BASE_FRAME"
 
 # ---- session 目录 ----
 STAMP=$(date +%Y%m%d_%H%M%S)
-SESSION_DIR="$FIELD_DATA/${STAMP}_${LABEL}"
+SESSION_BASE="$FIELD_DATA/${STAMP}_${LABEL}"
+SESSION_DIR="$SESSION_BASE"
+SESSION_SUFFIX=1
+while ! mkdir "$SESSION_DIR" 2>/dev/null; do
+    SESSION_DIR="${SESSION_BASE}_$(printf '%02d' "$SESSION_SUFFIX")"
+    SESSION_SUFFIX=$((SESSION_SUFFIX + 1))
+done
 mkdir -p "$SESSION_DIR/bag"
+exec > >(tee -a "$SESSION_DIR/session.log") 2>&1
 
 # --config is copied below for metadata only; it does not set topics or recording duration.
 # The session runs until Ctrl-C; the template record_seconds value is descriptive only.
@@ -106,6 +123,8 @@ heading: ${HEADING}
 scan_topic: ${SCAN_TOPIC}
 odom_topic: ${ODOM_TOPIC}
 imu_topic: ${IMU_RECORD}
+joy_topic: ${JOY_RECORD}
+joy_topic_visible_at_start: ${JOY_VISIBLE_AT_START}
 laser_frame: ${LASER_FRAME:-unknown}
 odom_frame: ${ODOM_FRAME}
 base_frame: ${BASE_FRAME}
@@ -115,10 +134,17 @@ EOF
 cp "${CONFIG:-/dev/null}" "$SESSION_DIR/experiment.yaml" 2>/dev/null || true
 timeout 8 ros2 topic list -v > "$SESSION_DIR/topics.txt" 2>/dev/null || true
 log "session dir: $SESSION_DIR"
+CMD_VEL_INFO=$(timeout 8 ros2 topic info -v /cmd_vel 2>/dev/null || true)
+if [[ -z "$CMD_VEL_INFO" ]]; then
+    log "WARNING: /cmd_vel is not visible yet; recording odometry/scan and waiting for any /cmd_vel publisher that appears"
+elif ! grep -Eq 'Publisher count: [1-9][0-9]*' <<<"$CMD_VEL_INFO"; then
+    log "WARNING: /cmd_vel has no publisher at capture start; recording anyway (manual motion will still be measured by odometry and scan)"
+fi
 
 # ---- 采集主题 ----
 RECORD_TOPICS="$SCAN_TOPIC $ODOM_TOPIC /cmd_vel /tf /tf_static /scan_debug/markers"
 [[ -n "$IMU_RECORD" ]] && RECORD_TOPICS="$RECORD_TOPICS $IMU_RECORD"
+RECORD_TOPICS="$RECORD_TOPICS $JOY_RECORD"
 
 cleanup() {
     local exit_status=$?

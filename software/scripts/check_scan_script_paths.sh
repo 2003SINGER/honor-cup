@@ -20,6 +20,10 @@ grep -Fq 'RECORD_TOPICS="$SCAN_TOPIC $ODOM_TOPIC /cmd_vel /tf /tf_static /scan_d
     echo "field session rosbag must include /cmd_vel for motion correlation" >&2
     exit 1
 }
+grep -Fq 'RECORD_TOPICS="$RECORD_TOPICS $JOY_RECORD"' "$SCRIPT_DIR/field_scan_session.sh" || {
+    echo "field session rosbag must retain the /joy discovery request" >&2
+    exit 1
+}
 [[ -d "$PACKAGE_DIR" ]] || { echo "package path missing: $PACKAGE_DIR" >&2; exit 1; }
 [[ -f "$SUMMARY_TOOL" ]] || { echo "summary tool missing: $SUMMARY_TOOL" >&2; exit 1; }
 printf 'scan script paths OK\nrepo: %s\npackage: %s\nsummary: %s\n' "$REPO_ROOT" "$PACKAGE_DIR" "$SUMMARY_TOOL"

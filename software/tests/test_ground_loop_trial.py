@@ -1,7 +1,8 @@
 import math
 import pytest
 
-from m3pro_nav.ground_loop_trial import (compile_loop_route, nominal_route_end,
+from m3pro_nav.ground_loop_trial import (ARC_SPEED_MPS, compile_loop_route,
+                                         nominal_route_end,
                                          validate_controller_gains,
                                          split_route_at_west_center,
                                          validate_trial_limits, parser)
@@ -35,10 +36,12 @@ def test_ground_loop_profile_fits_one_closed_route_and_holds_heading():
     primitives = compile_loop_route(speed=0.50)
     profile = SpeedProfile(primitives, start_speed=0.0, a_acc=1.0, a_dec=1.0)
     reference = TrajectoryReference(primitives, yaw_ref=math.pi / 2)
-    assert profile.duration < 5.0
+    assert profile.duration < 6.0  # 弧线限速 0.25 换取可跟踪性, 时间换安全
+    # 0.2m 直线段要在弧线接缝前减速到 0.25, 峰值物理上限 ~0.44 (三角剖面)
     assert max(profile.sample(profile.duration * tick / 1000).speed
-               for tick in range(1001)) >= 0.499
-    assert [p.v_max for p in primitives if p.kind == 'ARC'] == [0.45, 0.45]
+               for tick in range(1001)) >= 0.43
+    assert [p.v_max for p in primitives if p.kind == 'ARC'] == [
+        ARC_SPEED_MPS, ARC_SPEED_MPS]  # 弧线限速, 防 0.45m/s@r0.2 切角出廊 (0727 实车)
     for s in (0.2, 0.2 + math.pi * 0.2 / 4, 0.2 + math.pi * 0.2 / 2,
               1.0, profile.length):
         sample = reference.sample(s)
@@ -256,13 +259,13 @@ def test_speed_and_command_cap_allow_bounded_high_speed_profile():
 
 
 def test_field_trial_default_gains_change_kp_only_and_overrides_are_bounded():
-    # Restore the successful 0.5 m/s baseline after kp=1.5 exceeded the
-    # geometric corridor; CLI overrides retain bounded follow-up tuning.
-    assert validate_controller_gains(1.0, 0.2) == (1.0, 0.2)
+    # 0.5 m/s 底盘 ~20% 速度沉降 → kp=1.0 稳态滞后 12.5cm 切角出廊 (0727 实车)，
+    # 默认提到 1.5/0.35 (滞后 ~8.3cm)；CLI overrides retain bounded tuning.
+    assert validate_controller_gains(1.5, 0.35) == (1.5, 0.35)
     defaults = parser().parse_args([
         '--run', '--expected-odom-frame', 'odom',
         '--expected-base-frame', 'base_footprint'])
-    assert (defaults.kp_pos, defaults.kd_vel) == (1.0, 0.2)
+    assert (defaults.kp_pos, defaults.kd_vel) == (1.5, 0.35)
     overrides = parser().parse_args([
         '--run', '--expected-odom-frame', 'odom',
         '--expected-base-frame', 'base_footprint',

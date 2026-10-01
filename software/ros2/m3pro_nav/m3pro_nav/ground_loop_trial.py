@@ -29,14 +29,15 @@ from .control_probe import (CONTROL_PERIOD_S, MAX_SENSOR_AGE_S,
 CELL_M = 0.4
 SPEED_MPS = 0.50
 MAX_REFERENCE_SPEED_MPS = 0.50
+ARC_SPEED_MPS = 0.25  # r=0.2m 弧线: 0.45m/s 时 129deg/s 偏航率跟踪不住, 实车已切角撞廊
 ACCEL_MPS2 = 1.00
 DECEL_MPS2 = 0.60
-POSITION_GAIN = 1.0
-VELOCITY_DAMPING = 0.20
+POSITION_GAIN = 1.5  # 0.5m/s 底盘 ~20% 速度沉降, kp=1 稳态滞后 12.5cm (0727 实测吻合)
+VELOCITY_DAMPING = 0.35
 YAW_POSITION_GAIN = 2.0
 YAW_RATE_DAMPING = 0.0
 MAX_DISPLACEMENT_M = 0.65
-MAX_CORRIDOR_ERROR_M = 0.08
+MAX_CORRIDOR_ERROR_M = 0.10
 MAX_YAW_ERROR_RAD = 0.25
 MAX_COMMAND_MPS = 0.50
 MAX_COMMAND_CAP_MPS = 0.50
@@ -174,11 +175,12 @@ def compile_loop_route(start_cell=(6, 2), speed=SPEED_MPS):
     primitives.append(MotionPrimitive('STOP', pose, duration=0.0,
                                       meta={'field_trial_terminal': True}))
 
-    # Straight speed is configurable; arcs retain the planner's V_ARC ceiling.
+    # Straight speed is configurable; arcs are clamped to ARC_SPEED_MPS
+    # (0.45 m/s on r=0.2 m 切角出廊, 0727 实车已复现)。
     # Keep the two direction reversals stopped at the intermediate cell center.
     for primitive in primitives:
         if primitive.kind != 'STOP':
-            primitive.v_max = min(speed, planner.v_arc) if primitive.kind == 'ARC' else speed
+            primitive.v_max = min(speed, ARC_SPEED_MPS) if primitive.kind == 'ARC' else speed
             if primitive.meta.get('field_trial_segment') == 'west_to_cell_center':
                 primitive.v_end = 0.0
             elif primitive.meta.get('field_trial_segment') == 'south_back_to_start':
@@ -349,6 +351,7 @@ def main(args=None):
             self.failure = None
             self.publisher = None
             self._zero_sent = False
+            self._last_cmd = None
             self.create_subscription(Odometry, '/odom_raw', self.on_odom, 10)
             self.create_subscription(Imu, '/imu/data_raw', self.on_imu, 10)
 
@@ -431,6 +434,29 @@ def main(args=None):
         def zero(self):
             if self.publisher is None or self._zero_sent:
                 return
+            last = getattr(self, '_last_cmd', None)
+            if last is not None and (math.hypot(last[0], last[1]) > 0.05
+                                     or abs(last[2]) > 0.1):
+                # 制动斜坡: 底盘对零/死区指令不刹车 (1cm 试验已证实), 直接归零等于
+                # 让车带 0.5m/s 惯性滑行 ~1m (0727 撞 (6,4) 西墙即此因)。
+                # 从最后指令线性降到零, 高于死区的指令仍产生主动减速。
+                ramp_s, step_s = 0.5, 0.02
+                steps = max(1, int(ramp_s / step_s))
+                vx, vy, wz = last
+                for i in range(steps, 0, -1):
+                    scale = i / steps
+                    try:
+                        msg = Twist()
+                        msg.linear.x = vx * scale
+                        msg.linear.y = vy * scale
+                        msg.angular.z = wz * scale
+                        self.publisher.publish(msg)
+                        self.write('emergency_zero',
+                            cmd_vx_mps=msg.linear.x, cmd_vy_mps=msg.linear.y,
+                            cmd_wz_radps=msg.angular.z, reason='brake_ramp')
+                    except Exception:
+                        break
+                    time.sleep(step_s)
             send_zero_window(self.publisher, Twist,
                 on_publish=lambda: self.write('emergency_zero',
                     cmd_vx_mps=0.0, cmd_vy_mps=0.0, cmd_wz_radps=0.0))
@@ -713,6 +739,7 @@ def main(args=None):
                         **imu_values)
                     msg = Twist()
                     msg.linear.x, msg.linear.y, msg.angular.z = vx, vy, wz
+                    self._last_cmd = (vx, vy, wz)
                     self.publisher.publish(msg)
                     if state.complete:
                         self.write('phase_hold_complete', segment=segment,

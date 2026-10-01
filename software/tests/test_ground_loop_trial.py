@@ -1,6 +1,7 @@
 import math
 
-from m3pro_nav.ground_loop_trial import compile_loop_route, nominal_route_end
+from m3pro_nav.ground_loop_trial import (compile_loop_route, nominal_route_end,
+                                         validate_trial_limits)
 from m3pro_nav.feedback_trajectory_follower import FeedbackTrajectoryFollower
 from m3pro_nav.motion_planner import MotionPlanner
 from m3pro_nav.odometry_adapter import OdometryState
@@ -44,11 +45,25 @@ def test_route_builder_rejects_wrong_origin_or_unbounded_speed():
     else:
         raise AssertionError('wrong origin accepted')
     try:
-        compile_loop_route(speed=0.16)
+        compile_loop_route(speed=0.26)
     except ValueError as exc:
         assert 'speed must be in' in str(exc)
     else:
         raise AssertionError('speed above field cap accepted')
+
+
+def test_speed_and_command_cap_allow_bounded_gradual_increase():
+    assert validate_trial_limits(0.15, 0.25) == (0.15, 0.25)
+    assert validate_trial_limits(0.20, 0.25) == (0.20, 0.25)
+    assert validate_trial_limits(0.25, 0.30) == (0.25, 0.30)
+    compile_loop_route(speed=0.25)
+    for speed, cap in ((0.20, 0.19), (0.26, 0.30), (0.15, 0.31)):
+        try:
+            validate_trial_limits(speed, cap)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f'unsafe limits accepted: speed={speed}, cap={cap}')
 
 
 def test_follower_accumulates_settle_time_after_profile_duration():

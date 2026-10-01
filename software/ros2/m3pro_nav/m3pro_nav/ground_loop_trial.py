@@ -24,6 +24,7 @@ from .control_probe import (CONTROL_PERIOD_S, MAX_SENSOR_AGE_S,
 
 CELL_M = 0.4
 SPEED_MPS = 0.15
+MAX_REFERENCE_SPEED_MPS = 0.25
 ACCEL_MPS2 = 0.20
 POSITION_GAIN = 1.0
 VELOCITY_DAMPING = 0.20
@@ -31,6 +32,7 @@ MAX_DISPLACEMENT_M = 0.65
 MAX_REFERENCE_ERROR_M = 0.12
 MAX_YAW_ERROR_RAD = 0.25
 MAX_COMMAND_MPS = 0.20
+MAX_COMMAND_CAP_MPS = 0.30
 MAX_WALL_S = 18.0
 SETTLE_TIMEOUT_S = 5.0
 
@@ -53,8 +55,8 @@ def compile_loop_route(start_cell=(6, 2), speed=SPEED_MPS):
     """
     if start_cell != (6, 2):
         raise ValueError('diagnostic route is defined only for start cell (6, 2)')
-    if not math.isfinite(speed) or not 0.05 <= speed <= SPEED_MPS:
-        raise ValueError(f'speed must be in [0.05, {SPEED_MPS:.2f}] m/s')
+    if not math.isfinite(speed) or not 0.05 <= speed <= MAX_REFERENCE_SPEED_MPS:
+        raise ValueError(f'speed must be in [0.05, {MAX_REFERENCE_SPEED_MPS:.2f}] m/s')
     planner = MotionPlanner()
     cell = start_cell
     center = ((cell[0] + 0.5) * CELL_M, (cell[1] + 0.5) * CELL_M)
@@ -111,6 +113,17 @@ def compile_loop_route(start_cell=(6, 2), speed=SPEED_MPS):
     return tuple(primitives)
 
 
+def validate_trial_limits(speed, command_cap):
+    """Validate the deliberately narrow gradual-speed comparison bounds."""
+    if not math.isfinite(speed) or not 0.05 <= speed <= MAX_REFERENCE_SPEED_MPS:
+        raise ValueError(f'speed must be in [0.05, {MAX_REFERENCE_SPEED_MPS:.2f}] m/s')
+    if not math.isfinite(command_cap) or speed > command_cap \
+            or command_cap > MAX_COMMAND_CAP_MPS or command_cap <= 0:
+        raise ValueError(
+            f'command cap must be >= speed and <= {MAX_COMMAND_CAP_MPS:.2f} m/s')
+    return speed, command_cap
+
+
 def nominal_route_end(primitives):
     """Return final point and total geometric path length (STOP excluded)."""
     x = y = length = 0.0
@@ -135,11 +148,14 @@ def parser():
     p.add_argument('--expected-base-frame', required=True)
     p.add_argument('--csv', default='/tmp/ground_loop_trial.csv')
     p.add_argument('--speed', type=float, default=SPEED_MPS)
+    p.add_argument('--command-cap', type=float, default=MAX_COMMAND_MPS,
+                   help='linear command cap in m/s (must be >= speed and <= 0.30)')
     return p
 
 
 def main(args=None):
     options = parser().parse_args(args)
+    validate_trial_limits(options.speed, options.command_cap)
     primitives = compile_loop_route(speed=options.speed)
 
     import rclpy
@@ -242,7 +258,10 @@ def main(args=None):
                 frame_id=start_odom.frame_id, child_frame_id=start_odom.child_frame_id,
                 pose_x_m=start_odom.pose.x, pose_y_m=start_odom.pose.y,
                 pose_yaw_rad=start_odom.pose.yaw,
-                reason=f'route_length_m={follower.profile.length:.6f};profile_s={profile_duration:.6f};speed={options.speed:.3f}')
+                reason=(f'route_length_m={follower.profile.length:.6f};'
+                        f'profile_s={profile_duration:.6f};speed={options.speed:.3f};'
+                        f'command_cap={options.command_cap:.3f};'
+                        f'kp_pos={POSITION_GAIN:.3f};kd_vel={VELOCITY_DAMPING:.3f}'))
             started = time.monotonic()
             deadline = started
             last_primitive = None
@@ -290,7 +309,7 @@ def main(args=None):
                     reference = state.reference
                     command = state.command
                     vx, vy, wz = limit_command(command.vx, command.vy,
-                                               command.wz, MAX_COMMAND_MPS)
+                                               command.wz, options.command_cap)
                     self.write('control_sample', segment=segment,
                         primitive_index=sample.primitive_index,
                         source_stamp_s=self.odom.stamp,

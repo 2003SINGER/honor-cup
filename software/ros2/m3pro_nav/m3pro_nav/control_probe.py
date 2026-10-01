@@ -69,10 +69,16 @@ GROUND_ODOM_MAX_COMMAND_SPEED_MPS = 0.20
 GROUND_ODOM_DEFAULT_SPEED_MPS = 0.15
 GROUND_ODOM_DEFAULT_ACCEL_MPS2 = 0.20
 GROUND_ODOM_DEFAULT_DECEL_MPS2 = 0.20
+GROUND_ODOM_DEFAULT_KD_VEL = 0.20
 GROUND_ODOM_MAX_WALL_S = 12.0
 GROUND_ODOM_MAX_OVERSHOOT_M = 0.08
 GROUND_ODOM_MAX_CROSS_TRACK_M = 0.05
 GROUND_ODOM_MAX_YAW_ERROR_RAD = 0.15
+
+
+def resolve_ground_kd_vel(kd_vel: float | None) -> float:
+    """Use the provisional ground-trial damping default unless overridden."""
+    return GROUND_ODOM_DEFAULT_KD_VEL if kd_vel is None else kd_vel
 
 
 def install_stop_signal_handlers(stop_requested, *, signal_module=signal):
@@ -580,7 +586,7 @@ def _parser():
     p.add_argument('--ground-kp-pos', type=float,
                    help='ground position gain (default 1.0; range 0..2)')
     p.add_argument('--ground-kd-vel', type=float,
-                   help='ground velocity damping gain (default 0; range 0..1)')
+                   help='ground velocity damping gain (default 0.2; range 0..1)')
     p.add_argument('--expected-odom-frame')
     p.add_argument('--expected-base-frame')
     p.add_argument('--axis', choices=('x', 'y'))
@@ -914,8 +920,7 @@ def main(args=None):
                 a_acc=GROUND_ODOM_DEFAULT_ACCEL_MPS2, a_dec=decel,
                 kp_pos=(1.0 if options.ground_kp_pos is None
                         else options.ground_kp_pos),
-                kd_vel=(0.0 if options.ground_kd_vel is None
-                        else options.ground_kd_vel))
+                kd_vel=resolve_ground_kd_vel(options.ground_kd_vel))
             self.write(record_type='ground_trial_start',
                 source_stamp_s=self.odom.stamp, frame_id=self.odom.frame_id,
                 child_frame_id=self.odom.child_frame_id,

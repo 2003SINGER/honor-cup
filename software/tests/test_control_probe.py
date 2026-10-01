@@ -9,6 +9,7 @@ from m3pro_nav.control_probe import (
     MAX_COMMAND_DISTANCE_M, MAX_DISTANCE_M, CommandDistanceBudget,
     GROUND_ODOM_MAX_DISTANCE_M, GROUND_ODOM_MAX_REFERENCE_SPEED_MPS,
     GROUND_ODOM_MAX_COMMAND_SPEED_MPS,
+    GROUND_ODOM_DEFAULT_KD_VEL, resolve_ground_kd_vel,
     ProbeOptions, StraightTrial, WheelSpinMonitor, WHEELS_UP_TARGET_COMMAND_M,
     WHEELS_UP_MAX_COMMAND_PATH_M, WHEELS_UP_MAX_SPEED_MPS, WHEELS_UP_MAX_WALL_S,
     WHEELS_UP_ODOM_TARGET_M, WHEELS_UP_ODOM_MAX_COMMAND_M,
@@ -131,6 +132,13 @@ def test_ground_odom_trial_requires_explicit_opt_in_and_stays_within_0p4m_caps()
     ):
         with pytest.raises(ValueError):
             validate_options(bad)
+
+
+def test_ground_trial_uses_provisional_velocity_damping_default_with_override():
+    assert GROUND_ODOM_DEFAULT_KD_VEL == pytest.approx(0.2)
+    assert resolve_ground_kd_vel(None) == pytest.approx(0.2)
+    assert resolve_ground_kd_vel(0.0) == pytest.approx(0.0)
+    assert resolve_ground_kd_vel(0.35) == pytest.approx(0.35)
 
 
 def test_ground_command_integral_is_unbounded_telemetry_and_linear_command_stays_capped():

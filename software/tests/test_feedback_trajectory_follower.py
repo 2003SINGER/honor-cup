@@ -133,6 +133,32 @@ def test_stop_only_chain_waits_with_zero_command_and_measured_settling():
     assert done.command.vx == done.command.vy == done.command.wz == 0.0
 
 
+def test_settle_dwell_does_not_complete_from_a_frozen_odometry_stamp():
+    source = Pose2D(0.2, 0.2, 0.37)
+    stop = MotionPrimitive('STOP', source.copy(), p0=(source.x, source.y),
+                           yaw0=source.yaw, duration=0.0)
+    follow = follower([stop], source, source)
+    state = follow.update(0.0, odom(source, stamp=10.0))
+    assert state.phase.name == 'HOLDING' and not state.complete
+    for tick in range(1, 21):
+        state = follow.update(tick * 0.02, odom(source, stamp=10.0))
+    assert state.phase.name == 'HOLDING'
+    assert not state.complete
+
+
+def test_settle_dwell_completes_after_advancing_source_time_spans_dwell():
+    source = Pose2D(0.2, 0.2, 0.37)
+    stop = MotionPrimitive('STOP', source.copy(), p0=(source.x, source.y),
+                           yaw0=source.yaw, duration=0.0)
+    follow = follower([stop], source, source)
+    state = None
+    for tick in range(16):
+        now = tick * 0.02
+        state = follow.update(now, odom(source, stamp=10.0 + now))
+    assert state is not None and state.complete
+    assert state.phase.name == 'FINISHED'
+
+
 def test_follower_phases_track_hold_finish():
     """GPT 交接单: follower 必须显式区分 TRACKING / HOLDING / FINISHED."""
     from m3pro_nav.feedback_trajectory_follower import FollowerPhase

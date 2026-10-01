@@ -85,6 +85,9 @@ def test_midpoint_phase_holds_for_measured_settle_and_return_reuses_transform():
     stopped = OdometryState(midpoint_odom_pose, 0.0, 0.0, 0.0, 1.1,
                             'odom', 'base_footprint')
     for tick in range(17):
+        stopped = OdometryState(midpoint_odom_pose, 0.0, 0.0, 0.0,
+                                1.1 + 0.02 * tick,
+                                'odom', 'base_footprint')
         held = outbound_follower.update(
             outbound_follower.profile.duration + 0.02 * tick, stopped)
     assert held.complete
@@ -167,10 +170,12 @@ def test_follower_accumulates_settle_time_after_profile_duration():
         velocity_tolerance=0.025, yaw_rate_tolerance=0.15, settle_time=0.30,
         expected_odom_frame='odom', expected_base_frame='base_footprint')
     profile_end = follower.profile.duration
-    measured = OdometryState(start, 0.0, 0.0, 0.0, 1.0,
-                             'odom', 'base_footprint')
-    states = [follower.update(profile_end + tick * 0.02, measured)
-              for tick in range(20)]
+    states = []
+    for tick in range(20):
+        measured = OdometryState(start, 0.0, 0.0, 0.0,
+                                 1.0 + tick * 0.02,
+                                 'odom', 'base_footprint')
+        states.append(follower.update(profile_end + tick * 0.02, measured))
     assert states[-1].complete
     assert states[-1].command.vx == 0.0
     assert states[-1].command.vy == 0.0

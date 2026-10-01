@@ -72,7 +72,8 @@ class FeedbackTrajectoryFollower:
     The anchors locate the same physical start in planner and odom coordinates.
     Completion (FINISHED) requires a terminal (non-wait) STOP chain, the STOP
     schedule to expire, and measured pose, velocity, and yaw rate to remain
-    settled for ``settle_time``. A wait-tail chain never self-finishes.
+    settled for ``settle_time`` of both control elapsed time and advancing
+    odometry source time. A wait-tail chain never self-finishes.
 
     Source-stamp freshness/monotonicity and command bounds are owned by the
     integrating ROS gate; this class checks feedback values and elapsed time.
@@ -147,6 +148,7 @@ class FeedbackTrajectoryFollower:
         self._last_elapsed = elapsed_offset
         self._last_sample = None
         self._settled_since = None
+        self._settled_source_since = None
         self._complete = False
 
     # ---- 保守 safe-extension (GPT P1-7) ----
@@ -267,10 +269,17 @@ class FeedbackTrajectoryFollower:
             # WAIT 尾链绝不自结束 (只有 suffix/cancel/fault 离开 HOLDING)
             if self._settled_since is None:
                 self._settled_since = elapsed
-            if elapsed - self._settled_since >= self.settle_time:
+                self._settled_source_since = odometry.stamp
+            # update() may run faster than odometry arrives. Repeated control
+            # ticks over one frozen sample must not count as measured settling.
+            control_dwell = elapsed - self._settled_since
+            source_dwell = odometry.stamp - self._settled_source_since
+            if (control_dwell >= self.settle_time
+                    and source_dwell >= self.settle_time):
                 self._complete = True
         else:
             self._settled_since = None
+            self._settled_source_since = None
         # HOLDING 期间位置环保持参考位形 (v_ff=0, 有漂移拉回, yaw hold);
         # 零误差 + 零实测速度时 P+D 输出恰为零.
         command = (Twist2D() if self._complete else self.controller.update(

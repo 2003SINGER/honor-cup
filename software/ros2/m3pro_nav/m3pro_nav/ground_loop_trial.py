@@ -101,6 +101,27 @@ def require_fresh_imu_yaw(imu_estimator, imu_received_s, now_s,
     return True
 
 
+def control_yaw_log_fields(yaw_source, feedback, imu_estimator):
+    return dict(yaw_source=yaw_source,
+        control_yaw_rad=feedback.pose.yaw,
+        control_yaw_rate_radps=feedback.wz,
+        imu_bias_radps=(imu_estimator.bias_radps
+            if imu_estimator is not None else ''))
+
+
+def control_imu_log_fields(imu, imu_estimator, now):
+    if imu is None:
+        return {}
+    stamp, frame, acc_z, wz, received = imu
+    return dict(imu_source_stamp_s=stamp, imu_frame_id=frame,
+        imu_acc_z_mps2=acc_z, imu_wz_radps=wz,
+        imu_bias_corrected_wz_radps=(imu_estimator.yaw_rate_radps
+            if imu_estimator is not None else ''),
+        imu_relative_yaw_rad=(imu_estimator.yaw_rad
+            if imu_estimator is not None else ''),
+        imu_receipt_age_s=max(0.0, now - received))
+
+
 def compile_loop_route(start_cell=(6, 2), speed=SPEED_MPS):
     """Return fixed-template primitives that leave and return to start center.
 
@@ -597,11 +618,9 @@ def main(args=None):
                     else:
                         control_feedback = yaw_feedback_state(self.odom, 'odom')
                     state = follower.update(elapsed, control_feedback)
-                    yaw_log_values = dict(yaw_source=options.yaw_source,
-                        control_yaw_rad=control_feedback.pose.yaw,
-                        control_yaw_rate_radps=control_feedback.wz,
-                        imu_bias_radps=(self.imu_estimator.bias_radps
-                            if self.imu_estimator is not None else ''))
+                    yaw_log_values = control_yaw_log_fields(
+                        options.yaw_source, control_feedback,
+                        self.imu_estimator)
                     if state.measured_progress_s >= last_progress_s + 0.01:
                         last_progress_s = state.measured_progress_s
                         progress_stall_since = now
@@ -663,21 +682,8 @@ def main(args=None):
                         phase_hold_logged = True
                     reference = state.reference
                     command = state.command
-                    imu_values = {}
-                    if self.imu is not None:
-                        imu_stamp, imu_frame, imu_acc_z, imu_wz, imu_received = self.imu
-                        imu_values = dict(imu_source_stamp_s=imu_stamp,
-                            imu_frame_id=imu_frame, imu_acc_z_mps2=imu_acc_z,
-                            imu_wz_radps=imu_wz,
-                            imu_bias_corrected_wz_radps=(
-                                self.imu_estimator.yaw_rate_radps
-                                if self.imu_estimator is not None else ''),
-                            imu_relative_yaw_rad=(
-                                self.imu_estimator.yaw_rad
-                                if self.imu_estimator is not None else ''),
-                            imu_bias_radps=(self.imu_estimator.bias_radps
-                                if self.imu_estimator is not None else ''),
-                            imu_receipt_age_s=max(0.0, now - imu_received))
+                    imu_values = control_imu_log_fields(
+                        self.imu, self.imu_estimator, now)
                     vx, vy, wz = limit_command(command.vx, command.vy,
                                                command.wz, options.command_cap)
                     self.write('control_sample', segment=segment,

@@ -4,7 +4,9 @@ import math
 
 import pytest
 
-from m3pro_nav.ground_loop_trial import (parser, require_fresh_imu_yaw,
+from m3pro_nav.ground_loop_trial import (control_imu_log_fields,
+                                         control_yaw_log_fields, parser,
+                                         require_fresh_imu_yaw,
                                          yaw_feedback_state)
 from m3pro_nav.odometry_adapter import OdometryState
 from m3pro_nav.pose import Pose2D
@@ -87,3 +89,16 @@ def test_imu_yaw_mode_is_explicit_and_odom_remains_default():
             '--expected-base-frame', 'base_footprint']
     assert parser().parse_args(base).yaw_source == 'odom'
     assert parser().parse_args(base + ['--yaw-source', 'imu']).yaw_source == 'imu'
+
+
+def test_control_sample_diagnostic_fields_can_be_written_together():
+    """The real control sample expands both mappings as keyword arguments."""
+    estimator = make_estimator()
+    feedback = OdometryState(Pose2D(0.0, 0.0, 0.1), 0.0, 0.0,
+        0.0, 1.04, 'odom', 'base_footprint')
+    yaw = control_yaw_log_fields('imu', feedback, estimator)
+    imu = control_imu_log_fields((1.04, 'imu_frame', 9.8, 0.01, 2.0),
+                                 estimator, 2.02)
+
+    assert set(yaw).isdisjoint(imu)
+    assert dict(**yaw, **imu)['imu_bias_radps'] == estimator.bias_radps

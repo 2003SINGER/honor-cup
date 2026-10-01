@@ -1,7 +1,8 @@
 import math
 
 from m3pro_nav.ground_loop_trial import (compile_loop_route, nominal_route_end,
-                                         validate_trial_limits)
+                                         validate_controller_gains,
+                                         validate_trial_limits, parser)
 from m3pro_nav.feedback_trajectory_follower import FeedbackTrajectoryFollower
 from m3pro_nav.frame_transform import RigidFrameTransform
 from m3pro_nav.ground_loop_trial import (distance_to_polyline,
@@ -70,6 +71,29 @@ def test_speed_and_command_cap_allow_bounded_high_speed_profile():
             pass
         else:
             raise AssertionError(f'unsafe limits accepted: speed={speed}, cap={cap}')
+
+
+def test_field_trial_default_gains_change_kp_only_and_overrides_are_bounded():
+    # The saved 0.5 m/s baseline used kp=1.0, kd=0.2. The next default run
+    # isolates the kp change; CLI overrides retain bounded follow-up tuning.
+    assert validate_controller_gains(1.5, 0.2) == (1.5, 0.2)
+    defaults = parser().parse_args([
+        '--run', '--expected-odom-frame', 'odom',
+        '--expected-base-frame', 'base_footprint'])
+    assert (defaults.kp_pos, defaults.kd_vel) == (1.5, 0.2)
+    overrides = parser().parse_args([
+        '--run', '--expected-odom-frame', 'odom',
+        '--expected-base-frame', 'base_footprint',
+        '--kp-pos', '1.25', '--kd-vel', '0.3'])
+    assert (overrides.kp_pos, overrides.kd_vel) == (1.25, 0.3)
+    for kp, kd in ((-0.01, 0.2), (2.01, 0.2), (1.5, -0.01),
+                   (1.5, 1.01), (math.inf, 0.2), (1.5, math.nan)):
+        try:
+            validate_controller_gains(kp, kd)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f'unsafe gain override accepted: kp={kp}, kd={kd}')
 
 
 def test_follower_accumulates_settle_time_after_profile_duration():

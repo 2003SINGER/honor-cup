@@ -28,7 +28,7 @@ SPEED_MPS = 0.50
 MAX_REFERENCE_SPEED_MPS = 0.50
 ACCEL_MPS2 = 1.00
 POSITION_GAIN = 1.5
-VELOCITY_DAMPING = 0.35
+VELOCITY_DAMPING = 0.20
 MAX_DISPLACEMENT_M = 0.65
 MAX_CORRIDOR_ERROR_M = 0.08
 MAX_YAW_ERROR_RAD = 0.25
@@ -44,7 +44,8 @@ CSV_FIELDS = (
     'world_vy_mps', 'odom_wz_radps', 'ref_x_m', 'ref_y_m',
     'ref_yaw_rad', 'ref_vx_mps', 'ref_vy_mps', 'position_error_m',
     'corridor_error_m', 'yaw_error_rad', 'cmd_vx_mps', 'cmd_vy_mps', 'cmd_wz_radps',
-    'displacement_from_start_m', 'reason')
+    'displacement_from_start_m', 'imu_source_stamp_s', 'imu_frame_id',
+    'imu_acc_z_mps2', 'imu_wz_radps', 'imu_receipt_age_s', 'reason')
 
 
 def compile_loop_route(start_cell=(6, 2), speed=SPEED_MPS):
@@ -127,6 +128,15 @@ def validate_trial_limits(speed, command_cap):
     return speed, command_cap
 
 
+def validate_controller_gains(kp_pos, kd_vel):
+    """Validate bounded field-trial gains; defaults change only kp for A/B."""
+    if not math.isfinite(kp_pos) or not 0.0 <= kp_pos <= 2.0:
+        raise ValueError('kp_pos must be finite and in [0, 2]')
+    if not math.isfinite(kd_vel) or not 0.0 <= kd_vel <= 1.0:
+        raise ValueError('kd_vel must be finite and in [0, 1]')
+    return kp_pos, kd_vel
+
+
 def nominal_route_end(primitives):
     """Return final point and total geometric path length (STOP excluded)."""
     x = y = length = 0.0
@@ -184,17 +194,23 @@ def parser():
     p.add_argument('--speed', type=float, default=SPEED_MPS)
     p.add_argument('--command-cap', type=float, default=MAX_COMMAND_MPS,
                    help='linear command cap in m/s (must be >= speed and <= 0.70)')
+    p.add_argument('--kp-pos', type=float, default=POSITION_GAIN,
+                   help='position gain (default 1.5; allowed range 0..2)')
+    p.add_argument('--kd-vel', type=float, default=VELOCITY_DAMPING,
+                   help='velocity damping gain (default 0.2; allowed range 0..1)')
     return p
 
 
 def main(args=None):
     options = parser().parse_args(args)
     validate_trial_limits(options.speed, options.command_cap)
+    validate_controller_gains(options.kp_pos, options.kd_vel)
     primitives = compile_loop_route(speed=options.speed)
 
     import rclpy
     from geometry_msgs.msg import Twist
     from nav_msgs.msg import Odometry
+    from sensor_msgs.msg import Imu
     from rclpy.node import Node
 
     stop = {'requested': False}
@@ -212,11 +228,13 @@ def main(args=None):
             self.writer = csv.DictWriter(self.file, fieldnames=CSV_FIELDS)
             self.writer.writeheader()
             self.odom = self.odom_received = None
+            self.imu = None
             self.monitor = OdometryMonitor(max_age=MAX_SENSOR_AGE_S)
             self.failure = None
             self.publisher = None
             self._zero_sent = False
             self.create_subscription(Odometry, '/odom_raw', self.on_odom, 10)
+            self.create_subscription(Imu, '/imu/data_raw', self.on_imu, 10)
 
         def write(self, record_type, **values):
             row = {key: '' for key in CSV_FIELDS}
@@ -237,6 +255,31 @@ def main(args=None):
                 self.odom, self.odom_received = sample, received
             except Exception as exc:
                 self.failure = str(exc)
+
+        @staticmethod
+        def stamp(msg):
+            sec, nanosec = int(msg.header.stamp.sec), int(msg.header.stamp.nanosec)
+            if sec < 0 or nanosec < 0 or nanosec >= 1_000_000_000:
+                raise ValueError('IMU stamp fields are out of range')
+            return float(sec) + float(nanosec) / 1e9
+
+        def on_imu(self, msg):
+            """Log typed IMU values for diagnosis only; never gate control on IMU."""
+            try:
+                stamp = self.stamp(msg)
+                acc_z = float(msg.linear_acceleration.z)
+                wz = float(msg.angular_velocity.z)
+                if not all(math.isfinite(value) for value in (stamp, acc_z, wz)):
+                    raise ValueError('IMU contains nonfinite diagnostic values')
+                received = time.monotonic()
+                self.imu = (stamp, msg.header.frame_id, acc_z, wz, received)
+                self.write('imu_sample', source_stamp_s=stamp,
+                    imu_source_stamp_s=stamp, imu_frame_id=msg.header.frame_id,
+                    imu_acc_z_mps2=acc_z, imu_wz_radps=wz,
+                    imu_receipt_age_s=0.0)
+            except Exception as exc:
+                self.write('invalid_imu', imu_frame_id=msg.header.frame_id,
+                           reason=str(exc)[:160])
 
         def foreign_publishers(self):
             return sum(1 for endpoint in self.get_publishers_info_by_topic('/cmd_vel')
@@ -276,8 +319,8 @@ def main(args=None):
                 primitives, planner_start=Pose2D(*initial_center, math.pi / 2),
                 odom_start=start_odom.pose, a_acc=ACCEL_MPS2,
                 a_dec=ACCEL_MPS2,
-                controller=PositionController(kp_pos=POSITION_GAIN,
-                                              kd_vel=VELOCITY_DAMPING),
+                controller=PositionController(kp_pos=options.kp_pos,
+                                              kd_vel=options.kd_vel),
                 start_speed=0.0, position_tolerance=0.025,
                 yaw_tolerance=0.06, velocity_tolerance=0.025,
                 yaw_rate_tolerance=0.15, settle_time=0.30,
@@ -297,7 +340,7 @@ def main(args=None):
                 reason=(f'route_length_m={follower.profile.length:.6f};'
                         f'profile_s={profile_duration:.6f};speed={options.speed:.3f};'
                         f'command_cap={options.command_cap:.3f};'
-                        f'kp_pos={POSITION_GAIN:.3f};kd_vel={VELOCITY_DAMPING:.3f}'))
+                        f'kp_pos={options.kp_pos:.3f};kd_vel={options.kd_vel:.3f}'))
             started = time.monotonic()
             deadline = started
             last_primitive = None
@@ -348,6 +391,13 @@ def main(args=None):
                         last_primitive = sample.primitive_index
                     reference = state.reference
                     command = state.command
+                    imu_values = {}
+                    if self.imu is not None:
+                        imu_stamp, imu_frame, imu_acc_z, imu_wz, imu_received = self.imu
+                        imu_values = dict(imu_source_stamp_s=imu_stamp,
+                            imu_frame_id=imu_frame, imu_acc_z_mps2=imu_acc_z,
+                            imu_wz_radps=imu_wz,
+                            imu_receipt_age_s=max(0.0, now - imu_received))
                     vx, vy, wz = limit_command(command.vx, command.vy,
                                                command.wz, options.command_cap)
                     self.write('control_sample', segment=segment,
@@ -369,7 +419,8 @@ def main(args=None):
                         yaw_error_rad=state.yaw_error,
                         cmd_vx_mps=vx, cmd_vy_mps=vy, cmd_wz_radps=wz,
                         displacement_from_start_m=displacement,
-                        reason=f'progress={sample.progress_s:.4f};speed={sample.speed:.4f};settled={state.complete}')
+                        reason=f'progress={sample.progress_s:.4f};speed={sample.speed:.4f};settled={state.complete}',
+                        **imu_values)
                     msg = Twist()
                     msg.linear.x, msg.linear.y, msg.angular.z = vx, vy, wz
                     self.publisher.publish(msg)

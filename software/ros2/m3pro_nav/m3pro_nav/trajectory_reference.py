@@ -89,3 +89,77 @@ class TrajectoryReference:
             tangent_x=tx, tangent_y=ty, curvature=curvature,
             progress_s=s,
         )
+
+    def project(self, x: float, y: float, *, minimum_progress: float = 0.0,
+                maximum_progress: float = None, direction=None,
+                preferred_progress: float = None):
+        """Project a point onto the remaining forward part of this route.
+
+        Returns ``(progress_s, distance)``. Restricting the search to progress
+        at or after ``minimum_progress`` prevents a return leg near the start
+        from snapping back to an already traversed part of a loop.
+        """
+        values = [x, y, minimum_progress]
+        if maximum_progress is not None:
+            values.append(maximum_progress)
+        if preferred_progress is not None:
+            values.append(preferred_progress)
+        if direction is not None:
+            values.extend(direction)
+        if not all(math.isfinite(v) for v in values):
+            raise ValueError('projection inputs must be finite')
+        minimum_progress = min(self.length, max(0.0, minimum_progress))
+        maximum_progress = (self.length if maximum_progress is None else
+                            min(self.length, max(minimum_progress,
+                                                 maximum_progress)))
+        direction_norm = (math.hypot(*direction) if direction is not None
+                          else 0.0)
+        best = None
+        before = 0.0
+        for prim, end in zip(self.prims, self._ends):
+            start = before
+            before = end
+            if end < minimum_progress or start > maximum_progress:
+                continue
+            local_min = max(0.0, minimum_progress - start)
+            local_max = min(prim.length, maximum_progress - start)
+            if local_max < local_min:
+                continue
+            if prim.kind in ('STRAIGHT', 'REVERSE'):
+                dx, dy = prim.p1[0] - prim.p0[0], prim.p1[1] - prim.p0[1]
+                length = math.hypot(dx, dy)
+                along = ((x - prim.p0[0]) * dx + (y - prim.p0[1]) * dy) / (length * length)
+                local = min(local_max, max(local_min, along * prim.length))
+                px = prim.p0[0] + dx * local / length
+                py = prim.p0[1] + dy * local / length
+                tx, ty = dx / length, dy / length
+            else:
+                radius = prim.meta['r']
+                angle = math.atan2(y - prim.p0[1], x - prim.p0[0])
+                sign = math.copysign(1.0, prim.yaw1)
+                raw = angle - prim.yaw0
+                delta = math.atan2(math.sin(raw), math.cos(raw)) * sign
+                local = min(local_max, max(local_min,
+                            min(prim.length, delta * radius)))
+                projected_angle = prim.yaw0 + sign * local / radius
+                px = prim.p0[0] + radius * math.cos(projected_angle)
+                py = prim.p0[1] + radius * math.sin(projected_angle)
+                tx = -math.sin(projected_angle) * sign
+                ty = math.cos(projected_angle) * sign
+            alignment = ((direction[0] * tx + direction[1] * ty) /
+                         direction_norm if direction_norm > 1e-6 else 0.0)
+            progress = start + local
+            proximity = (abs(progress - preferred_progress)
+                         if preferred_progress is not None else 0.0)
+            candidate = (progress, math.hypot(x - px, y - py), alignment,
+                         proximity)
+            if (best is None or candidate[1] < best[1] - 0.005 or
+                    (abs(candidate[1] - best[1]) <= 0.005 and
+                     (candidate[2] > best[2] + 1e-6 or
+                      (abs(candidate[2] - best[2]) <= 1e-6 and
+                       candidate[3] < best[3])))):
+                best = candidate
+        if best is None:
+            return self.length, math.hypot(x - self.sample(self.length).x,
+                                          y - self.sample(self.length).y)
+        return best[0], best[1]

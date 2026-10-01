@@ -39,6 +39,19 @@ class RigidFrameTransform:
                       self.target.y + s * dx + c * dy,
                       norm_angle(pose.yaw + self.rotation))
 
+    def inverse_pose(self, pose: Pose2D) -> Pose2D:
+        """Map a pose expressed in target coordinates back to source."""
+        c, s = math.cos(self.rotation), math.sin(self.rotation)
+        dx, dy = pose.x - self.target.x, pose.y - self.target.y
+        return Pose2D(self.source.x + c * dx + s * dy,
+                      self.source.y - s * dx + c * dy,
+                      norm_angle(pose.yaw - self.rotation))
+
+    def inverse_vector(self, x: float, y: float):
+        """Rotate a target-frame vector into source-frame axes."""
+        c, s = math.cos(self.rotation), math.sin(self.rotation)
+        return c * x + s * y, -s * x + c * y
+
     def transform_reference(self, reference):
         """Map a sampled ReferenceState into the target frame."""
         c, s = math.cos(self.rotation), math.sin(self.rotation)

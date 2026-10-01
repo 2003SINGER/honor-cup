@@ -173,6 +173,30 @@ class SpeedProfile:
                     phase.acceleration, phase.primitive_index)
         raise RuntimeError("time is inside profile but outside its phases")
 
+    def sample_at_progress(self, progress_s):
+        """Return the planned speed state at a geometric route distance."""
+        if not math.isfinite(progress_s):
+            raise ValueError('progress must be finite')
+        s = min(self.length, max(0.0, progress_s))
+        if s >= self.length:
+            return self.sample(self.duration)
+        for phase in self._phases:
+            end_s = phase.s0 + phase.v0 * phase.duration + 0.5 * phase.acceleration * phase.duration ** 2
+            if s <= end_s + _EPS:
+                ds = max(0.0, s - phase.s0)
+                a = phase.acceleration
+                if abs(a) <= _EPS:
+                    dt = ds / phase.v0 if phase.v0 > _EPS else 0.0
+                else:
+                    discriminant = max(0.0, phase.v0 ** 2 + 2.0 * a * ds)
+                    root = math.sqrt(discriminant)
+                    dt = ((root - phase.v0) / a if phase.v0 + root >= 0.0
+                          else (-phase.v0 - root) / a)
+                dt = min(phase.duration, max(0.0, dt))
+                return SpeedSample(phase.t0 + dt, s,
+                    max(0.0, phase.v0 + a * dt), a, phase.primitive_index)
+        return self.sample(self.duration)
+
 
 def plan_speed(primitives, *, start_speed=0.0, a_acc=1.0, a_dec=1.0):
     return SpeedProfile(primitives, start_speed=start_speed, a_acc=a_acc, a_dec=a_dec)

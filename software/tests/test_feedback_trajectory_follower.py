@@ -159,6 +159,104 @@ def test_settle_dwell_completes_after_advancing_source_time_spans_dwell():
     assert state.phase.name == 'FINISHED'
 
 
+def test_progress_feedback_limits_reference_lead_when_time_profile_runs_ahead():
+    start = Pose2D(0.0, 0.0, 0.0)
+    end = Pose2D(0.8, 0.0, 0.0)
+    line = MotionPrimitive('STRAIGHT', start, p0=(0.0, 0.0), p1=(0.8, 0.0),
+        yaw0=0.0, length=0.8, v_max=0.5, v_end=0.0)
+    stop = MotionPrimitive('STOP', end, p0=(0.8, 0.0), yaw0=0.0, duration=0.0)
+    follow = FeedbackTrajectoryFollower(
+        [line, stop], planner_start=start, odom_start=start,
+        a_acc=1.0, a_dec=0.6, controller=PositionController(kp_pos=1.0,
+        kd_vel=0.2), position_tolerance=0.025, yaw_tolerance=0.06,
+        velocity_tolerance=0.025, yaw_rate_tolerance=0.15, settle_time=0.3,
+        max_reference_lead_m=0.08, max_linear_speed_mps=0.5,
+        max_command_accel_mps2=1.0, max_command_decel_mps2=0.6)
+
+    # The nominal clock expires while odometry is still at the start. It must
+    # not teleport the reference to the terminal or report terminal holding.
+    expired = follow.update(follow.profile.duration,
+                            odom(start, stamp=2.0))
+    assert not expired.schedule_complete
+    assert expired.phase.name == 'TRACKING'
+    assert expired.reference.progress_s <= 0.08 + 1e-9
+    assert not expired.complete
+
+
+def test_first_tick_is_acceleration_limited_and_frozen_odom_cannot_advance_route():
+    start = Pose2D(0.0, 0.0, 0.0)
+    end = Pose2D(0.8, 0.0, 0.0)
+    line = MotionPrimitive('STRAIGHT', start, p0=(0.0, 0.0), p1=(0.8, 0.0),
+        yaw0=0.0, length=0.8, v_max=0.5, v_end=0.0)
+    stop = MotionPrimitive('STOP', end, p0=(0.8, 0.0), yaw0=0.0, duration=0.0)
+    follow = FeedbackTrajectoryFollower(
+        [line, stop], planner_start=start, odom_start=start,
+        a_acc=1.0, a_dec=0.6, controller=PositionController(kp_pos=1.0,
+        kd_vel=0.2), position_tolerance=0.025, yaw_tolerance=0.06,
+        velocity_tolerance=0.025, yaw_rate_tolerance=0.15, settle_time=0.3,
+        max_reference_lead_m=0.08, max_linear_speed_mps=0.5,
+        max_command_accel_mps2=1.0, max_command_decel_mps2=0.6)
+    first = follow.update(0.02, odom(start, stamp=1.0))
+    assert math.hypot(first.command.vx, first.command.vy) <= 0.02 + 1e-9
+
+    state = first
+    for tick in range(1, 81):
+        # New control ticks deliberately reuse one stale pose and source stamp.
+        state = follow.update(0.02 * (tick + 1), odom(start, stamp=1.0))
+    assert state.measured_progress_s == 0.0
+    assert state.reference.progress_s <= 0.08 + 1e-9
+    assert state.phase.name == 'TRACKING'
+    assert not state.complete
+
+
+def test_slow_plant_tracks_target_and_brakes_from_measured_progress():
+    """A 0.4 m/s plant lags a 0.5 m/s plan but still stops at the target."""
+    start = Pose2D(0.0, 0.0, 0.0)
+    end = Pose2D(0.8, 0.0, 0.0)
+    line = MotionPrimitive('STRAIGHT', start, p0=(0.0, 0.0), p1=(0.8, 0.0),
+        yaw0=0.0, length=0.8, v_max=0.5, v_end=0.0)
+    stop = MotionPrimitive('STOP', end, p0=(0.8, 0.0), yaw0=0.0, duration=0.0)
+    follow = FeedbackTrajectoryFollower(
+        [line, stop], planner_start=start, odom_start=start,
+        a_acc=1.0, a_dec=0.6, controller=PositionController(kp_pos=1.0,
+        kd_vel=0.2), position_tolerance=0.025, yaw_tolerance=0.06,
+        velocity_tolerance=0.025, yaw_rate_tolerance=0.15, settle_time=0.3,
+        max_reference_lead_m=0.08, max_linear_speed_mps=0.5,
+        max_command_accel_mps2=1.0, max_command_decel_mps2=0.6)
+
+    x = measured_speed = 0.0
+    max_lead = max_command = 0.0
+    previous_command = 0.0
+    previous_t = 0.0
+    final = None
+    for tick in range(400):
+        t = tick * 0.025
+        measured = odom(Pose2D(x, 0.0, 0.0), vx=measured_speed, stamp=t)
+        final = follow.update(t, measured)
+        max_lead = max(max_lead,
+                       final.reference.progress_s-final.measured_progress_s)
+        max_command = max(max_command, abs(final.command.vx))
+        if tick:
+            assert abs(final.command.vx-previous_command) <= 1.0 * (t-previous_t) + 1e-9
+        previous_command, previous_t = final.command.vx, t
+
+        # Simplified lagging drive: actuator saturates at 0.4 m/s and has a
+        # lower acceleration than the reference planner.
+        drive_target = min(0.4, max(-0.4, final.command.vx))
+        dv = min(0.8*0.025, max(-0.8*0.025, drive_target-measured_speed))
+        measured_speed += dv
+        x += measured_speed * 0.025
+        if final.complete:
+            break
+
+    assert final is not None and final.complete
+    assert final.command.vx == final.command.vy == 0.0
+    assert max_lead <= 0.08 + 1e-9
+    assert max_command <= 0.5 + 1e-9
+    assert x == pytest.approx(0.8, abs=0.025)
+    assert abs(measured_speed) <= 0.025
+
+
 def test_follower_phases_track_hold_finish():
     """GPT 交接单: follower 必须显式区分 TRACKING / HOLDING / FINISHED."""
     from m3pro_nav.feedback_trajectory_follower import FollowerPhase

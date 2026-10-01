@@ -15,9 +15,11 @@ import time
 from .feedback_trajectory_follower import FeedbackTrajectoryFollower
 from .motion_planner import MotionPlanner, validate_geometry
 from .motion_primitive import MotionPrimitive
-from .odometry_adapter import OdometryMonitor, odometry_from_msg
+from .odometry_adapter import (OdometryMonitor, OdometryState,
+                               odometry_from_msg)
 from .pose import Pose2D
 from .position_controller import PositionController
+from .relative_yaw import RelativeYawEstimator
 from .speed_profile import SpeedProfile
 from .trajectory_reference import TrajectoryReference
 
@@ -31,11 +33,13 @@ ACCEL_MPS2 = 1.00
 DECEL_MPS2 = 0.60
 POSITION_GAIN = 1.0
 VELOCITY_DAMPING = 0.20
+YAW_POSITION_GAIN = 2.0
+YAW_RATE_DAMPING = 0.0
 MAX_DISPLACEMENT_M = 0.65
 MAX_CORRIDOR_ERROR_M = 0.08
 MAX_YAW_ERROR_RAD = 0.25
-MAX_COMMAND_MPS = 0.70
-MAX_COMMAND_CAP_MPS = 0.70
+MAX_COMMAND_MPS = 0.50
+MAX_COMMAND_CAP_MPS = 0.50
 MAX_WALL_S = 18.0
 SETTLE_TIMEOUT_S = 5.0
 
@@ -45,10 +49,56 @@ CSV_FIELDS = (
     'source_stamp_s', 'frame_id', 'child_frame_id',
     'pose_x_m', 'pose_y_m', 'pose_yaw_rad', 'world_vx_mps',
     'world_vy_mps', 'odom_wz_radps', 'ref_x_m', 'ref_y_m',
+    'measured_progress_m', 'reference_progress_m',
     'ref_yaw_rad', 'ref_vx_mps', 'ref_vy_mps', 'position_error_m',
     'corridor_error_m', 'yaw_error_rad', 'cmd_vx_mps', 'cmd_vy_mps', 'cmd_wz_radps',
     'displacement_from_start_m', 'imu_source_stamp_s', 'imu_frame_id',
-    'imu_acc_z_mps2', 'imu_wz_radps', 'imu_receipt_age_s', 'reason')
+    'imu_acc_z_mps2', 'imu_wz_radps', 'imu_bias_corrected_wz_radps',
+    'imu_relative_yaw_rad', 'imu_bias_radps', 'imu_receipt_age_s',
+    'yaw_source', 'control_yaw_rad', 'control_yaw_rate_radps', 'reason')
+
+
+def yaw_feedback_state(odometry, yaw_source='odom', imu_estimator=None):
+    """Keep odom x/y and world velocity while selecting the yaw feedback."""
+    if not isinstance(odometry, OdometryState):
+        raise ValueError('valid odometry is required for yaw feedback')
+    if yaw_source == 'odom':
+        return odometry
+    if yaw_source != 'imu':
+        raise ValueError("yaw_source must be 'odom' or 'imu'")
+    if (imu_estimator is None or not imu_estimator.valid
+            or imu_estimator.yaw_rad is None
+            or imu_estimator.yaw_rate_radps is None):
+        raise RuntimeError('IMU relative yaw is invalid; refusing odometry fallback')
+    # odometry_adapter rotated child-frame twist into world using its yaw.
+    # Rotate that vector by the odom-to-IMU yaw delta to preserve world velocity
+    # when the controller deliberately uses the gyro-integrated heading.
+    delta = math.atan2(math.sin(imu_estimator.yaw_rad - odometry.pose.yaw),
+                       math.cos(imu_estimator.yaw_rad - odometry.pose.yaw))
+    c, s = math.cos(delta), math.sin(delta)
+    return OdometryState(
+        pose=Pose2D(odometry.pose.x, odometry.pose.y, imu_estimator.yaw_rad),
+        vx_world=c * odometry.vx_world - s * odometry.vy_world,
+        vy_world=s * odometry.vx_world + c * odometry.vy_world,
+        wz=imu_estimator.yaw_rate_radps, stamp=odometry.stamp,
+        frame_id=odometry.frame_id, child_frame_id=odometry.child_frame_id)
+
+
+def require_fresh_imu_yaw(imu_estimator, imu_received_s, now_s,
+                          maximum_age_s=None):
+    """Fail closed when the IMU stream or its relative-yaw state is stale."""
+    if (imu_estimator is None or not imu_estimator.valid
+            or imu_estimator.yaw_rad is None
+            or imu_estimator.yaw_rate_radps is None):
+        raise RuntimeError('IMU relative yaw is invalid')
+    if maximum_age_s is None:
+        maximum_age_s = min(MAX_SENSOR_AGE_S,
+                            imu_estimator.maximum_sample_gap_s)
+    if (imu_received_s is None or not math.isfinite(imu_received_s)
+            or not math.isfinite(now_s) or now_s < imu_received_s
+            or now_s - imu_received_s > maximum_age_s):
+        raise RuntimeError('IMU feedback is missing or stale')
+    return True
 
 
 def compile_loop_route(start_cell=(6, 2), speed=SPEED_MPS):
@@ -162,6 +212,14 @@ def validate_controller_gains(kp_pos, kd_vel):
     return kp_pos, kd_vel
 
 
+def validate_yaw_gains(kp_yaw, kd_yaw):
+    if not math.isfinite(kp_yaw) or not 0.0 <= kp_yaw <= 6.0:
+        raise ValueError('kp_yaw must be finite and in [0, 6]')
+    if not math.isfinite(kd_yaw) or not 0.0 <= kd_yaw <= 2.0:
+        raise ValueError('kd_yaw must be finite and in [0, 2]')
+    return kp_yaw, kd_yaw
+
+
 def nominal_route_end(primitives):
     """Return final point and total geometric path length (STOP excluded)."""
     x = y = length = 0.0
@@ -218,7 +276,13 @@ def parser():
     p.add_argument('--csv', default='/tmp/ground_loop_trial.csv')
     p.add_argument('--speed', type=float, default=SPEED_MPS)
     p.add_argument('--command-cap', type=float, default=MAX_COMMAND_MPS,
-                   help='linear command cap in m/s (must be >= speed and <= 0.70)')
+                   help='linear command cap in m/s (must be >= speed and <= 0.50)')
+    p.add_argument('--yaw-source', choices=('odom', 'imu'), default='odom',
+                   help='yaw feedback source; imu requires stationary bias calibration before motion')
+    p.add_argument('--kp-yaw', type=float, default=YAW_POSITION_GAIN,
+                   help='yaw-angle proportional gain (default 2.0; allowed range 0..6)')
+    p.add_argument('--kd-yaw', type=float, default=YAW_RATE_DAMPING,
+                   help='bias-corrected yaw-rate damping gain (default 0; allowed range 0..2)')
     p.add_argument('--kp-pos', type=float, default=POSITION_GAIN,
                    help='position gain (default 1.0; allowed range 0..2)')
     p.add_argument('--kd-vel', type=float, default=VELOCITY_DAMPING,
@@ -230,6 +294,7 @@ def main(args=None):
     options = parser().parse_args(args)
     validate_trial_limits(options.speed, options.command_cap)
     validate_controller_gains(options.kp_pos, options.kd_vel)
+    validate_yaw_gains(options.kp_yaw, options.kd_yaw)
     primitives = compile_loop_route(speed=options.speed)
 
     import rclpy
@@ -254,6 +319,11 @@ def main(args=None):
             self.writer.writeheader()
             self.odom = self.odom_received = None
             self.imu = None
+            self.imu_estimator = (RelativeYawEstimator()
+                                 if options.yaw_source == 'imu' else None)
+            self.collect_imu_bias = False
+            self.imu_calibration_issue = None
+            self.imu_failure = None
             self.monitor = OdometryMonitor(max_age=MAX_SENSOR_AGE_S)
             self.failure = None
             self.publisher = None
@@ -289,21 +359,47 @@ def main(args=None):
             return float(sec) + float(nanosec) / 1e9
 
         def on_imu(self, msg):
-            """Log typed IMU values for diagnosis only; never gate control on IMU."""
+            """Record gyro data and update the optional diagnostic yaw estimate."""
             try:
                 stamp = self.stamp(msg)
                 acc_z = float(msg.linear_acceleration.z)
                 wz = float(msg.angular_velocity.z)
                 if not all(math.isfinite(value) for value in (stamp, acc_z, wz)):
                     raise ValueError('IMU contains nonfinite diagnostic values')
+                if not msg.header.frame_id:
+                    raise ValueError('IMU header.frame_id must be nonempty')
                 received = time.monotonic()
+                # Receipt freshness tracks the stream even when a calibration
+                # sample is rejected and its stationary window is reset.
                 self.imu = (stamp, msg.header.frame_id, acc_z, wz, received)
+                if self.imu_estimator is not None:
+                    if self.imu_estimator.valid:
+                        self.imu_estimator.update(stamp, wz)
+                    elif self.collect_imu_bias:
+                        self.imu_estimator.add_stationary_sample(stamp, wz)
+                yaw = (self.imu_estimator.yaw_rad
+                       if self.imu_estimator is not None else None)
+                corrected_rate = (self.imu_estimator.yaw_rate_radps
+                                  if self.imu_estimator is not None else None)
                 self.write('imu_sample', source_stamp_s=stamp,
                     imu_source_stamp_s=stamp, imu_frame_id=msg.header.frame_id,
                     imu_acc_z_mps2=acc_z, imu_wz_radps=wz,
-                    imu_receipt_age_s=0.0)
+                    imu_bias_corrected_wz_radps=(corrected_rate
+                        if corrected_rate is not None else ''),
+                    imu_relative_yaw_rad=yaw if yaw is not None else '',
+                    imu_bias_radps=(self.imu_estimator.bias_radps
+                        if self.imu_estimator is not None
+                        and self.imu_estimator.bias_radps is not None else ''),
+                    yaw_source=options.yaw_source, imu_receipt_age_s=0.0)
             except Exception as exc:
+                if self.imu_estimator is not None:
+                    if self.imu_estimator.valid:
+                        self.imu_failure = str(exc)
+                    elif self.collect_imu_bias:
+                        self.imu_estimator.reset_bias_calibration()
+                        self.imu_calibration_issue = str(exc)
                 self.write('invalid_imu', imu_frame_id=msg.header.frame_id,
+                           yaw_source=options.yaw_source,
                            reason=str(exc)[:160])
 
         def foreign_publishers(self):
@@ -338,12 +434,71 @@ def main(args=None):
             if stop['requested']:
                 return
 
-            start_odom = self.odom
+            if self.imu_estimator is not None:
+                self.collect_imu_bias = True
+                calibration_deadline = time.monotonic() + 10.0
+                try:
+                    while (rclpy.ok() and not stop['requested']
+                           and not self.imu_estimator.bias_ready
+                           and time.monotonic() < calibration_deadline):
+                        now = time.monotonic()
+                        allowed, reason = ground_odom_gate(
+                            now, self.odom_received, self.foreign_publishers())
+                        if not allowed:
+                            raise RuntimeError(
+                                f'preflight during IMU calibration: {reason}')
+                        if (self.imu is not None
+                                and now - self.imu[4] >
+                                self.imu_estimator.maximum_sample_gap_s):
+                            raise RuntimeError('IMU stream became stale during calibration')
+                        rclpy.spin_once(self, timeout_sec=0.05)
+                    if stop['requested']:
+                        self.zero()
+                        return
+                    if not rclpy.ok():
+                        raise RuntimeError('ROS shut down during IMU calibration')
+                    if not self.imu_estimator.bias_ready:
+                        detail = (f'; last calibration issue: {self.imu_calibration_issue}'
+                                  if self.imu_calibration_issue else '')
+                        raise RuntimeError(
+                            'IMU stationary bias calibration timed out before '
+                            'sample-count and 4.5-second source-duration checks passed'
+                            + detail)
+                    if (self.imu is None or time.monotonic() - self.imu[4] >
+                            self.imu_estimator.maximum_sample_gap_s):
+                        raise RuntimeError('IMU stream is missing or stale after calibration')
+                    if (self.odom is None or self.odom_received is None
+                            or time.monotonic() - self.odom_received > MAX_SENSOR_AGE_S):
+                        raise RuntimeError('odometry is missing or stale after calibration')
+                    start_odom = self.odom
+                    imu_stamp, imu_frame, _acc_z, _raw_wz, _received = self.imu
+                    self.imu_estimator.start(start_odom.pose.yaw, imu_stamp)
+                    self.collect_imu_bias = False
+                    self.write('imu_yaw_anchor',
+                        source_stamp_s=imu_stamp, imu_source_stamp_s=imu_stamp,
+                        imu_frame_id=imu_frame, yaw_source='imu',
+                        pose_x_m=start_odom.pose.x, pose_y_m=start_odom.pose.y,
+                        pose_yaw_rad=start_odom.pose.yaw,
+                        control_yaw_rad=self.imu_estimator.yaw_rad,
+                        control_yaw_rate_radps=self.imu_estimator.yaw_rate_radps,
+                        imu_bias_radps=self.imu_estimator.bias_radps,
+                        reason=(f'bias_std_radps={self.imu_estimator.bias_std_radps:.6f};'
+                                f'calibration_duration_s='
+                                f'{self.imu_estimator.calibration_duration_s:.3f}'))
+                except Exception as exc:
+                    self.collect_imu_bias = False
+                    self.write('imu_yaw_fault', yaw_source='imu',
+                               reason=str(exc)[:240])
+                    self.zero()
+                    raise
+            else:
+                start_odom = self.odom
             initial_center = (6.5 * CELL_M, 2.5 * CELL_M)
             outbound, returning, return_index, midpoint_pose = \
                 split_route_at_west_center(primitives)
             controller = PositionController(kp_pos=options.kp_pos,
-                                            kd_vel=options.kd_vel)
+                kd_vel=options.kd_vel, kp_yaw=options.kp_yaw,
+                kd_yaw=options.kd_yaw)
 
             def build_follower(route, planner_start, *, odom_start=None,
                                transform=None):
@@ -354,6 +509,10 @@ def main(args=None):
                     position_tolerance=0.025, yaw_tolerance=0.06,
                     velocity_tolerance=0.025, yaw_rate_tolerance=0.15,
                     settle_time=0.30,
+                    max_reference_lead_m=0.08,
+                    max_linear_speed_mps=MAX_COMMAND_MPS,
+                    max_command_accel_mps2=ACCEL_MPS2,
+                    max_command_decel_mps2=DECEL_MPS2,
                     expected_odom_frame=options.expected_odom_frame,
                     expected_base_frame=options.expected_base_frame)
 
@@ -372,18 +531,27 @@ def main(args=None):
             self.get_logger().info(
                 f'out-and-back: length={nominal_route_end(primitives)[1]:.3f}m, '
                 f'profile={profile_duration:.2f}s, midpoint stop enabled, '
-                f'start=(6,2) N, '
+                f'start=(6,2) N, yaw_source={options.yaw_source}, '
                 f'CSV={self.csv_path}')
             self.write('trial_start', source_stamp_s=start_odom.stamp,
                 frame_id=start_odom.frame_id, child_frame_id=start_odom.child_frame_id,
                 pose_x_m=start_odom.pose.x, pose_y_m=start_odom.pose.y,
                 pose_yaw_rad=start_odom.pose.yaw,
+                yaw_source=options.yaw_source,
+                control_yaw_rad=(self.imu_estimator.yaw_rad
+                    if self.imu_estimator is not None else start_odom.pose.yaw),
+                control_yaw_rate_radps=(self.imu_estimator.yaw_rate_radps
+                    if self.imu_estimator is not None else start_odom.wz),
+                imu_bias_radps=(self.imu_estimator.bias_radps
+                    if self.imu_estimator is not None else ''),
                 reason=(f'route_length_m={nominal_route_end(primitives)[1]:.6f};'
                         f'profile_s={profile_duration:.6f};speed={options.speed:.3f};'
                         f'a_acc={ACCEL_MPS2:.3f};a_dec={DECEL_MPS2:.3f};'
                         f'midpoint_stop=true;'
+                        f'yaw_source={options.yaw_source};'
                         f'command_cap={options.command_cap:.3f};'
-                        f'kp_pos={options.kp_pos:.3f};kd_vel={options.kd_vel:.3f}'))
+                        f'kp_pos={options.kp_pos:.3f};kd_vel={options.kd_vel:.3f};'
+                        f'kp_yaw={options.kp_yaw:.3f};kd_yaw={options.kd_yaw:.3f}'))
             started = time.monotonic()
             phase_started = started
             phase_index = 0
@@ -393,6 +561,8 @@ def main(args=None):
             phase_hold_logged = False
             deadline = started
             last_primitive = None
+            last_progress_s = 0.0
+            progress_stall_since = started
             reason = 'unknown'
             try:
                 while rclpy.ok() and not stop['requested']:
@@ -402,22 +572,45 @@ def main(args=None):
                     if total_elapsed > MAX_WALL_S:
                         reason = 'wall_timeout'
                         raise RuntimeError('trajectory exceeded the wall-time limit')
-                    phase_duration = follower.profile.duration
-                    if elapsed > phase_duration + SETTLE_TIMEOUT_S:
-                        reason = ('midpoint_settle_timeout' if phase_index == 0
-                                  else 'settle_timeout')
-                        raise RuntimeError(
-                            f'{phase_name} phase did not settle within '
-                            f'{SETTLE_TIMEOUT_S:.1f}s after its profile')
                     if self.failure:
                         reason = 'invalid_odometry'
                         raise RuntimeError(self.failure)
+                    if self.imu_failure:
+                        reason = 'invalid_imu_yaw'
+                        raise RuntimeError(self.imu_failure)
                     allowed, gate_reason = ground_odom_gate(now, self.odom_received,
                                                             self.foreign_publishers())
                     if not allowed:
                         reason = f'feedback_gate:{gate_reason}'
                         raise RuntimeError(reason)
-                    state = follower.update(elapsed, self.odom)
+                    if self.imu_estimator is not None:
+                        try:
+                            require_fresh_imu_yaw(
+                                self.imu_estimator,
+                                self.imu[4] if self.imu is not None else None,
+                                now)
+                            control_feedback = yaw_feedback_state(
+                                self.odom, 'imu', self.imu_estimator)
+                        except Exception as exc:
+                            reason = 'invalid_imu_yaw'
+                            raise RuntimeError(str(exc)) from exc
+                    else:
+                        control_feedback = yaw_feedback_state(self.odom, 'odom')
+                    state = follower.update(elapsed, control_feedback)
+                    yaw_log_values = dict(yaw_source=options.yaw_source,
+                        control_yaw_rad=control_feedback.pose.yaw,
+                        control_yaw_rate_radps=control_feedback.wz,
+                        imu_bias_radps=(self.imu_estimator.bias_radps
+                            if self.imu_estimator is not None else ''))
+                    if state.measured_progress_s >= last_progress_s + 0.01:
+                        last_progress_s = state.measured_progress_s
+                        progress_stall_since = now
+                    elif now - progress_stall_since > SETTLE_TIMEOUT_S:
+                        reason = ('midpoint_progress_stall' if phase_index == 0
+                                  else 'return_progress_stall')
+                        raise RuntimeError(
+                            f'{phase_name} measured route progress stalled for '
+                            f'{SETTLE_TIMEOUT_S:.1f}s')
                     displacement = math.hypot(self.odom.pose.x - start_odom.pose.x,
                                               self.odom.pose.y - start_odom.pose.y)
                     if displacement > MAX_DISPLACEMENT_M:
@@ -433,7 +626,7 @@ def main(args=None):
                     if abs(state.yaw_error) > MAX_YAW_ERROR_RAD:
                         reason = 'yaw_envelope'
                         raise RuntimeError(f'yaw error {state.yaw_error:.3f}rad exceeded {MAX_YAW_ERROR_RAD:.2f}rad')
-                    sample = follower.profile.sample(min(elapsed, phase_duration))
+                    sample = state.speed_sample
                     primitive = phase_primitives[sample.primitive_index]
                     segment = primitive.meta.get('field_trial_segment',
                         ('north_out', 'left_arc_out', 'west_to_cell_center',
@@ -450,7 +643,8 @@ def main(args=None):
                             phase=phase_name,
                             source_stamp_s=self.odom.stamp,
                             pose_x_m=self.odom.pose.x, pose_y_m=self.odom.pose.y,
-                            pose_yaw_rad=self.odom.pose.yaw)
+                            pose_yaw_rad=self.odom.pose.yaw,
+                            **yaw_log_values)
                         last_primitive = sample.primitive_index
                     if state.phase.value == 'HOLDING' and not phase_hold_logged:
                         self.write('phase_hold_start', segment=segment,
@@ -458,6 +652,7 @@ def main(args=None):
                             phase=phase_name, source_stamp_s=self.odom.stamp,
                             pose_x_m=self.odom.pose.x, pose_y_m=self.odom.pose.y,
                             pose_yaw_rad=self.odom.pose.yaw,
+                            **yaw_log_values,
                             position_error_m=state.position_error,
                             yaw_error_rad=state.yaw_error,
                             world_vx_mps=self.odom.vx_world,
@@ -474,6 +669,14 @@ def main(args=None):
                         imu_values = dict(imu_source_stamp_s=imu_stamp,
                             imu_frame_id=imu_frame, imu_acc_z_mps2=imu_acc_z,
                             imu_wz_radps=imu_wz,
+                            imu_bias_corrected_wz_radps=(
+                                self.imu_estimator.yaw_rate_radps
+                                if self.imu_estimator is not None else ''),
+                            imu_relative_yaw_rad=(
+                                self.imu_estimator.yaw_rad
+                                if self.imu_estimator is not None else ''),
+                            imu_bias_radps=(self.imu_estimator.bias_radps
+                                if self.imu_estimator is not None else ''),
                             imu_receipt_age_s=max(0.0, now - imu_received))
                     vx, vy, wz = limit_command(command.vx, command.vy,
                                                command.wz, options.command_cap)
@@ -485,10 +688,13 @@ def main(args=None):
                         child_frame_id=self.odom.child_frame_id,
                         pose_x_m=self.odom.pose.x, pose_y_m=self.odom.pose.y,
                         pose_yaw_rad=self.odom.pose.yaw,
+                        **yaw_log_values,
                         world_vx_mps=self.odom.vx_world,
                         world_vy_mps=self.odom.vy_world,
                         odom_wz_radps=self.odom.wz,
                         ref_x_m=reference.x, ref_y_m=reference.y,
+                        measured_progress_m=state.measured_progress_s,
+                        reference_progress_m=reference.progress_s,
                         ref_yaw_rad=reference.yaw_ref,
                         ref_vx_mps=reference.vx_world,
                         ref_vy_mps=reference.vy_world,
@@ -508,6 +714,7 @@ def main(args=None):
                             phase=phase_name, source_stamp_s=self.odom.stamp,
                             pose_x_m=self.odom.pose.x, pose_y_m=self.odom.pose.y,
                             pose_yaw_rad=self.odom.pose.yaw,
+                            **yaw_log_values,
                             position_error_m=state.position_error,
                             yaw_error_rad=state.yaw_error,
                             world_vx_mps=self.odom.vx_world,
@@ -524,6 +731,8 @@ def main(args=None):
                                 returning, returning_start,
                                 transform=follower.transform)
                             phase_started = time.monotonic()
+                            last_progress_s = 0.0
+                            progress_stall_since = phase_started
                             phase_hold_logged = False
                             last_primitive = None
                             rclpy.spin_once(self, timeout_sec=0.0)
@@ -548,7 +757,18 @@ def main(args=None):
                     source_stamp_s=self.odom.stamp if self.odom else '',
                     pose_x_m=self.odom.pose.x if self.odom else '',
                     pose_y_m=self.odom.pose.y if self.odom else '',
-                    pose_yaw_rad=self.odom.pose.yaw if self.odom else '')
+                    pose_yaw_rad=self.odom.pose.yaw if self.odom else '',
+                    yaw_source=options.yaw_source,
+                    control_yaw_rad=(self.imu_estimator.yaw_rad
+                        if self.imu_estimator is not None
+                        and self.imu_estimator.yaw_rad is not None
+                        else self.odom.pose.yaw if self.odom else ''),
+                    control_yaw_rate_radps=(self.imu_estimator.yaw_rate_radps
+                        if self.imu_estimator is not None
+                        and self.imu_estimator.yaw_rate_radps is not None
+                        else self.odom.wz if self.odom else ''),
+                    imu_bias_radps=(self.imu_estimator.bias_radps
+                        if self.imu_estimator is not None else ''))
             if reason != 'operator_interrupt':
                 raise RuntimeError(f'trial ended: {reason}')
 

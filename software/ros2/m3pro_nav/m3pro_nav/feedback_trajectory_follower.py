@@ -46,6 +46,8 @@ class FollowerState:
     schedule_complete: bool
     complete: bool
     phase: FollowerPhase
+    speed_sample: object
+    measured_progress_s: float
 
 
 def is_wait_stop(prim):
@@ -83,7 +85,9 @@ class FeedbackTrajectoryFollower:
                  a_acc, a_dec, controller: PositionController, start_speed=0.0,
                  position_tolerance, yaw_tolerance, velocity_tolerance,
                  yaw_rate_tolerance, settle_time, expected_odom_frame=None,
-                 expected_base_frame=None, transform=None, elapsed_offset=0.0):
+                 expected_base_frame=None, transform=None, elapsed_offset=0.0,
+                 max_reference_lead_m=None, max_linear_speed_mps=None,
+                 max_command_accel_mps2=None, max_command_decel_mps2=None):
         self.primitives = tuple(deepcopy(tuple(primitives)))
         if not self.primitives:
             raise ValueError('primitives must be nonempty')
@@ -147,6 +151,28 @@ class FeedbackTrajectoryFollower:
         self._elapsed_offset = elapsed_offset
         self._last_elapsed = elapsed_offset
         self._last_sample = None
+        limits = tuple(v for v in (max_reference_lead_m,
+                                   max_linear_speed_mps) if v is not None)
+        if (not all(math.isfinite(v) and v > 0.0 for v in limits)
+                or (max_command_accel_mps2 is not None and
+                    (not math.isfinite(max_command_accel_mps2) or
+                     max_command_accel_mps2 <= 0.0))
+                or (max_command_decel_mps2 is not None and
+                    (not math.isfinite(max_command_decel_mps2) or
+                     max_command_decel_mps2 <= 0.0))):
+            raise ValueError('reference and command limits must be positive and finite')
+        self.max_reference_lead_m = (None if max_reference_lead_m is None else
+                                     float(max_reference_lead_m))
+        self.max_linear_speed_mps = (None if max_linear_speed_mps is None else
+                                     float(max_linear_speed_mps))
+        self._progress_feedback_enabled = max_reference_lead_m is not None
+        self.max_command_accel_mps2 = max_command_accel_mps2
+        self.max_command_decel_mps2 = max_command_decel_mps2
+        self._measured_progress_s = 0.0
+        self._last_projection_source_stamp = None
+        self._reference_progress_s = 0.0
+        self._previous_command = Twist2D()
+        self._previous_command_elapsed = elapsed_offset
         self._settled_since = None
         self._settled_source_since = None
         self._complete = False
@@ -222,7 +248,11 @@ class FeedbackTrajectoryFollower:
                 settle_time=self.settle_time,
                 expected_odom_frame=self.expected_odom_frame,
                 expected_base_frame=self.expected_base_frame,
-                elapsed_offset=self._last_elapsed)
+                elapsed_offset=self._last_elapsed,
+                max_reference_lead_m=self.max_reference_lead_m,
+                max_linear_speed_mps=self.max_linear_speed_mps,
+                max_command_accel_mps2=self.max_command_accel_mps2,
+                max_command_decel_mps2=self.max_command_decel_mps2)
         except ValueError:
             return None                         # 制动不可行等 → 保守路径
         return spliced
@@ -249,19 +279,81 @@ class FeedbackTrajectoryFollower:
         self._validate_odometry(odometry)
         self._last_elapsed = elapsed
 
-        speed = self.profile.sample(elapsed - self._elapsed_offset)
+        planned = self.profile.sample(elapsed - self._elapsed_offset)
+        if self._stop_only:
+            speed = planned
+            ref_progress = 0.0
+        else:
+            if self._progress_feedback_enabled:
+                measured_planner = self.transform.inverse_pose(odometry.pose)
+                velocity_planner = self.transform.inverse_vector(
+                    odometry.vx_world, odometry.vy_world)
+                source_dt = (0.0 if self._last_projection_source_stamp is None
+                             else max(0.0, odometry.stamp -
+                                      self._last_projection_source_stamp))
+                max_projected_progress = (self._measured_progress_s +
+                    math.hypot(*velocity_planner) * source_dt + 0.02)
+                projected, _ = self.reference.project(
+                    measured_planner.x, measured_planner.y,
+                    minimum_progress=self._measured_progress_s,
+                    maximum_progress=max_projected_progress,
+                    direction=velocity_planner,
+                    preferred_progress=planned.progress_s)
+                self._last_projection_source_stamp = odometry.stamp
+                self._measured_progress_s = max(self._measured_progress_s,
+                                                projected)
+                ref_progress = min(planned.progress_s,
+                                   self._measured_progress_s +
+                                   self.max_reference_lead_m)
+                ref_progress = max(self._reference_progress_s, ref_progress)
+            else:
+                ref_progress = planned.progress_s
+            self._reference_progress_s = min(self.reference.length,
+                                             ref_progress)
+            if self._progress_feedback_enabled:
+                speed = self.profile.sample_at_progress(
+                    self._reference_progress_s)
+                remaining = max(0.0, self.reference.length -
+                                self._measured_progress_s)
+                measured_ref = self.reference.sample(self._measured_progress_s)
+                measured_speed = max(0.0,
+                    odometry.vx_world * measured_ref.tangent_x +
+                    odometry.vy_world * measured_ref.tangent_y)
+                stopping_buffer = 0.05 + measured_speed * 0.10
+                available_distance = max(0.0, remaining - stopping_buffer)
+                braking_speed = math.sqrt(2.0 * self._a_dec *
+                                          available_distance)
+                overspeed = max(0.0, measured_speed - braking_speed)
+                target_speed = max(0.0, braking_speed - overspeed)
+                speed = type(speed)(speed.time, speed.progress_s,
+                                    min(speed.speed, target_speed),
+                                    speed.acceleration,
+                                    speed.primitive_index)
+            else:
+                speed = planned
         self._last_sample = speed
         if self._stop_only:
             ref = self._stationary_reference
         else:
-            local_ref = self.reference.sample(speed.progress_s, speed.speed,
+            local_ref = self.reference.sample(self._reference_progress_s,
+                                              speed.speed,
                                               speed.acceleration)
             ref = self.transform.transform_reference(local_ref)
         pose = odometry.pose
         ex, ey = ref.x - pose.x, ref.y - pose.y
         yaw_error = norm_angle(ref.yaw_ref - pose.yaw)
-        schedule_complete = (elapsed - self._elapsed_offset) >= self.profile.duration
-        settled = (schedule_complete and math.hypot(ex, ey) <= self.position_tolerance
+        schedule_complete = ((elapsed - self._elapsed_offset) >=
+                             self.profile.duration and
+                             (not self._progress_feedback_enabled or
+                              self._stop_only or
+                              self._reference_progress_s >=
+                              self.reference.length - GEOMETRY_EPS))
+        at_terminal_progress = (self._stop_only or
+                                not self._progress_feedback_enabled or
+                                self._measured_progress_s >=
+                                self.reference.length - self.position_tolerance)
+        settled = (schedule_complete and at_terminal_progress
+                   and math.hypot(ex, ey) <= self.position_tolerance
                    and abs(yaw_error) <= self.yaw_tolerance
                    and math.hypot(odometry.vx_world, odometry.vy_world) <= self.velocity_tolerance
                    and abs(odometry.wz) <= self.yaw_rate_tolerance)
@@ -286,6 +378,7 @@ class FeedbackTrajectoryFollower:
             ref, pose, measured_velocity_world=(odometry.vx_world,
                                                 odometry.vy_world),
             yaw_rate=odometry.wz))
+        command = self._limit_command(command, elapsed)
         if self._complete:
             phase = FollowerPhase.FINISHED
         elif self._stop_only or schedule_complete:
@@ -294,7 +387,43 @@ class FeedbackTrajectoryFollower:
         else:
             phase = FollowerPhase.TRACKING
         return FollowerState(elapsed, ref, command, ex, ey, math.hypot(ex, ey),
-                             yaw_error, schedule_complete, self._complete, phase)
+                             yaw_error, schedule_complete, self._complete, phase,
+                             speed, self._measured_progress_s)
+
+    def _limit_command(self, command, elapsed):
+        """Apply final vector speed and optional per-tick acceleration limits."""
+        if self._complete:
+            self._previous_command = Twist2D()
+            self._previous_command_elapsed = elapsed
+            return Twist2D()
+        magnitude = math.hypot(command.vx, command.vy)
+        if (self.max_linear_speed_mps is not None and
+                magnitude > self.max_linear_speed_mps):
+            scale = self.max_linear_speed_mps / magnitude
+            command = Twist2D(command.vx * scale, command.vy * scale,
+                              command.wz)
+        if self._previous_command_elapsed is not None:
+            dt = elapsed - self._previous_command_elapsed
+            if dt > 0.0 and (self.max_command_accel_mps2 is not None or
+                             self.max_command_decel_mps2 is not None):
+                dx = command.vx - self._previous_command.vx
+                dy = command.vy - self._previous_command.vy
+                delta = math.hypot(dx, dy)
+                previous_speed = math.hypot(self._previous_command.vx,
+                                            self._previous_command.vy)
+                requested_speed = math.hypot(command.vx, command.vy)
+                limit = (self.max_command_decel_mps2
+                         if requested_speed < previous_speed
+                         else self.max_command_accel_mps2)
+                if limit is not None and delta > limit * dt:
+                    scale = limit * dt / delta
+                    command = Twist2D(
+                        self._previous_command.vx + dx * scale,
+                        self._previous_command.vy + dy * scale,
+                        command.wz)
+        self._previous_command = command
+        self._previous_command_elapsed = elapsed
+        return command
 
     def _validate_odometry(self, sample):
         if sample is None or not isinstance(sample, OdometryState):

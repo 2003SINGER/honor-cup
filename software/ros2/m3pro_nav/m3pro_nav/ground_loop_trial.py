@@ -34,6 +34,10 @@ MAX_REFERENCE_SPEED_MPS = 0.50
 ARC_SPEED_MPS = 0.25
 ACCEL_MPS2 = 1.00
 DECEL_MPS2 = 0.60
+# The previous 0.60 command slew held a negative command for ~0.45 s after
+# feedback requested positive braking on the 2026-10-01 dorm run. This is a
+# command limit, not a claim about achieved chassis deceleration.
+COMMAND_DECEL_MPS2 = 3.00
 POSITION_GAIN = 1.0
 VELOCITY_DAMPING = 0.20
 YAW_POSITION_GAIN = 2.0
@@ -607,7 +611,7 @@ def main(args=None):
                     max_reference_lead_m=0.08,
                     max_linear_speed_mps=MAX_COMMAND_MPS,
                     max_command_accel_mps2=ACCEL_MPS2,
-                    max_command_decel_mps2=DECEL_MPS2,
+                    max_command_decel_mps2=COMMAND_DECEL_MPS2,
                     expected_odom_frame=options.expected_odom_frame,
                     expected_base_frame=options.expected_base_frame)
 
@@ -642,6 +646,7 @@ def main(args=None):
                 reason=(f'route_length_m={nominal_route_end(primitives)[1]:.6f};'
                         f'profile_s={profile_duration:.6f};speed={options.speed:.3f};'
                         f'a_acc={ACCEL_MPS2:.3f};a_dec={DECEL_MPS2:.3f};'
+                        f'command_decel={COMMAND_DECEL_MPS2:.3f};'
                         f'midpoint_stop=true;'
                         f'yaw_source={options.yaw_source};'
                         f'command_cap={options.command_cap:.3f};'

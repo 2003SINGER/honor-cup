@@ -1,4 +1,6 @@
+import ast
 import math
+from pathlib import Path
 import pytest
 
 from m3pro_nav.ground_loop_trial import (ARC_SPEED_MPS, compile_loop_route,
@@ -10,6 +12,9 @@ from m3pro_nav.feedback_trajectory_follower import FeedbackTrajectoryFollower
 from m3pro_nav.frame_transform import RigidFrameTransform
 from m3pro_nav.ground_loop_trial import (distance_to_polyline,
                                          route_corridor_waypoints)
+from m3pro_nav.ground_loop_trial import (CSV_FIELDS,
+                                         odometry_sample_log_fields,
+                                         service_ros_callbacks)
 from m3pro_nav.motion_planner import MotionPlanner
 from m3pro_nav.odometry_adapter import OdometryState
 from m3pro_nav.pose import Pose2D
@@ -36,12 +41,12 @@ def test_ground_loop_profile_fits_one_closed_route_and_holds_heading():
     primitives = compile_loop_route(speed=0.50)
     profile = SpeedProfile(primitives, start_speed=0.0, a_acc=1.0, a_dec=1.0)
     reference = TrajectoryReference(primitives, yaw_ref=math.pi / 2)
-    assert profile.duration < 6.0  # 弧线限速 0.25 换取可跟踪性, 时间换安全
+    assert profile.duration < 6.0  # 0.25 m/s arc trial profile
     # 0.2m 直线段要在弧线接缝前减速到 0.25, 峰值物理上限 ~0.44 (三角剖面)
     assert max(profile.sample(profile.duration * tick / 1000).speed
                for tick in range(1001)) >= 0.43
     assert [p.v_max for p in primitives if p.kind == 'ARC'] == [
-        ARC_SPEED_MPS, ARC_SPEED_MPS]  # 弧线限速, 防 0.45m/s@r0.2 切角出廊 (1001 实车)
+        ARC_SPEED_MPS, ARC_SPEED_MPS]
     for s in (0.2, 0.2 + math.pi * 0.2 / 4, 0.2 + math.pi * 0.2 / 2,
               1.0, profile.length):
         sample = reference.sample(s)
@@ -258,27 +263,92 @@ def test_speed_and_command_cap_allow_bounded_high_speed_profile():
             raise AssertionError(f'unsafe limits accepted: speed={speed}, cap={cap}')
 
 
-def test_field_trial_default_gains_change_kp_only_and_overrides_are_bounded():
-    # 0.5 m/s 底盘 ~20% 速度沉降 → kp=1.0 稳态滞后 12.5cm 切角出廊 (1001 实车)，
-    # 默认提到 1.5/0.35 (滞后 ~8.3cm)；CLI overrides retain bounded tuning.
-    assert validate_controller_gains(1.5, 0.35) == (1.5, 0.35)
+def test_field_trial_default_gains_and_overrides_are_bounded():
+    # Keep defaults at the prior baseline until controlled data supports tuning.
+    assert validate_controller_gains(1.0, 0.2) == (1.0, 0.2)
     defaults = parser().parse_args([
         '--run', '--expected-odom-frame', 'odom',
         '--expected-base-frame', 'base_footprint'])
-    assert (defaults.kp_pos, defaults.kd_vel) == (1.5, 0.35)
+    assert (defaults.kp_pos, defaults.kd_vel) == (1.0, 0.2)
     overrides = parser().parse_args([
         '--run', '--expected-odom-frame', 'odom',
         '--expected-base-frame', 'base_footprint',
         '--kp-pos', '1.25', '--kd-vel', '0.3'])
     assert (overrides.kp_pos, overrides.kd_vel) == (1.25, 0.3)
-    for kp, kd in ((-0.01, 0.2), (2.01, 0.2), (1.5, -0.01),
-                   (1.5, 1.01), (math.inf, 0.2), (1.5, math.nan)):
+    for kp, kd in ((-0.01, 0.2), (2.01, 0.2), (1.0, -0.01),
+                   (1.0, 1.01), (math.inf, 0.2), (1.0, math.nan)):
         try:
             validate_controller_gains(kp, kd)
         except ValueError:
             pass
         else:
             raise AssertionError(f'unsafe gain override accepted: kp={kp}, kd={kd}')
+
+
+def test_odom_sample_log_keeps_source_and_receipt_times_and_planar_twist():
+    sample = OdometryState(Pose2D(1.2, -0.4, 0.3), 0.25, -0.1, 0.02,
+                           123.456, 'odom', 'base_footprint')
+    row = odometry_sample_log_fields(sample, 987.654, 0.2, -0.15)
+    assert row == {
+        'source_stamp_s': 123.456,
+        'receipt_monotonic_s': 987.654,
+        'frame_id': 'odom', 'child_frame_id': 'base_footprint',
+        'pose_x_m': 1.2, 'pose_y_m': -0.4, 'pose_yaw_rad': 0.3,
+        'odom_body_vx_mps': 0.2, 'odom_body_vy_mps': -0.15,
+        'world_vx_mps': 0.25, 'world_vy_mps': -0.1,
+        'odom_wz_radps': 0.02}
+    assert set(row) <= set(CSV_FIELDS)
+
+
+def test_callback_service_drains_ready_callbacks_without_blocking_after_first():
+    calls = []
+    callbacks_seen = [0]
+    pending = [3]
+
+    def fake_spin_once(node, *, timeout_sec):
+        calls.append((node, timeout_sec))
+        if pending[0]:
+            pending[0] -= 1
+            callbacks_seen[0] += 1
+
+    node = object()
+    serviced = service_ros_callbacks(fake_spin_once, node,
+        callback_budget=4, timeout_sec=0.05,
+        callback_count=lambda: callbacks_seen[0])
+    assert serviced == 3
+    assert calls == [(node, 0.05), (node, 0.0), (node, 0.0), (node, 0.0)]
+
+
+def test_callback_service_stops_draining_promptly_when_shutdown_requested():
+    calls = []
+    callbacks_seen = [0]
+
+    def fake_spin_once(node, *, timeout_sec):
+        calls.append(timeout_sec)
+        callbacks_seen[0] += 1
+
+    serviced = service_ros_callbacks(fake_spin_once, object(),
+        callback_budget=16, should_continue=lambda: len(calls) < 2,
+        callback_count=lambda: callbacks_seen[0])
+    assert serviced == 2
+    assert calls == [0.0, 0.0]
+
+
+def test_emergency_zero_source_has_no_nonzero_ramp_before_zero_window():
+    source = Path(__file__).parents[1] / 'ros2/m3pro_nav/m3pro_nav/ground_loop_trial.py'
+    tree = ast.parse(source.read_text(encoding='utf-8'))
+    zero_methods = [node for node in ast.walk(tree)
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and node.name == 'zero']
+    assert len(zero_methods) == 1
+    zero = zero_methods[0]
+    calls = [node for node in ast.walk(zero) if isinstance(node, ast.Call)]
+    assert any(isinstance(call.func, ast.Name)
+               and call.func.id == 'send_zero_window' for call in calls)
+    assert not any(isinstance(node, (ast.For, ast.While, ast.AsyncFor))
+                   for node in ast.walk(zero))
+    assert not any(isinstance(call.func, ast.Attribute)
+                   and call.func.attr == 'publish' for call in calls)
 
 
 def test_follower_does_not_finish_when_odometry_has_not_progressed():

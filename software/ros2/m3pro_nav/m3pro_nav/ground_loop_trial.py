@@ -29,16 +29,17 @@ from .control_probe import (CONTROL_PERIOD_S, MAX_SENSOR_AGE_S,
 CELL_M = 0.4
 SPEED_MPS = 0.50
 MAX_REFERENCE_SPEED_MPS = 0.50
-ARC_SPEED_MPS = 0.25  # 麦轮平移走弧, 车身朝向不变: 0.45m/s@r0.2m 要求速度矢量
-                      # 方向以 129deg/s 扫掠, 底盘跟不住切角出廊 (1001 实测)
+# Trial hypothesis: reduce translational direction change rate on the 0.2m arc.
+# The chassis heading remains fixed; this is not a yaw-rate limit.
+ARC_SPEED_MPS = 0.25
 ACCEL_MPS2 = 1.00
 DECEL_MPS2 = 0.60
-POSITION_GAIN = 1.5  # 0.5m/s 底盘 ~20% 速度沉降, kp=1 稳态滞后 12.5cm (1001 实测吻合)
-VELOCITY_DAMPING = 0.35
+POSITION_GAIN = 1.0
+VELOCITY_DAMPING = 0.20
 YAW_POSITION_GAIN = 2.0
 YAW_RATE_DAMPING = 0.0
 MAX_DISPLACEMENT_M = 0.65
-MAX_CORRIDOR_ERROR_M = 0.10
+MAX_CORRIDOR_ERROR_M = 0.08
 MAX_YAW_ERROR_RAD = 0.25
 MAX_COMMAND_MPS = 0.50
 MAX_COMMAND_CAP_MPS = 0.50
@@ -48,7 +49,8 @@ SETTLE_TIMEOUT_S = 5.0
 CSV_FIELDS = (
     'monotonic_s', 'record_type', 'segment', 'primitive_index',
     'phase',
-    'source_stamp_s', 'frame_id', 'child_frame_id',
+    'source_stamp_s', 'receipt_monotonic_s', 'frame_id', 'child_frame_id',
+    'odom_body_vx_mps', 'odom_body_vy_mps',
     'pose_x_m', 'pose_y_m', 'pose_yaw_rad', 'world_vx_mps',
     'world_vy_mps', 'odom_wz_radps', 'ref_x_m', 'ref_y_m',
     'measured_progress_m', 'reference_progress_m',
@@ -84,6 +86,44 @@ def yaw_feedback_state(odometry, yaw_source='odom', imu_estimator=None):
         vy_world=s * odometry.vx_world + c * odometry.vy_world,
         wz=imu_estimator.yaw_rate_radps, stamp=odometry.stamp,
         frame_id=odometry.frame_id, child_frame_id=odometry.child_frame_id)
+
+
+def service_ros_callbacks(spin_once, node, *, callback_budget=16,
+                          timeout_sec=0.0, should_continue=None,
+                          callback_count):
+    """Service callbacks serially, then drain a bounded ready batch.
+
+    Keeping callback execution on the control thread avoids shared-state races.
+    The initial spin may wait; subsequent spins are nonblocking so a ready IMU
+    stream cannot hold odometry behind a long wait.
+    """
+    if callback_budget < 1:
+        raise ValueError('callback_budget must be positive')
+    if callback_count is None:
+        raise ValueError('callback_count is required to stop draining when idle')
+    serviced = 0
+    while serviced < callback_budget:
+        if should_continue is not None and not should_continue():
+            break
+        before = callback_count()
+        spin_once(node, timeout_sec=(timeout_sec if serviced == 0 else 0.0))
+        if callback_count() == before:
+            break
+        serviced += 1
+    return serviced
+
+
+def odometry_sample_log_fields(sample, receipt_monotonic_s, body_vx, body_vy):
+    """Return a source-stamped, per-callback odometry CSV record."""
+    return dict(source_stamp_s=sample.stamp,
+        receipt_monotonic_s=receipt_monotonic_s,
+        frame_id=sample.frame_id, child_frame_id=sample.child_frame_id,
+        pose_x_m=sample.pose.x, pose_y_m=sample.pose.y,
+        pose_yaw_rad=sample.pose.yaw,
+        odom_body_vx_mps=float(body_vx),
+        odom_body_vy_mps=float(body_vy),
+        world_vx_mps=sample.vx_world, world_vy_mps=sample.vy_world,
+        odom_wz_radps=sample.wz)
 
 
 def require_fresh_imu_yaw(imu_estimator, imu_received_s, now_s,
@@ -351,6 +391,7 @@ def main(args=None):
             self.imu_failure = None
             self.monitor = OdometryMonitor(max_age=MAX_SENSOR_AGE_S)
             self.failure = None
+            self._ros_callback_count = 0
             self.publisher = None
             self._zero_sent = False
             self._last_cmd = None
@@ -365,17 +406,34 @@ def main(args=None):
             self.file.flush()
 
         def on_odom(self, msg):
+            self._ros_callback_count += 1
+            received = time.monotonic()
             try:
                 sample = odometry_from_msg(msg,
                     expected_odom_frame=options.expected_odom_frame,
                     expected_base_frame=options.expected_base_frame)
-                received = time.monotonic()
+                body_twist = msg.twist.twist
+                self.write('odom_sample', **odometry_sample_log_fields(
+                    sample, received, body_twist.linear.x,
+                    body_twist.linear.y))
                 self.monitor.accept(sample, now=received, received=received,
                     expected_odom_frame=options.expected_odom_frame,
                     expected_base_frame=options.expected_base_frame)
                 self.odom, self.odom_received = sample, received
             except Exception as exc:
                 self.failure = str(exc)
+                self.write('invalid_odom_sample',
+                    receipt_monotonic_s=received,
+                    frame_id=getattr(getattr(msg, 'header', None),
+                                     'frame_id', ''),
+                    child_frame_id=getattr(msg, 'child_frame_id', ''),
+                    reason=str(exc)[:240])
+
+        def service_callbacks(self, timeout_sec=0.0):
+            return service_ros_callbacks(
+                rclpy.spin_once, self, timeout_sec=timeout_sec,
+                should_continue=lambda: rclpy.ok() and not stop['requested'],
+                callback_count=lambda: self._ros_callback_count)
 
         @staticmethod
         def stamp(msg):
@@ -386,6 +444,7 @@ def main(args=None):
 
         def on_imu(self, msg):
             """Record gyro data and update the optional diagnostic yaw estimate."""
+            self._ros_callback_count += 1
             try:
                 stamp = self.stamp(msg)
                 acc_z = float(msg.linear_acceleration.z)
@@ -436,38 +495,25 @@ def main(args=None):
         def zero(self):
             if self.publisher is None or self._zero_sent:
                 return
-            last = getattr(self, '_last_cmd', None)
-            if last is not None and (math.hypot(last[0], last[1]) > 0.05
-                                     or abs(last[2]) > 0.1):
-                # 制动斜坡: 底盘对零/死区指令不刹车 (1cm 试验已证实), 直接归零等于
-                # 让车带 0.5m/s 惯性滑行 ~1m (1001 撞 (6,4) 西墙即此因)。
-                # 从最后指令线性降到零, 高于死区的指令仍产生主动减速。
-                ramp_s, step_s = 0.5, 0.02
-                steps = max(1, int(ramp_s / step_s))
-                vx, vy, wz = last
-                for i in range(steps, 0, -1):
-                    scale = i / steps
-                    try:
-                        msg = Twist()
-                        msg.linear.x = vx * scale
-                        msg.linear.y = vy * scale
-                        msg.angular.z = wz * scale
-                        self.publisher.publish(msg)
-                        self.write('emergency_zero',
-                            cmd_vx_mps=msg.linear.x, cmd_vy_mps=msg.linear.y,
-                            cmd_wz_radps=msg.angular.z, reason='brake_ramp')
-                    except Exception:
-                        break
-                    time.sleep(step_s)
+            # In the bundled firmware sample an all-zero Twist enters
+            # Motion_Stop(STOP_BRAKE). Do not keep commanding motion after a
+            # fault while waiting for a nonzero "braking ramp" to finish.
+            def record_zero():
+                self.write('emergency_zero', cmd_vx_mps=0.0,
+                           cmd_vy_mps=0.0, cmd_wz_radps=0.0)
+                # Keep receiving odometry during the zero-command window so
+                # stopping distance is visible in this trial's CSV.
+                if rclpy.ok():
+                    rclpy.spin_once(self, timeout_sec=0.0)
+
             send_zero_window(self.publisher, Twist,
-                on_publish=lambda: self.write('emergency_zero',
-                    cmd_vx_mps=0.0, cmd_vy_mps=0.0, cmd_wz_radps=0.0))
+                             on_publish=record_zero)
             self._zero_sent = True
 
         def execute(self):
             wait_until = time.monotonic() + 4.0
             while rclpy.ok() and not stop['requested'] and self.odom is None and time.monotonic() < wait_until:
-                rclpy.spin_once(self, timeout_sec=0.05)
+                self.service_callbacks(timeout_sec=0.05)
             if self.odom is None:
                 raise RuntimeError(f'no valid /odom_raw before timeout: {self.failure or "missing"}')
             if stop['requested']:
@@ -475,7 +521,7 @@ def main(args=None):
             self.publisher = self.create_publisher(Twist, '/cmd_vel', 10)
             discovery_until = time.monotonic() + 1.0
             while rclpy.ok() and not stop['requested'] and time.monotonic() < discovery_until:
-                rclpy.spin_once(self, timeout_sec=0.05)
+                self.service_callbacks(timeout_sec=0.05)
             allowed, reason = ground_odom_gate(time.monotonic(), self.odom_received,
                                                self.foreign_publishers())
             if not allowed:
@@ -500,7 +546,7 @@ def main(args=None):
                                 and now - self.imu[4] >
                                 self.imu_estimator.maximum_sample_gap_s):
                             raise RuntimeError('IMU stream became stale during calibration')
-                        rclpy.spin_once(self, timeout_sec=0.05)
+                        self.service_callbacks(timeout_sec=0.05)
                     if stop['requested']:
                         self.zero()
                         return
@@ -770,13 +816,13 @@ def main(args=None):
                             progress_stall_since = phase_started
                             phase_hold_logged = False
                             last_primitive = None
-                            rclpy.spin_once(self, timeout_sec=0.0)
+                            self.service_callbacks()
                             deadline = next_control_deadline(
                                 deadline, time.monotonic())
                             continue
                         reason = 'settled'
                         return
-                    rclpy.spin_once(self, timeout_sec=0.0)
+                    self.service_callbacks()
                     deadline = next_control_deadline(deadline, time.monotonic())
                     remaining = deadline - time.monotonic()
                     if remaining > 0 and stop_requested_wait(remaining):

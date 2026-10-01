@@ -146,69 +146,44 @@ RECORD_TOPICS="$SCAN_TOPIC $ODOM_TOPIC /cmd_vel /tf /tf_static /scan_debug/marke
 [[ -n "$IMU_RECORD" ]] && RECORD_TOPICS="$RECORD_TOPICS $IMU_RECORD"
 RECORD_TOPICS="$RECORD_TOPICS $JOY_RECORD"
 
+command -v setsid >/dev/null 2>&1 || die "setsid not found; cannot isolate capture process groups"
+WATCHDOG_SCRIPT="$REPO_ROOT/software/scripts/field_scan_cleanup_watchdog.sh"
+[[ -x "$WATCHDOG_SCRIPT" ]] || die "capture cleanup watchdog missing or not executable: $WATCHDOG_SCRIPT"
+WATCHDOG_REQUEST="$SESSION_DIR/cleanup.request"
+WATCHDOG_DONE="$SESSION_DIR/cleanup.done"
+WATCHDOG_READY="$SESSION_DIR/cleanup.ready"
+setsid nohup bash "$WATCHDOG_SCRIPT" "$SESSION_DIR" "$REPO_ROOT" "$$" \
+    "$WATCHDOG_REQUEST" "$WATCHDOG_DONE" "$WATCHDOG_READY" >/dev/null 2>&1 &
+WATCHDOG_PID=$!
+
 cleanup() {
-    local exit_status=$?
+    local exit_status=$? watchdog_status
     [[ "${CLEANUP_DONE:-0}" == 1 ]] && return
     CLEANUP_DONE=1
     trap - EXIT INT HUP TERM
-    set +e
-    if [[ "${INTERRUPTED:-0}" != 1 && -n "${LAUNCH_PID:-}" ]] \
-            && ! kill -0 "$LAUNCH_PID" 2>/dev/null; then
-        LAUNCH_FAILED=1
-    fi
-    [[ "${LAUNCH_FAILED:-0}" == 1 ]] && exit_status=1
-    log "stopping..."
-
-    # Each long-running child is started with setsid below, so its PID is also
-    # its process-group ID. Stop rosbag first and wait for its SQLite metadata
-    # to finalize before tearing down scan_debug or attempting the summary.
-    stop_group() {
-        local pid="$1" label="$2" remaining
-        [[ -n "$pid" ]] || return 0
-        kill -0 -- "-$pid" 2>/dev/null || { wait "$pid" 2>/dev/null; return 0; }
-        kill -INT -- "-$pid" 2>/dev/null || true
-        for remaining in {1..10}; do
-            kill -0 -- "-$pid" 2>/dev/null || break
-            sleep 1
-        done
-        if kill -0 -- "-$pid" 2>/dev/null; then
-            log "$label did not stop after SIGINT; sending SIGTERM"
-            kill -TERM -- "-$pid" 2>/dev/null || true
-            for remaining in {1..3}; do
-                kill -0 -- "-$pid" 2>/dev/null || break
-                sleep 1
-            done
-        fi
-        if kill -0 -- "-$pid" 2>/dev/null; then
-            log "$label did not stop after SIGTERM; sending SIGKILL"
-            kill -KILL -- "-$pid" 2>/dev/null || true
-        fi
-        wait "$pid" 2>/dev/null || true
-    }
-    stop_group "${BAG_PID:-}" "rosbag"
-    stop_group "${LAUNCH_PID:-}" "scan_debug launch"
-    stop_group "${RVIZ_PID:-}" "RViz"
-    if [[ -s "$SESSION_DIR/frames.jsonl" ]]; then
-        log "generating summary..."
-        python3 "$REPO_ROOT/software/tools/scan_session_summary.py" "$SESSION_DIR" || true
-        if [[ "$exit_status" -eq 0 ]]; then
-            log "done: $SESSION_DIR"
-        else
-            log "session stopped with status $exit_status; partial data: $SESSION_DIR" >&2
-        fi
+    printf '%s\n' "$exit_status" > "$WATCHDOG_REQUEST.tmp"
+    mv -f "$WATCHDOG_REQUEST.tmp" "$WATCHDOG_REQUEST"
+    if wait "$WATCHDOG_PID" 2>/dev/null; then
+        watchdog_status=0
     else
-        log "ERROR: frames.jsonl is missing or empty; scan_debug did not produce observations. Session is incomplete: $SESSION_DIR" >&2
-        exit_status=1
+        watchdog_status=$?
+    fi
+    [[ -e "$WATCHDOG_DONE" ]] || watchdog_status=1
+    if [[ "$exit_status" -eq 0 && "$watchdog_status" -ne 0 ]]; then
+        exit_status="$watchdog_status"
     fi
     exit "$exit_status"
 }
 CLEANUP_DONE=0
-INTERRUPTED=0
-LAUNCH_FAILED=0
 trap cleanup EXIT
-trap 'INTERRUPTED=1; exit 0' INT
-trap 'INTERRUPTED=1; exit 129' HUP
-trap 'INTERRUPTED=1; exit 143' TERM
+trap 'exit 0' INT
+trap 'exit 129' HUP
+trap 'exit 143' TERM
+for attempt in {1..20}; do
+    [[ -e "$WATCHDOG_READY" ]] && break
+    sleep 0.05
+done
+[[ -e "$WATCHDOG_READY" ]] || die "capture cleanup watchdog failed to start"
 
 # ---- 启动: scan_debug + RViz + rosbag ----
 EXTRA_ARGS=()
@@ -216,8 +191,8 @@ EXTRA_ARGS=()
 [[ -n "$LASER_FRAME" ]] && EXTRA_ARGS+=(expected_laser_frame:="$LASER_FRAME")
 EXTRA_ARGS+=(expected_odom_frame:="$ODOM_FRAME" expected_base_frame:="$BASE_FRAME")
 
-command -v setsid >/dev/null 2>&1 || die "setsid not found; cannot isolate capture process groups"
-setsid ros2 launch m3pro_nav scan_debug.launch.py \
+setsid bash -c 'echo "$$" > "$1"; shift; exec "$@"' _ "$SESSION_DIR/launch.pid" \
+    ros2 launch m3pro_nav scan_debug.launch.py \
     cell_x:="$CELL_X" cell_y:="$CELL_Y" heading:="$HEADING" \
     scan_topic:="$SCAN_TOPIC" odom_topic:="$ODOM_TOPIC" \
     session_dir:="$SESSION_DIR" \
@@ -225,7 +200,8 @@ setsid ros2 launch m3pro_nav scan_debug.launch.py \
 LAUNCH_PID=$!
 
 if [[ "$START_RVIZ" == 1 ]] && command -v rviz2 >/dev/null 2>&1; then
-    setsid rviz2 -d "$PACKAGE_DIR/config/scan_debug.rviz" &
+    setsid bash -c 'echo "$$" > "$1"; shift; exec "$@"' _ "$SESSION_DIR/rviz.pid" \
+        rviz2 -d "$PACKAGE_DIR/config/scan_debug.rviz" &
     RVIZ_PID=$!
 elif [[ "$START_RVIZ" == 1 ]]; then
     log "rviz2 not found — continuing without RViz"
@@ -233,7 +209,8 @@ else
     log "RViz disabled; pass --rviz to start it when a display is available"
 fi
 
-setsid ros2 bag record -o "$SESSION_DIR/bag/record" $RECORD_TOPICS &
+setsid bash -c 'echo "$$" > "$1"; shift; exec "$@"' _ "$SESSION_DIR/bag.pid" \
+    ros2 bag record -o "$SESSION_DIR/bag/record" $RECORD_TOPICS &
 BAG_PID=$!
 
 log "recording — Ctrl-C to stop"
@@ -241,7 +218,6 @@ while kill -0 "$BAG_PID" 2>/dev/null; do
     if ! kill -0 "$LAUNCH_PID" 2>/dev/null; then
         launch_status=0
         wait "$LAUNCH_PID" || launch_status=$?
-        LAUNCH_FAILED=1
         die "scan_debug launch exited while recording (status=$launch_status)"
     fi
     sleep 1

@@ -29,10 +29,11 @@ from .control_probe import (CONTROL_PERIOD_S, MAX_SENSOR_AGE_S,
 CELL_M = 0.4
 SPEED_MPS = 0.50
 MAX_REFERENCE_SPEED_MPS = 0.50
-ARC_SPEED_MPS = 0.25  # r=0.2m 弧线: 0.45m/s 时 129deg/s 偏航率跟踪不住, 实车已切角撞廊
+ARC_SPEED_MPS = 0.25  # 麦轮平移走弧, 车身朝向不变: 0.45m/s@r0.2m 要求速度矢量
+                      # 方向以 129deg/s 扫掠, 底盘跟不住切角出廊 (1001 实测)
 ACCEL_MPS2 = 1.00
 DECEL_MPS2 = 0.60
-POSITION_GAIN = 1.5  # 0.5m/s 底盘 ~20% 速度沉降, kp=1 稳态滞后 12.5cm (0727 实测吻合)
+POSITION_GAIN = 1.5  # 0.5m/s 底盘 ~20% 速度沉降, kp=1 稳态滞后 12.5cm (1001 实测吻合)
 VELOCITY_DAMPING = 0.35
 YAW_POSITION_GAIN = 2.0
 YAW_RATE_DAMPING = 0.0
@@ -176,7 +177,8 @@ def compile_loop_route(start_cell=(6, 2), speed=SPEED_MPS):
                                       meta={'field_trial_terminal': True}))
 
     # Straight speed is configurable; arcs are clamped to ARC_SPEED_MPS
-    # (0.45 m/s on r=0.2 m 切角出廊, 0727 实车已复现)。
+    # (麦轮平移走弧: 0.45 m/s@r=0.2 m 速度矢量方向 129deg/s 扫掠, 底盘跟不住
+    #  切角出廊; 1001 实测滞后 55.7deg, 走廊偏差 7cm)。
     # Keep the two direction reversals stopped at the intermediate cell center.
     for primitive in primitives:
         if primitive.kind != 'STOP':
@@ -438,7 +440,7 @@ def main(args=None):
             if last is not None and (math.hypot(last[0], last[1]) > 0.05
                                      or abs(last[2]) > 0.1):
                 # 制动斜坡: 底盘对零/死区指令不刹车 (1cm 试验已证实), 直接归零等于
-                # 让车带 0.5m/s 惯性滑行 ~1m (0727 撞 (6,4) 西墙即此因)。
+                # 让车带 0.5m/s 惯性滑行 ~1m (1001 撞 (6,4) 西墙即此因)。
                 # 从最后指令线性降到零, 高于死区的指令仍产生主动减速。
                 ramp_s, step_s = 0.5, 0.02
                 steps = max(1, int(ramp_s / step_s))

@@ -41,7 +41,7 @@ def test_ground_loop_profile_fits_one_closed_route_and_holds_heading():
     assert max(profile.sample(profile.duration * tick / 1000).speed
                for tick in range(1001)) >= 0.43
     assert [p.v_max for p in primitives if p.kind == 'ARC'] == [
-        ARC_SPEED_MPS, ARC_SPEED_MPS]  # 弧线限速, 防 0.45m/s@r0.2 切角出廊 (0727 实车)
+        ARC_SPEED_MPS, ARC_SPEED_MPS]  # 弧线限速, 防 0.45m/s@r0.2 切角出廊 (1001 实车)
     for s in (0.2, 0.2 + math.pi * 0.2 / 4, 0.2 + math.pi * 0.2 / 2,
               1.0, profile.length):
         sample = reference.sample(s)
@@ -259,7 +259,7 @@ def test_speed_and_command_cap_allow_bounded_high_speed_profile():
 
 
 def test_field_trial_default_gains_change_kp_only_and_overrides_are_bounded():
-    # 0.5 m/s 底盘 ~20% 速度沉降 → kp=1.0 稳态滞后 12.5cm 切角出廊 (0727 实车)，
+    # 0.5 m/s 底盘 ~20% 速度沉降 → kp=1.0 稳态滞后 12.5cm 切角出廊 (1001 实车)，
     # 默认提到 1.5/0.35 (滞后 ~8.3cm)；CLI overrides retain bounded tuning.
     assert validate_controller_gains(1.5, 0.35) == (1.5, 0.35)
     defaults = parser().parse_args([

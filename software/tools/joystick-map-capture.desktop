@@ -2,7 +2,7 @@
 Type=Application
 Name=Joystick Maze Data Capture
 Comment=Record a manual full-maze joystick run and save ROS data
-Exec=/home/jetson/honor-cup/software/scripts/joystick_map_capture_app.sh
+Exec=/usr/bin/env bash /home/jetson/honor-cup/software/scripts/joystick_map_capture_app.sh
 Terminal=false
 Categories=Science;Robotics;
 StartupNotify=true

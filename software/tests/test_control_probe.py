@@ -19,6 +19,7 @@ from m3pro_nav.control_probe import (
     limit_command, next_control_deadline, pose_envelope_error,
     restore_signal_handlers,
     send_zero_window, shutdown_ros_context, source_stamp_gate, validate_options,
+    ground_odom_gate, source_stamp_age,
     trial_settled, update_settle_dwell, _parser,
 )
 from m3pro_nav.pose import Pose2D
@@ -305,6 +306,22 @@ def test_wheels_up_source_stamp_gate_rejects_stale_or_future_queued_samples():
     assert source_stamp_gate(100.0, 99.8, 99.9)[0]
     assert not source_stamp_gate(100.0, 99.0, 99.9)[0]
     assert not source_stamp_gate(100.0, 100.2, 99.9)[0]
+
+
+def test_ground_odom_gate_uses_only_exclusive_fresh_odometry():
+    assert ground_odom_gate(10.1, 10.0, 0, 100.2, 100.1) == (True, 'ready')
+    assert ground_odom_gate(10.1, 10.0, 0, 100.2, 99.6)[0] is False
+    assert ground_odom_gate(10.1, 10.0, 0, 100.2, 100.4)[0] is False
+    assert ground_odom_gate(10.1, 10.0, 0, 100.7, 100.1)[0] is False
+    assert ground_odom_gate(10.1, 10.0, 0, 100.2, None)[0] is False
+    assert ground_odom_gate(10.6, 10.0, 0, 100.2, 100.1)[0] is False
+    assert ground_odom_gate(10.1, 10.0, 1, 100.2, 100.1)[0] is False
+
+
+def test_ground_odom_gate_has_no_imu_dependency_and_stamp_age_is_diagnostic():
+    # Ground-trial gate has no IMU parameter by design; IMU age stays telemetry.
+    assert source_stamp_age(100.2, 100.0) == pytest.approx(0.2)
+    assert source_stamp_age(100.2, None) is None
 
 
 def test_wheels_up_command_integral_cap_and_emergency_zero_cleanup():

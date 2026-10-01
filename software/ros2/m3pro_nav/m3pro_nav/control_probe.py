@@ -363,6 +363,39 @@ def source_stamp_gate(ros_now: float, odom_stamp: float | None,
     return True, 'source stamps fresh'
 
 
+def ground_odom_gate(monotonic_now: float, odom_received: float | None,
+                     foreign_publishers: int, ros_now: float,
+                     odom_stamp: float | None,
+                     max_age=MAX_SENSOR_AGE_S):
+    """Ground trial gate for exclusive commands and fresh odometry only."""
+    if not math.isfinite(monotonic_now):
+        return False, 'invalid monotonic time'
+    if foreign_publishers != 0:
+        return False, f'/cmd_vel has {foreign_publishers} other publisher(s)'
+    if odom_received is None or not math.isfinite(odom_received) \
+            or monotonic_now < odom_received:
+        return False, 'odometry missing or invalid receipt time'
+    if monotonic_now - odom_received > max_age:
+        return False, 'odometry receipt is stale'
+    if not math.isfinite(ros_now) or not math.isfinite(max_age) or max_age <= 0:
+        return False, 'invalid ROS clock or source-stamp age limit'
+    if odom_stamp is None or not math.isfinite(odom_stamp):
+        return False, 'odometry source stamp missing or invalid'
+    age = ros_now - odom_stamp
+    if age < -0.1:
+        return False, 'odometry source stamp is in the future'
+    if age > max_age:
+        return False, 'odometry source stamp is stale'
+    return True, 'ready'
+
+
+def source_stamp_age(ros_now: float, stamp: float | None):
+    """Return source-stamp age for diagnostics, or None when unavailable."""
+    if stamp is None or not math.isfinite(stamp) or not math.isfinite(ros_now):
+        return None
+    return ros_now - stamp
+
+
 def limit_command(vx: float, vy: float, wz: float,
                   max_linear=MAX_LINEAR_MPS):
     """Reject invalid/extreme controller output and apply configured caps."""
@@ -518,7 +551,8 @@ CSV_FIELDS = ('received_monotonic_s', 'record_type', 'source_stamp_s', 'frame_id
               'imu_wz_radps', 'imu_ax_mps2', 'imu_ay_mps2', 'cmd_vx_mps',
               'cmd_vy_mps', 'cmd_wz_radps', 'command_integral_m',
               'odom_forward_path_m', 'odom_displacement_m', 'odom_lateral_path_m',
-              'warning', 'ref_x_m', 'ref_y_m', 'ref_yaw_rad', 'pos_err_m',
+              'warning', 'ros_now_s', 'odom_stamp_age_s', 'imu_stamp_age_s',
+              'ref_x_m', 'ref_y_m', 'ref_yaw_rad', 'pos_err_m',
               'yaw_err_rad', 'settled')
 
 
@@ -666,16 +700,50 @@ def main(args=None):
             except Exception as exc:
                 self.write(record_type='invalid_imu', source_stamp_s='',
                            imu_frame_id=msg.header.frame_id, reason=str(exc)[:160])
-                if options.execute or options.ground_odom_straight:
+                if options.execute:
                     self.failure = f'invalid IMU: {exc}'
                 elif options.wheels_up_odom:
                     self.failure = f'invalid IMU: {exc}'
-                elif options.wheels_up or options.wheels_up_odom:
+                elif options.wheels_up or options.wheels_up_odom \
+                        or options.ground_odom_straight:
                     self._wheels_up_warnings.add('invalid_imu_sample')
 
         def foreign_publishers(self):
             return sum(1 for ep in self.get_publishers_info_by_topic('/cmd_vel')
                 if not (ep.node_name == self.get_name() and ep.node_namespace == self.get_namespace()))
+
+        def ground_gate_diagnostics(self):
+            ros_now = self.get_clock().now().nanoseconds / 1e9
+            imu_age = source_stamp_age(ros_now, self.imu_stamp)
+            warnings = set(self._wheels_up_warnings)
+            if self.imu is None:
+                warnings.add('imu_missing')
+            if self.imu_stamp is None:
+                warnings.add('imu_source_stamp_unavailable')
+            elif imu_age is not None:
+                if imu_age > MAX_SENSOR_AGE_S:
+                    warnings.add('imu_source_stamp_stale')
+                elif imu_age < -0.1:
+                    warnings.add('imu_source_stamp_future')
+            if self.imu_received is None:
+                warnings.add('imu_receipt_unavailable')
+            elif time.monotonic() - self.imu_received > MAX_SENSOR_AGE_S:
+                warnings.add('imu_receipt_stale')
+            return {
+                'ros_now_s': ros_now,
+                'odom_stamp_age_s': source_stamp_age(
+                    ros_now, self.odom.stamp if self.odom else None),
+                'imu_stamp_age_s': imu_age,
+                'warning': ';'.join(sorted(warnings)),
+            }
+
+        def write_ground_gate_diagnostics(self, record_type, reason):
+            diagnostics = self.ground_gate_diagnostics()
+            self.write(record_type=record_type,
+                source_stamp_s=(self.odom.stamp if self.odom else ''),
+                frame_id=(self.odom.frame_id if self.odom else ''),
+                child_frame_id=(self.odom.child_frame_id if self.odom else ''),
+                reason=reason, **diagnostics)
 
         def gate(self):
             if options.wheels_up:
@@ -683,7 +751,12 @@ def main(args=None):
                 if foreign:
                     return False, f'/cmd_vel has {foreign} other publisher(s)'
                 return True, 'exclusive /cmd_vel ownership'
-            if options.wheels_up_odom or options.ground_odom_straight:
+            if options.ground_odom_straight:
+                ros_now = self.get_clock().now().nanoseconds / 1e9
+                return ground_odom_gate(time.monotonic(), self.odom_received,
+                    self.foreign_publishers(), ros_now,
+                    self.odom.stamp if self.odom else None)
+            if options.wheels_up_odom:
                 allowed, reason = command_gate(time.monotonic(), self.odom_received,
                     self.imu_received, self.foreign_publishers())
                 if not allowed:
@@ -738,9 +811,10 @@ def main(args=None):
 
         def run(self, stop_requested):
             deadline = time.monotonic() + WAIT_SENSORS_S
+            needs_imu = not options.ground_odom_straight
             while (rclpy.ok() and not stop_requested.is_set()
                    and time.monotonic() < deadline
-                   and (self.odom is None or self.imu is None)):
+                   and (self.odom is None or (needs_imu and self.imu is None))):
                 rclpy.spin_once(self, timeout_sec=0.05)
             if not (options.execute or options.wheels_up or options.wheels_up_odom
                     or options.ground_odom_straight):
@@ -750,8 +824,9 @@ def main(args=None):
                 return
             if stop_requested.is_set():
                 return
-            if self.odom is None or self.imu is None:
-                raise RuntimeError('odometry and IMU required before execution')
+            if self.odom is None or (needs_imu and self.imu is None):
+                raise RuntimeError('odometry and IMU required before execution'
+                    if needs_imu else 'odometry required before ground trial')
             self.publisher = self.create_publisher(Twist, '/cmd_vel', 10)
             discovery_end = time.monotonic() + DISCOVERY_S
             while (rclpy.ok() and not stop_requested.is_set()
@@ -761,6 +836,9 @@ def main(args=None):
                 return
             allowed, reason = self.gate()
             if not allowed:
+                if options.ground_odom_straight:
+                    self.write_ground_gate_diagnostics(
+                        'ground_gate_failure', reason)
                 raise RuntimeError(reason)
             if options.wheels_up_odom:
                 self.run_wheels_up_odom(stop_requested)
@@ -870,7 +948,9 @@ def main(args=None):
                         raise RuntimeError(self.failure)
                     allowed, gate_reason = self.gate()
                     if not allowed:
-                        stop_reason = 'sensor_or_publisher_gate'
+                        stop_reason = f'sensor_or_publisher_gate:{gate_reason}'
+                        self.write_ground_gate_diagnostics(
+                            'ground_gate_failure', gate_reason)
                         raise RuntimeError(gate_reason)
                     target = trial.target_pose
                     measured = self.odom.pose
@@ -915,6 +995,7 @@ def main(args=None):
                         odom_forward_path_m=progress,
                         odom_lateral_path_m=cross_track,
                         command_integral_m=budget.used,
+                        **self.ground_gate_diagnostics(),
                         ref_x_m=reference.x, ref_y_m=reference.y,
                         ref_yaw_rad=reference.yaw_ref,
                         pos_err_m=error, yaw_err_rad=yaw_error,
@@ -952,7 +1033,8 @@ def main(args=None):
                     pose_x_m=(self.odom.pose.x if self.odom else ''),
                     pose_y_m=(self.odom.pose.y if self.odom else ''),
                     pose_yaw_rad=(self.odom.pose.yaw if self.odom else ''),
-                    command_integral_m=budget.used)
+                    command_integral_m=budget.used,
+                    **self.ground_gate_diagnostics())
 
         def run_wheels_up(self, stop_requested):
             """Command 10m integrated forward setpoint at the planner cruise speed."""

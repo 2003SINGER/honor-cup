@@ -102,6 +102,57 @@ def _mad(xs):
     return _median([abs(x-m) for x in xs]) if m is not None else None
 
 
+def _edge_id_text(edge_id):
+    """JSON-safe, deterministic rendering of the canonical tuple edge key."""
+    return repr(edge_id)
+
+
+def _fp_edge_diagnostics(per_frame):
+    """Posthoc attribution of segment and supported-piece FP by map edge."""
+    output={}
+    for label_name in ('corrected','anchor_plus_raw_odom'):
+        by_segment=Counter(); segment_samples={}
+        by_piece=Counter(); piece_samples={}
+        for frame in per_frame:
+            for detail in frame[label_name]['details']:
+                if detail['label']=='FP':
+                    for edge in detail['fp_edge_ids']:
+                        edge_pieces=[p for p in detail['pieces'] if p['edge_id']==edge]
+                        by_segment[edge]+=1
+                        segment_samples.setdefault(edge,[]).append({
+                            'frame_index':frame['frame_index'],'stamp':frame['stamp'],
+                            'elapsed_s':frame['elapsed_s'],
+                            'pose':(frame['corrected_pose'] if label_name=='corrected'
+                                    else frame['anchor_plus_raw_odom_pose']),
+                            'segment_index':detail['segment_index'],
+                            'edge_id':edge,'support_points':detail['support_points'],
+                            'span_m':detail['span_m'],
+                            'truth':'open' if edge_pieces and edge_pieces[0]['truth_wall'] is False else None,
+                            'line_residuals_m':[p['line_residual_m'] for p in edge_pieces]})
+                for piece in detail['pieces']:
+                    if piece['label']=='FP' and piece['edge_id'] is not None:
+                        edge=piece['edge_id']; by_piece[edge]+=1
+                        piece_samples.setdefault(edge,[]).append({
+                            'frame_index':frame['frame_index'],'stamp':frame['stamp'],
+                            'elapsed_s':frame['elapsed_s'],
+                            'segment_index':detail['segment_index'],
+                            **piece})
+        def runs(samples):
+            indexes=sorted({s['frame_index'] for s in samples})
+            groups=[]
+            for idx in indexes:
+                if not groups or idx>groups[-1][-1]+1: groups.append([idx])
+                else: groups[-1].append(idx)
+            return [{'start_frame_index':g[0],'end_frame_index':g[-1],
+                     'frame_count':len(g)} for g in groups]
+        output[label_name]={
+            'segment_fp':{edge:{'count':count,'consecutive_frame_runs':runs(segment_samples[edge]),
+                'samples':segment_samples[edge]} for edge,count in sorted(by_segment.items())},
+            'piece_fp':{edge:{'count':count,'consecutive_frame_runs':runs(piece_samples[edge]),
+                'samples':piece_samples[edge]} for edge,count in sorted(by_piece.items())}}
+    return output
+
+
 def _associate_axis(segments, pose, yaw_delta, orient, cell, field_n, cfg):
     records = []
     for idx, original in enumerate(segments):
@@ -300,6 +351,77 @@ def _heldout_residual(segments, pose, dx=0., dy=0., dyaw=0.):
     return _median(vals)
 
 
+def _wall_edge_hits(segments, source_pose, corrected_pose):
+    """Per-frame, per-cell WALL hit evidence after correction; truth-free."""
+    by_edge = {}
+    for segment_index, segment in enumerate(segments):
+        corrected = _repose_segment(segment, source_pose, corrected_pose)
+        for piece in split_by_grid_cells(corrected):
+            if piece.inliers < 6 or piece.length < .08:
+                continue
+            angle = _axis_angle(piece)
+            vertical = abs(angle) > math.pi / 4
+            off = math.pi / 2 - abs(angle) if vertical else abs(angle)
+            if off > math.radians(15):
+                continue
+            mx = (piece.a[0] + piece.b[0]) / 2
+            my = (piece.a[1] + piece.b[1]) / 2
+            normal = mx if vertical else my
+            # Assign only observed support points that actually fall inside a
+            # tangential cell interval. A fitted line crossing an empty cell
+            # is not WALL evidence for that cell.
+            k = round(normal / CELL_SIZE_M)
+            if not (0 <= k <= 7):
+                continue
+            residual = normal - k * CELL_SIZE_M
+            if abs(residual) > .12:
+                continue
+            support_by_cell = {}
+            for point in piece.support:
+                tangent = point[1] if vertical else point[0]
+                j_point = math.floor(tangent / CELL_SIZE_M)
+                if tangent == 7 * CELL_SIZE_M:
+                    j_point = 6
+                if 0 <= j_point < 7:
+                    support_by_cell.setdefault(j_point, []).append(point)
+            for j, points in support_by_cell.items():
+                tangent_values = [p[1] if vertical else p[0] for p in points]
+                span = max(tangent_values) - min(tangent_values)
+                if len(points) < 6 or span < .08:
+                    continue
+                edge = edge_id_for_line('V' if vertical else 'H', k, j)
+                # Match ObservationAdapter's edge-normal distance semantics;
+                # EdgeMap uses this value for its near-hit vote weight.
+                distance = abs(k * CELL_SIZE_M -
+                               (corrected_pose.x if vertical else corrected_pose.y))
+                if vertical:
+                    cell = [0, j] if k == 0 else ([6, j] if k == 7 else [k - 1, j])
+                    direction = 'W' if k == 0 else 'E'
+                else:
+                    cell = [j, 0] if k == 0 else ([j, 6] if k == 7 else [j, k - 1])
+                    direction = 'S' if k == 0 else 'N'
+                hit = {
+                    'edge_id': _edge_id_text(edge),
+                    'cell': cell, 'direction': direction,
+                    'orientation': 'V' if vertical else 'H', 'line_k': k,
+                    'cell_j': j, 'segment_index': segment_index,
+                    'support_points': len(points), 'span_m': span,
+                    'normal_residual_m': residual, 'distance_m': distance,
+                    'same_frame_piece_count': 1,
+                }
+                previous = by_edge.get(edge)
+                if previous is None:
+                    by_edge[edge] = hit
+                else:
+                    piece_count = previous['same_frame_piece_count'] + 1
+                    if hit['support_points'] > previous['support_points']:
+                        hit['same_frame_piece_count'] = piece_count
+                        by_edge[edge] = hit
+                    else:
+                        previous['same_frame_piece_count'] = piece_count
+    return list(by_edge.values())
+
+
 def replay(session, log_path=DEFAULT_LOG, summary_path=DEFAULT_SUMMARY,
            truth_path=None):
     if log_path.parent != Path('/tmp') or summary_path.parent != Path('/tmp'):
@@ -363,6 +485,7 @@ def replay(session, log_path=DEFAULT_LOG, summary_path=DEFAULT_SUMMARY,
                 'x_residual_median':result.x_residual_median,'x_residual_mad':result.x_residual_mad,
                 'y_residual_median':result.y_residual_median,'y_residual_mad':result.y_residual_mad},
               'heldout_wall_count':len(held),
+              'wall_edge_hits':_wall_edge_hits(projected,pred,current),
               'heldout_pre_residual_m':held_pre,
               'heldout_post_residual_m':held_post,
               'heldout_raw_odom_residual_m':held_raw,
@@ -441,28 +564,45 @@ def replay(session, log_path=DEFAULT_LOG, summary_path=DEFAULT_SUMMARY,
         def labels(pose, source_pose, segs):
             segment_tp=segment_fp=segment_abstain=0
             piece_tp=piece_fp=piece_abstain=0; details=[]
-            for seg in segs:
+            for segment_index,seg in enumerate(segs):
                 world=_repose_segment(seg,source_pose,pose)
-                segment_piece_labels=[]
+                segment_piece_labels=[]; segment_piece_details=[]
                 # Retain only actual-hit-supported pieces within each cell.
                 for piece in split_by_grid_cells(world):
-                    value_label='ABSTAIN'; edge=None
+                    value_label='ABSTAIN'; edge=None; edge_text=None
+                    truth_value=None; residual=None; orientation=None
+                    line_k=None; cell_j=None
                     a=_axis_angle(piece); vertical=abs(a)>math.pi/4
+                    orientation='V' if vertical else 'H'
                     if (math.pi/2-abs(a) if vertical else abs(a))>math.radians(15):
                         piece_abstain+=1
                     else:
                         mx=(piece.a[0]+piece.b[0])/2; my=(piece.a[1]+piece.b[1])/2
                         k=round((mx if vertical else my)/CELL_SIZE_M)
                         j=math.floor((my if vertical else mx)/CELL_SIZE_M)
+                        line_k=k; cell_j=j
                         normal=mx if vertical else my
                         if 0<=k<=7 and 0<=j<7 and abs(normal-k*CELL_SIZE_M)<=.12:
-                            edge=edge_id_for_line('V' if vertical else 'H',k,j)
+                            edge=edge_id_for_line(orientation,k,j)
+                            edge_text=_edge_id_text(edge)
+                            residual=normal-k*CELL_SIZE_M
                             value=expected.get(edge)
+                            truth_value=value
                             if value is True: piece_tp+=1; value_label='TP'
                             elif value is False: piece_fp+=1; value_label='FP'
                             else: piece_abstain+=1
                         else: piece_abstain+=1
                     segment_piece_labels.append(value_label)
+                    segment_piece_details.append({
+                        'edge_id':edge_text,
+                        'orientation':orientation,'line_k':line_k,'cell_j':cell_j,
+                        'label':value_label,
+                        'truth':('wall' if truth_value is True else
+                                 'open' if truth_value is False else None),
+                        'truth_wall':truth_value,
+                        'support_points':piece.inliers,
+                        'span_m':math.hypot(piece.b[0]-piece.a[0],piece.b[1]-piece.a[1]),
+                        'line_residual_m':residual})
                 # Pair the same original fit segment across poses. Cell splits
                 # can differ after correction, so piece-wise zip is invalid.
                 if 'FP' in segment_piece_labels:
@@ -474,7 +614,16 @@ def replay(session, log_path=DEFAULT_LOG, summary_path=DEFAULT_SUMMARY,
                 if segment_label=='TP': segment_tp+=1
                 elif segment_label=='FP': segment_fp+=1
                 else: segment_abstain+=1
-                details.append({'label':segment_label})
+                edge_ids=sorted({p['edge_id'] for p in segment_piece_details
+                                 if p['edge_id'] is not None})
+                fp_edge_ids=sorted({p['edge_id'] for p in segment_piece_details
+                                    if p['label']=='FP' and p['edge_id'] is not None})
+                details.append({'segment_index':segment_index,
+                    'label':segment_label,'edge_ids':edge_ids,
+                    'fp_edge_ids':fp_edge_ids,
+                    'support_points':seg.inliers,
+                    'span_m':math.hypot(seg.b[0]-seg.a[0],seg.b[1]-seg.a[1]),
+                    'pieces':segment_piece_details})
             return {'tp':segment_tp,'fp':segment_fp,'abstain':segment_abstain,
                     'scored':segment_tp+segment_fp,
                     'total':segment_tp+segment_fp+segment_abstain,
@@ -486,9 +635,11 @@ def replay(session, log_path=DEFAULT_LOG, summary_path=DEFAULT_SUMMARY,
                       'scored_fraction':(piece_tp+piece_fp)/(piece_tp+piece_fp+piece_abstain) if piece_tp+piece_fp+piece_abstain else None},
                     'details':details}
         per_frame=[]
-        for row,(pred,corr,raw,segs) in zip(rows,truth_rows):
-            per_frame.append({'stamp':row['stamp'],
+        for frame_index,(row,(pred,corr,raw,segs)) in enumerate(zip(rows,truth_rows)):
+            per_frame.append({'frame_index':frame_index,'stamp':row['stamp'],
                 'elapsed_s':row['elapsed_s'],
+                'corrected_pose':row['corrected_pose'],
+                'anchor_plus_raw_odom_pose':row['raw_odom_pose'],
                 'corrected':labels(corr,pred,segs),
                 'anchor_plus_raw_odom':labels(raw,pred,segs)})
         def aggregate(items,name,metric=None):
@@ -518,9 +669,10 @@ def replay(session, log_path=DEFAULT_LOG, summary_path=DEFAULT_SUMMARY,
               name:aggregate(per_frame,name)
               for name in ('corrected','anchor_plus_raw_odom')},
             'paired_same_fitted_segment_outcomes':dict(paired),
+            'fp_by_edge_id':_fp_edge_diagnostics(per_frame),
             'time_windows':windows,
             'physical_image_transform_resolved':truth.get('grid',{}).get('coordinate_views',{}).get('physical_image_transform_resolved'),
-            'axis_assumption':'conditional on current anchor and grid axes; unresolved physical image transform remains a limitation',
+            'axis_assumption':'scored against the user-provided anchor, grid axes, and wall table',
             'truth_use':'post-run only; excluded from association and correction'}
     log_path.write_text(''.join(json.dumps(r,separators=(',',':'))+'\n' for r in rows))
     summary_path.write_text(json.dumps(summary,indent=2,ensure_ascii=False)+'\n')

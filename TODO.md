@@ -10,7 +10,8 @@
 > [固件记录](docs/reports/2026-10-02-firmware-probe.md)。轮速 PID 参数仍未知。
 > 10 月 2 日动态墙体回放仍未通过上线验收；结果和 raw-odom 对照见
 > [连续物理墙离线报告](docs/reports/2026-10-02-physical-wall-track-replay.md)。
-> 后续逐帧共同格线吸附已完成离线原型与原始 odom 对照；条件墙号评分改善，
+> 后续逐帧共同格线吸附已完成离线原型与原始 odom 对照；观测级墙号评分改善，
+> 但 112 边 wall-only 累计回放仍有 12 个有效假墙，地图拓扑验收未通过。
 > 独立位姿精度尚未测量，原型未接入车端。见
 > [逐帧格线吸附报告](docs/reports/2026-10-02-frame-grid-snap-replay.md)。
 

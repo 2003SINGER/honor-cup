@@ -5,6 +5,7 @@ the maze truth map: the estimator must infer the shared correction from the
 grid prior and current-frame segments alone.
 """
 import math
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -151,6 +152,44 @@ class FrameGridSnapTests(unittest.TestCase):
              for piece in pieces}
     self.assertEqual(cells, {0, 2})
     self.assertTrue(all(piece.inliers >= 6 for piece in pieces))
+
+  def test_posthoc_fp_diagnostics_keep_edge_samples_and_frame_runs(self):
+    def detail(label, fp_edges, pieces):
+      return {'label':label,'segment_index':2,'fp_edge_ids':fp_edges,
+              'support_points':18,'span_m':0.72,'pieces':pieces}
+    def piece(edge, label='FP'):
+      return {'edge_id':edge,'label':label,'truth':'open','truth_wall':False,
+              'orientation':'V','line_k':0,'cell_j':2,
+              'support_points':8,'span_m':0.31,'line_residual_m':0.02}
+    frames=[]
+    boundary=repr(('B',(0,2),'W'))
+    interior=repr(((2,1),'E'))
+    other=repr(('B',(3,6),'N'))
+    for index, edges in enumerate(([boundary,interior], [boundary], [other])):
+      frames.append({'frame_index':index,'stamp':100+index,'elapsed_s':index*0.1,
+          'corrected_pose':[0.1,0.2,0.0],
+          'anchor_plus_raw_odom_pose':[0.0,0.0,0.0],
+          'corrected':{'details':[detail('FP',edges,[piece(e) for e in edges])]},
+          'anchor_plus_raw_odom':{'details':[detail('FP',edges,[piece(e) for e in edges])]}})
+
+    scored=snap._fp_edge_diagnostics(frames)['corrected']
+
+    edge=scored['segment_fp'][boundary]
+    self.assertEqual(edge['count'],2)
+    self.assertEqual(edge['consecutive_frame_runs'],[
+        {'start_frame_index':0,'end_frame_index':1,'frame_count':2}])
+    sample=edge['samples'][0]
+    self.assertEqual((sample['stamp'],sample['elapsed_s'],sample['pose']),
+                     (100,0.0,[0.1,0.2,0.0]))
+    self.assertEqual(sample['support_points'],18)
+    self.assertEqual(scored['piece_fp'][boundary]['count'],2)
+    self.assertEqual(scored['segment_fp'][interior]['count'],1)
+    self.assertEqual([s['segment_index'] for s in scored['piece_fp'][interior]['samples']],
+                     [2])
+    self.assertEqual(scored['piece_fp'][other]['samples'][0]['line_residual_m'],0.02)
+    self.assertEqual(scored['piece_fp'][boundary]['samples'][0]['orientation'],'V')
+    self.assertEqual(scored['piece_fp'][boundary]['samples'][0]['line_k'],0)
+    self.assertEqual(json.loads(json.dumps(scored))['segment_fp'][boundary]['count'],2)
 
 
 if __name__ == '__main__':

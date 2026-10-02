@@ -39,7 +39,7 @@ def test_ground_loop_control_rate_choices_and_observed_cadence():
         control_period_for_hz(30)
     assert parser().parse_args([
         '--run', '--expected-odom-frame', 'odom',
-        '--expected-base-frame', 'base_footprint']).control_hz == 50
+        '--expected-base-frame', 'base_footprint']).control_hz == 60
     assert parser().parse_args([
         '--run', '--expected-odom-frame', 'odom',
         '--expected-base-frame', 'base_footprint',

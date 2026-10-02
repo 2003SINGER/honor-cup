@@ -19,7 +19,7 @@ ROS_INSTALL="$REPO_ROOT/software/ros2/install/setup.bash"
 FIELD_DATA="$REPO_ROOT/field_data"
 RUN=0
 CSV_PREFIX="ground_loop_trial"
-CONTROL_HZ=50
+CONTROL_HZ=60
 
 usage() {
     cat <<'USAGE'
@@ -32,7 +32,7 @@ stop the run. This script does not start or stop m3.sh or the micro-ROS agent.
 Options:
   --run                 Explicitly authorize this live motion run (required)
   --csv-prefix PREFIX   CSV filename prefix (default: ground_loop_trial)
-  --control-hz HZ       Control/publish cadence: 50 or 60 (default: 50)
+  --control-hz HZ       Control/publish cadence: 50 or 60 (default: 60)
   -h, --help            Show this help without loading ROS or moving the robot
 USAGE
 }

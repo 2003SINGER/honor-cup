@@ -415,8 +415,8 @@ def parser():
     p.add_argument('--odom-synchronous-control', action='store_true',
                    help='update control only on a newer /odom_raw source stamp')
     p.add_argument('--control-hz', type=int, choices=SUPPORTED_CONTROL_HZ,
-                   default=50,
-                   help='outer control/publish cadence (50 or 60 Hz; default 50)')
+                   default=60,
+                   help='outer control/publish cadence (50 or 60 Hz; default 60)')
     p.add_argument('--speed', type=float, default=SPEED_MPS)
     p.add_argument('--command-cap', type=float, default=MAX_COMMAND_MPS,
                    help='linear command cap in m/s (must be >= speed and <= 0.50)')

@@ -9,7 +9,7 @@
 #   bash software/scripts/ground_loop_trial.sh --run --control-hz 60
 #
 # --run is mandatory. Without it, this script exits before loading ROS or
-# checking the robot. CSVs are written under field_data/ with a UTC timestamp.
+# checking the robot. CSVs are written under field_data/<site>/ with a UTC timestamp.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,11 +19,12 @@ ROS_INSTALL="$REPO_ROOT/software/ros2/install/setup.bash"
 FIELD_DATA="$REPO_ROOT/field_data"
 RUN=0
 CSV_PREFIX="ground_loop_trial"
+SITE="field"
 CONTROL_HZ=60
 
 usage() {
     cat <<'USAGE'
-Usage: ground_loop_trial.sh --run [--csv-prefix PREFIX] [--control-hz 50|60]
+Usage: ground_loop_trial.sh --run [--site field|dorm] [--csv-prefix PREFIX] [--control-hz 50|60]
 
 WARNING: --run launches a live ground trial. The node publishes /cmd_vel and
 the robot will move. Use only in a clear test area with an operator ready to
@@ -31,6 +32,7 @@ stop the run. This script does not start or stop m3.sh or the micro-ROS agent.
 
 Options:
   --run                 Explicitly authorize this live motion run (required)
+  --site SITE           Save CSV under field_data/field or field_data/dorm (default: field)
   --csv-prefix PREFIX   CSV filename prefix (default: ground_loop_trial)
   --control-hz HZ       Control/publish cadence: 50 or 60 (default: 60)
   -h, --help            Show this help without loading ROS or moving the robot
@@ -43,6 +45,12 @@ log() { echo "[ground_loop_trial] $*"; }
 while (($#)); do
     case "$1" in
         --run) RUN=1; shift ;;
+        --site)
+            (($# >= 2)) || die '--site requires a value'
+            [[ "$2" == field || "$2" == dorm ]] || die '--site must be field or dorm'
+            SITE="$2"
+            shift 2
+            ;;
         --csv-prefix)
             (($# >= 2)) || die '--csv-prefix requires a value'
             CSV_PREFIX="$2"
@@ -104,9 +112,9 @@ publisher_count="${BASH_REMATCH[1]}"
 [[ "$publisher_count" == 0 ]] \
     || die "/cmd_vel already has $publisher_count publisher(s); stop and resolve ownership before this trial"
 
-mkdir -p "$FIELD_DATA"
+mkdir -p "$FIELD_DATA/$SITE"
 stamp="$(date -u +%Y%m%dT%H%M%S%N)"
-csv_path="$FIELD_DATA/${CSV_PREFIX}_${stamp}.csv"
+csv_path="$FIELD_DATA/$SITE/${CSV_PREFIX}_${stamp}.csv"
 [[ ! -e "$csv_path" ]] || die "refusing to overwrite existing CSV: $csv_path"
 
 log 'LIVE MOTION RUN: publishing /cmd_vel; operator must remain ready to stop the robot'

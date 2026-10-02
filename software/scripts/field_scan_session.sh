@@ -18,6 +18,7 @@ SCAN_TOPIC="${SCAN_TOPIC:-/scan_multi}"
 ODOM_TOPIC="${ODOM_TOPIC:-/odom_raw}"
 IMU_TOPIC="${IMU_TOPIC:-/imu/data_raw}"
 JOY_TOPIC="${JOY_TOPIC:-/joy}"
+RAW_SCAN_TOPICS="/scan0 /scan1"
 EXTRINSIC_YAML="${EXTRINSIC_YAML:-}"
 CELL_X="" CELL_Y="" HEADING="N" LABEL="manual" CONFIG="" START_RVIZ=0
 
@@ -85,6 +86,15 @@ else
     log "joy topic $JOY_TOPIC absent at capture start — rosbag will keep discovering it if the controller starts later"
 fi
 JOY_RECORD="$JOY_TOPIC"
+for RAW_SCAN_TOPIC in $RAW_SCAN_TOPICS; do
+    if timeout 8 ros2 topic list 2>/dev/null | grep -qx "$RAW_SCAN_TOPIC"; then
+        check_topic "$RAW_SCAN_TOPIC" "sensor_msgs/msg/LaserScan"
+        RAW_FRAME=$(timeout 5 ros2 topic echo --once --field header.frame_id "$RAW_SCAN_TOPIC" 2>/dev/null | sed -n '1p' || true)
+        log "raw scan $RAW_SCAN_TOPIC frame_id: ${RAW_FRAME:-<unread>}"
+    else
+        log "raw scan $RAW_SCAN_TOPIC absent at capture start; rosbag will discover it if published later"
+    fi
+done
 LASER_FRAME=$(timeout 5 ros2 topic echo --once --field header.frame_id "$SCAN_TOPIC" 2>/dev/null | sed -n '1p' || true)
 log "scan frame_id: ${LASER_FRAME:-<unread>}"
 ODOM_FRAME=$(timeout 5 ros2 topic echo --once --field header.frame_id "$ODOM_TOPIC" 2>/dev/null | sed -n '1p' || true)
@@ -121,6 +131,7 @@ ros_distro: ${ROS_DISTRO:-unknown}
 cell: [${CELL_X}, ${CELL_Y}]
 heading: ${HEADING}
 scan_topic: ${SCAN_TOPIC}
+raw_scan_topics: [/scan0, /scan1]
 odom_topic: ${ODOM_TOPIC}
 imu_topic: ${IMU_RECORD}
 joy_topic: ${JOY_RECORD}
@@ -143,6 +154,7 @@ fi
 
 # ---- 采集主题 ----
 RECORD_TOPICS="$SCAN_TOPIC $ODOM_TOPIC /cmd_vel /tf /tf_static /scan_debug/markers"
+RECORD_TOPICS="$RECORD_TOPICS $RAW_SCAN_TOPICS"
 [[ -n "$IMU_RECORD" ]] && RECORD_TOPICS="$RECORD_TOPICS $IMU_RECORD"
 RECORD_TOPICS="$RECORD_TOPICS $JOY_RECORD"
 

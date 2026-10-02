@@ -109,8 +109,11 @@ class NavRuntime:
         self.trust_policy = TrustPolicy(
             diagnostic_only=bool(trust.get('diagnostic_only', True)),
             thresholds=thresholds)
+        self.beam_origin_preserving = bool(
+            perc.get('beam_origin_preserving', False))
         self.adapter = RealObservationAdapter(
-            self.association, trust_policy=self.trust_policy)
+            self.association, trust_policy=self.trust_policy,
+            allow_open_evidence=self.beam_origin_preserving)
         self.projector = FrameProjector(
             extrinsic if extrinsic is not None else LaserExtrinsic.missing())
         sync = perc.get('sync', {})

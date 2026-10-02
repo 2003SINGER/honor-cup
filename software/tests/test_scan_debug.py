@@ -369,6 +369,17 @@ def test_frame_record_keeps_rejected_raw_features_for_offline_calibration():
     json.dumps(record.to_json(), allow_nan=False)
 
 
+def test_merged_virtual_origin_never_yields_open_evidence():
+    # /scan_multi reprojects two point clouds from base_link. Its displayed
+    # base-to-hit segment is not an actual emitted laser beam.
+    ray = _ray_at(1.6, 1.4, ox=0.9, oy=1.4)
+    adapter = RealObservationAdapter(ASSOC, allow_open_evidence=False)
+    _hits, opens, stats = adapter.to_nav_observation(
+        [ray], Pose2D(0.9, 1.4, 0.0))
+    assert not opens and stats.n_open_edges == 0
+    assert ASSOC.process([ray])[0].open_edges  # raw diagnostic still exists
+
+
 @pytest.mark.parametrize('bad', [float('nan'), float('inf'), -0.1, True])
 def test_trust_thresholds_reject_nonfinite_or_negative_geometry(bad):
     with pytest.raises(ValueError, match='max_residual_m'):

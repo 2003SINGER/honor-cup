@@ -122,6 +122,7 @@ def make_runtime(walls_entry_ex, *, task_mode=False, required=None,
     # perfect plant. Explicitly calibrate the trust gate for the fixture;
     # production defaults remain diagnostic-only and reject moving scans.
     synthetic_perception = {
+        'beam_origin_preserving': True,  # ray-cast fixture has a true beam origin
         'trust': {'diagnostic_only': False,
                   'max_residual_m': 0.05,
                   'max_incidence_rad': math.pi / 2,

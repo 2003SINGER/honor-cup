@@ -108,6 +108,13 @@ class NavRuntimeNode(Node):
             raise RuntimeError(
                 'preflight FAIL (real run): perception trust thresholds '
                 'must be calibrated and diagnostic_only must be false')
+        if not self._dry_run and (
+                not self.runtime.beam_origin_preserving or
+                scan_topic == '/scan_multi'):
+            raise RuntimeError(
+                'preflight FAIL (real run): merged /scan_multi has a virtual '
+                'ray origin and cannot establish OPEN; configure and verify '
+                'an origin-preserving raw scan before exploration')
         self.runtime.set_anchor_spec(
             (int(anchor_cfg.get('cell_x', 0)),
              int(anchor_cfg.get('cell_y', 0))),

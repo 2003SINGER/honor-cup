@@ -36,6 +36,7 @@ anchor:                            # 人工摆车: 车中心所在格 + 车头�
   offset_yaw_rad: __CALIBRATE__
 
 perception:                        # —— 现场待审参数 (scan_debug 工作台) ——
+  beam_origin_preserving: false    # /scan_multi 是双雷达点云从虚拟原点重投影，不能据此投 OPEN 票
   dphi_deg: 0.30                   # 入射角噪声模型 (rad·deg)
   gate: 0.06                       # 观测误差门 (m)
   rng: 0.02                        # 距离噪声底 (m)

@@ -82,10 +82,11 @@ class FrameObservationStats:
 
 class RealObservationAdapter:
     def __init__(self, association=None, *, free_path_cap_m=3.0,
-                 trust_policy=None):
+                 trust_policy=None, allow_open_evidence=True):
         self.association = association or GridAssociation()
         self.free_path_cap_m = free_path_cap_m
         self.trust_policy = trust_policy
+        self.allow_open_evidence = bool(allow_open_evidence)
 
     def to_nav_observation(self, world_rays, pose, *, stamp=None):
         """WorldRay[] + 当前 maze 位姿 → (hits, opens, stats).
@@ -168,14 +169,16 @@ class RealObservationAdapter:
                     stats.n_ambiguous += 1
                 else:
                     stats.n_rejected += 1
-            for edge in obs.open_edges:
-                ev = self._open_evidence((edge,), ray, pose)[0]
-                keep_open(edge, ev, ray)
+            if self.allow_open_evidence:
+                for edge in obs.open_edges:
+                    ev = self._open_evidence((edge,), ray, pose)[0]
+                    keep_open(edge, ev, ray)
         # 2) 无回波射线: 只出 free-path OPEN 证据 (同帧逐边一票)
-        for ray in synthetic:
-            for edge in self.association.open_edges_along(ray):
-                ev = self._open_evidence((edge,), ray, pose)[0]
-                keep_open(edge, ev, ray)
+        if self.allow_open_evidence:
+            for ray in synthetic:
+                for edge in self.association.open_edges_along(ray):
+                    ev = self._open_evidence((edge,), ray, pose)[0]
+                    keep_open(edge, ev, ray)
         # A plausible raw hit vetoes same-frame OPEN, even if it has not yet
         # accumulated enough distinct scans for a WALL commit.
         raw_wall_edges = {

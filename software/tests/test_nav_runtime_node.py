@@ -31,6 +31,7 @@ def nav_node_module(monkeypatch):
     nav_msg.Odometry = type('Odometry', (), {})
     sensor_msg = types.ModuleType('sensor_msgs.msg')
     sensor_msg.LaserScan = type('LaserScan', (), {})
+    sensor_msg.Imu = type('Imu', (), {})
     modules = {
         'rclpy': rclpy, 'rclpy.node': node_mod, 'rclpy.qos': qos_mod,
         'geometry_msgs': types.ModuleType('geometry_msgs'),

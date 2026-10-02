@@ -60,6 +60,16 @@ perception:                        # —— 现场待审参数 (scan_debug 工�
     static_window_fallback_s: 0.25 # /scan_multi has no beam timing; require stationary odom before and after stamp
     max_trust_motion_mps: 0.03      # 无逐束 deskew 前，只接受近静止扫描
     max_trust_yaw_rate_radps: 0.05
+  gyro_yaw:
+    enabled: false                  # dry-run validation first; wheel odom remains authoritative by default
+    imu_weight: 0.5                 # fraction of short-interval yaw delta from gyro
+    max_age_s: 0.12
+    max_gap_s: 0.12
+    bias_radps: 0.0                 # calibrate on a stationary run before enabling
+    sign: 1.0
+  frame_grid_shadow:
+    enabled: false                  # diagnostic only; NavRuntime additionally requires dry_run
+    max_scan_lag_s: 0.8             # older queued frames are dropped with evidence
   correction:
     enabled: false                 # 校准可信阈值、静止双向墙验证后启用
   # trusted_forward_m: __CALIBRATE__   # 可信遮罩 (实装 trusted mask 时启用)

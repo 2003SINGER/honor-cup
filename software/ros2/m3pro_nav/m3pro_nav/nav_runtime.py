@@ -16,6 +16,7 @@ MotionRuntimeCore 的 follower 锚定 (planner(maze)→odom 刚性变换)。
 import math
 import time as _time
 from collections import deque
+from copy import deepcopy
 
 from .action_horizon import ActionHorizon
 from .event_detector import GridEventDetector
@@ -35,6 +36,102 @@ from .scan_adapter import parse_scan
 from .scan_time_alignment import OdomPoseHistory, ScanTimeAligner
 from .stream_nav import StreamNav
 from .trust_policy import TrustPolicy, TrustThresholds
+
+
+class _GyroYawFusion:
+    """Short-window yaw delta fusion for scan pose prediction.
+
+    Translation and the motion follower continue to use wheel odometry. Gyro
+    samples only influence the yaw stored in scan-alignment history. If gyro
+    coverage is stale or has a gap, that interval falls back to wheel yaw.
+    """
+
+    def __init__(self, *, enabled=False, imu_weight=0.5, max_age_s=0.12,
+                 max_gap_s=0.12, bias_radps=0.0, sign=1.0):
+        for name, value in (('imu_weight', imu_weight),
+                            ('max_age_s', max_age_s),
+                            ('max_gap_s', max_gap_s),
+                            ('bias_radps', bias_radps), ('sign', sign)):
+            if not math.isfinite(float(value)):
+                raise ValueError(f'{name} must be finite')
+        if not 0.0 <= imu_weight <= 1.0 or max_age_s <= 0 or max_gap_s <= 0:
+            raise ValueError('invalid gyro fusion bounds')
+        self.enabled = bool(enabled)
+        self.weight = float(imu_weight)
+        self.max_age_s = float(max_age_s)
+        self.max_gap_s = float(max_gap_s)
+        self.bias = float(bias_radps)
+        self.sign = float(sign)
+        self.samples = deque(maxlen=512)
+        self.last_odom = None
+        self.fused_yaw = None
+
+    def add_gyro(self, stamp, wz):
+        stamp, wz = float(stamp), float(wz)
+        if not math.isfinite(stamp) or not math.isfinite(wz):
+            return False
+        if self.samples and stamp <= self.samples[-1][0]:
+            return False
+        self.samples.append((stamp, self.sign * (wz - self.bias)))
+        return True
+
+    def _integral(self, start, end):
+        samples = tuple((t, w) for t, w in self.samples
+                        if start - self.max_age_s <= t <= end + self.max_age_s)
+        if not samples:
+            return None
+        # ROS odom and IMU callbacks arrive in source-time order only
+        # approximately. Requiring a *future* IMU sample to bracket the odom
+        # timestamp made every live interval fall back to wheel yaw. Hold the
+        # latest rate for a bounded fraction of a sample period instead.
+        def rate_at(target):
+            before = next((sample for sample in reversed(samples)
+                           if sample[0] <= target), None)
+            if before is None or target - before[0] > self.max_age_s:
+                return None
+            after = next((sample for sample in samples
+                          if sample[0] > target), None)
+            if after is None:
+                return before[1]
+            gap = after[0] - before[0]
+            if gap > self.max_gap_s:
+                return None
+            alpha = (target - before[0]) / gap
+            return before[1] + alpha * (after[1] - before[1])
+
+        left_rate, right_rate = rate_at(start), rate_at(end)
+        if left_rate is None or right_rate is None:
+            return None
+        inside = [(t, w) for t, w in samples if start < t < end]
+        points = [(start, left_rate), *inside, (end, right_rate)]
+        if any(b[0] - a[0] > self.max_gap_s
+               for a, b in zip(points, points[1:])):
+            return None
+        return sum((b[0] - a[0]) * (a[1] + b[1]) * 0.5
+                   for a, b in zip(points, points[1:]))
+
+    def fuse(self, stamp, wheel_pose):
+        stamp = float(stamp)
+        if self.last_odom is None:
+            self.last_odom = (stamp, wheel_pose.copy())
+            self.fused_yaw = wheel_pose.yaw
+            return wheel_pose.copy(), 'WHEEL_INIT'
+        prev_stamp, prev_pose = self.last_odom
+        if stamp <= prev_stamp:
+            return wheel_pose.copy(), 'WHEEL_REJECTED'
+        wheel_delta = math.atan2(math.sin(wheel_pose.yaw - prev_pose.yaw),
+                                 math.cos(wheel_pose.yaw - prev_pose.yaw))
+        gyro_delta = self._integral(prev_stamp, stamp) if self.enabled else None
+        if gyro_delta is None or stamp - self.samples[-1][0] > self.max_age_s:
+            delta, mode = wheel_delta, 'WHEEL_FALLBACK'
+        else:
+            delta = ((1.0 - self.weight) * wheel_delta +
+                     self.weight * gyro_delta)
+            mode = 'WHEEL_GYRO'
+        self.fused_yaw = math.atan2(math.sin(self.fused_yaw + delta),
+                                    math.cos(self.fused_yaw + delta))
+        self.last_odom = (stamp, wheel_pose.copy())
+        return Pose2D(wheel_pose.x, wheel_pose.y, self.fused_yaw), mode
 
 
 def _calibrated(value, cast=float):
@@ -129,6 +226,23 @@ class NavRuntime:
             static_window_fallback_s=float(
                 sync.get('static_window_fallback_s', 0.25)))
         self._pending_scans = deque()
+        self._pending_shadow_scans = deque()
+        yaw_cfg = perc.get('gyro_yaw', {})
+        self.gyro_yaw = _GyroYawFusion(
+            enabled=bool(yaw_cfg.get('enabled', False)),
+            imu_weight=float(yaw_cfg.get('imu_weight', 0.5)),
+            max_age_s=float(yaw_cfg.get('max_age_s', 0.12)),
+            max_gap_s=float(yaw_cfg.get('max_gap_s', 0.12)),
+            bias_radps=float(yaw_cfg.get('bias_radps', 0.0)),
+            sign=float(yaw_cfg.get('sign', 1.0)))
+        self._frame_grid_shadow = None
+        shadow_cfg = perc.get('frame_grid_shadow', {})
+        self._shadow_max_lag_s = float(shadow_cfg.get('max_scan_lag_s', 0.8))
+        if not math.isfinite(self._shadow_max_lag_s) or self._shadow_max_lag_s <= 0:
+            raise ValueError('frame_grid_shadow.max_scan_lag_s must be positive')
+        if bool(shadow_cfg.get('enabled', False)) and dry_run:
+            from .frame_grid_shadow import FrameGridShadow
+            self._frame_grid_shadow = FrameGridShadow()
         self.correction_enabled = bool(
             perc.get('correction', {}).get('enabled', False))
         self._last_correction_stamp = None
@@ -149,6 +263,10 @@ class NavRuntime:
         self.events = []                    # 结构化事件日志 (evidence)
         self.frames = []                    # 每帧观测统计 (evidence)
         self.exited = False
+        self._prune_notice = None
+        self._queued_plan_base = None
+        self._last_yaw_log_stamp = None
+        self._last_yaw_mode = None
 
     # ---- 传感器输入 (事件源) ----
 
@@ -157,8 +275,9 @@ class NavRuntime:
         反馈缓存. receive_stamp: 节点收到消息的时刻 (反馈钟, None=odom stamp)."""
         odom_pose = odom_state.pose
         stamp = receive_stamp if receive_stamp is not None else odom_state.stamp
+        scan_pose, yaw_mode = self.gyro_yaw.fuse(odom_state.stamp, odom_pose)
         try:
-            self.odom_history.add(odom_state.stamp, odom_pose, stamp)
+            self.odom_history.add(odom_state.stamp, scan_pose, stamp)
         except ValueError as exc:
             # A repeated/regressed source stamp cannot calibrate a scan. The
             # feedback path still sees this callback and has its own watchdog.
@@ -174,6 +293,15 @@ class NavRuntime:
                                                    round(maze0.yaw, 4)])
             self.prev_maze_pose = maze0
             self.phase = NavRuntimePhase.EXPLORING
+        if (yaw_mode != self._last_yaw_mode or
+                self._last_yaw_log_stamp is None or
+                odom_state.stamp - self._last_yaw_log_stamp >= 1.0):
+            self._log_event('yaw_prediction', odom_state.stamp,
+                            mode=yaw_mode,
+                            fused_yaw=round(scan_pose.yaw, 6),
+                            wheel_yaw=round(odom_pose.yaw, 6))
+            self._last_yaw_log_stamp = odom_state.stamp
+            self._last_yaw_mode = yaw_mode
         self.latest_odom = (stamp, odom_pose,
                             odom_state.vx_world, odom_state.vy_world,
                             odom_state.wz)
@@ -201,6 +329,14 @@ class NavRuntime:
                 self._pending_scans.popleft()))
         return [stats for stats in processed if stats is not None]
 
+    def on_imu(self, stamp, angular_velocity_z):
+        """Accept source-stamped planar gyro rate; invalid samples are dropped."""
+        accepted = self.gyro_yaw.add_gyro(stamp, angular_velocity_z)
+        if not accepted:
+            self._log_event('imu_abstain', stamp,
+                            reason='INVALID_OR_NONMONOTONIC_IMU')
+        return accepted
+
     def _verify_plan(self, entered_cell, stamp):
         """实际进入格必须符合计划序列 (mismatch = 定位/执行/事件链故障)."""
         if len(self.planned_cells) >= 2 and entered_cell == self.planned_cells[1]:
@@ -217,6 +353,12 @@ class NavRuntime:
         if self.anchor is None or self.latest_odom is None:
             return None                     # 传感器未就绪: 丢弃
         frame = parse_scan(scan_msg)
+        if self._frame_grid_shadow is not None:
+            if len(self._pending_shadow_scans) >= 32:
+                dropped = self._pending_shadow_scans.popleft()
+                self._log_event('frame_grid_shadow_drop', dropped.stamp,
+                                reason='PENDING_SHADOW_OVERFLOW')
+            self._pending_shadow_scans.append(frame)
         if len(frame.rays) > 1 and frame.time_increment == 0.0:
             if len(self._pending_scans) >= 32:
                 dropped = self._pending_scans.popleft()
@@ -225,6 +367,48 @@ class NavRuntime:
             self._pending_scans.append(frame)
             return None
         return self._process_scan_frame(frame)
+
+    def process_shadow_pending(self, max_frames=1):
+        """Run a small shadow-only budget outside the 50 Hz control callback."""
+        if self._frame_grid_shadow is None or not self._pending_shadow_scans:
+            return 0
+        processed = 0
+        history = self.odom_history.samples
+        while self._pending_shadow_scans and processed < max_frames:
+            frame = self._pending_shadow_scans[0]
+            midpoint = frame.stamp + max(0, len(frame.rays) - 1) * \
+                frame.time_increment * 0.5
+            if not history or midpoint > history[-1].stamp:
+                break
+            lag_s = history[-1].stamp - midpoint
+            if lag_s > self._shadow_max_lag_s:
+                self._pending_shadow_scans.popleft()
+                self._log_event('frame_grid_shadow_drop', frame.stamp,
+                                reason='SHADOW_BACKLOG', lag_s=lag_s)
+                continue
+            sample = self.odom_history.interpolate(
+                midpoint,
+                max_bracket_gap_s=self.scan_aligner.max_bracket_gap_s,
+                max_extrapolation_s=self.scan_aligner.max_extrapolation_s)
+            if sample is None:
+                if midpoint < history[0].stamp:
+                    self._pending_shadow_scans.popleft()
+                    self._log_event('frame_grid_shadow_drop', frame.stamp,
+                                    reason='ODOM_HISTORY_EXPIRED')
+                    continue
+                break
+            self._pending_shadow_scans.popleft()
+            pose, _skew = sample
+            try:
+                result = self._frame_grid_shadow.process(
+                    frame, pose, self.projector.extrinsic, self.anchor)
+                self._log_event('frame_grid_shadow', frame.stamp,
+                                **self._shadow_json(result))
+            except Exception as exc:  # diagnostic failure cannot alter runtime
+                self._log_event('frame_grid_shadow_error', frame.stamp,
+                                error=f'{type(exc).__name__}: {exc}')
+            processed += 1
+        return processed
 
     def _process_scan_frame(self, frame):
         if not self.projector.extrinsic.available:
@@ -267,6 +451,39 @@ class NavRuntime:
         stats.stamp = frame.stamp
         self.frames.append(stats)
         return stats
+
+    @staticmethod
+    def _shadow_json(result):
+        if not isinstance(result, dict):
+            return {'result': str(result)}
+        out = {}
+        for key, value in result.items():
+            if isinstance(value, Pose2D):
+                out[key] = [value.x, value.y, value.yaw]
+            elif value is None or isinstance(value, (str, int, float, bool)):
+                out[key] = value
+            elif isinstance(value, (list, tuple)):
+                out[key] = [NavRuntime._shadow_json_value(item)
+                            for item in value]
+            elif isinstance(value, dict):
+                out[key] = {str(k): NavRuntime._shadow_json_value(v)
+                            for k, v in value.items()}
+            else:
+                out[key] = str(value)
+        return out
+
+    @staticmethod
+    def _shadow_json_value(value):
+        if isinstance(value, Pose2D):
+            return [value.x, value.y, value.yaw]
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, (list, tuple)):
+            return [NavRuntime._shadow_json_value(item) for item in value]
+        if isinstance(value, dict):
+            return {str(k): NavRuntime._shadow_json_value(v)
+                    for k, v in value.items()}
+        return str(value)
 
     def _known_wall_segments(self):
         """Use pre-existing sensor-confirmed walls, never current-scan votes."""
@@ -350,6 +567,31 @@ class NavRuntime:
             return
         if self.core.safety != SafetyState.ARMED:
             self.core.arm()
+        if (self._queued_plan_base is not None and
+                not self.core.has_queued_suffix):
+            self._queued_plan_base = None
+        prune = self._planned_prune_candidate()
+        if prune is not None and self.core.cancel_queued_suffix():
+            base = self._queued_plan_base
+            if base is not None:
+                self.cursor = base[0]
+                self.plan_state = base[1]
+                self.planned_cells = base[2]
+            self._queued_plan_base = None
+            self._log_event('task_prune_queued_suffix_cancelled', tick_time,
+                            parent=list(prune[0]), child=list(prune[1]),
+                            active_primitive_preserved=True,
+                            replan_anchor=list(self.cursor[1]))
+            prune = None
+        if prune is not None and self._prune_notice != prune:
+            self._prune_notice = prune
+            self._log_event('task_prune_suffix_pending', tick_time,
+                            parent=list(prune[0]), child=list(prune[1]),
+                            active_primitive_preserved=True,
+                            replan_anchor=list(self.cursor[1]),
+                            action='hold_extension_until_existing_wait')
+        elif prune is None:
+            self._prune_notice = None
         # 任务完成判定 (与仿真同语义)
         done = (self.nav.got >= self.required_blocks
                 or not self.nav.active_frontier()) \
@@ -368,13 +610,25 @@ class NavRuntime:
         tail = self.core.tail_wait_stop()
         if (not done and self.core.state == RuntimeState.TRACKING
                 and tail is not None):
+            if prune is not None:
+                # MotionRuntimeCore deliberately has no API to retime a live
+                # primitive. Keep the installed chain intact; do not add more
+                # stale horizon. The existing WAIT STOP is the next verified
+                # legal anchor at which normal compilation re-evaluates pruning.
+                return
             (tx, ty), _ = tail
+            base = (self.cursor, deepcopy(self.plan_state),
+                    list(self.planned_cells))
             suffix, terminal, seq, next_state = self.horizon.compile_with_state(
                 self.nav, Pose2D(tx, ty, self.anchor.maze_anchor.yaw),
                 self.cursor, self.plan_state)
             _ensure_terminal_stop(suffix, terminal[1])
             if suffix and suffix[0].kind != 'STOP':
                 self.core.append_suffix(suffix)
+                if self.core.has_queued_suffix and self._queued_plan_base is None:
+                    self._queued_plan_base = base
+                elif not self.core.has_queued_suffix:
+                    self._queued_plan_base = None
                 self.cursor = terminal
                 self.plan_state = next_state
                 self.planned_cells.extend(seq[1:])
@@ -393,6 +647,8 @@ class NavRuntime:
                 self.plan_state = next_state
                 self.planned_cells = list(seq)
                 self._log_event('resume', tick_time, cells=list(seq[1:]))
+            if prune is None:
+                self._prune_notice = None
             return
         # IDLE/FINISHED → 新链 (仅首次: 探索链都以 WAIT STOP 收尾进 HOLDING)
         if self.core.state in (RuntimeState.IDLE, RuntimeState.FINISHED):
@@ -416,6 +672,22 @@ class NavRuntime:
             self.planned_cells = list(seq)
             self._log_event('plan', tick_time, first=prims[0].kind,
                             cells=list(seq))
+
+    def _planned_prune_candidate(self):
+        """Return the first newly provable pruned directed edge in the suffix.
+
+        Pruning stays dynamically derived from BlockMap and never mutates the
+        physical map or the active motion primitive.
+        """
+        if not self.task_mode or len(self.planned_cells) < 2:
+            return None
+        cells = self.planned_cells
+        # _verify_plan consumes completed cells from the head, while cursor is
+        # the far end of the compiled horizon. Scan the whole remaining route.
+        for parent, child in zip(cells, cells[1:]):
+            if self.nav._is_pruned(parent, child):
+                return parent, child
+        return None
 
     def _load_home(self, route, tick_time):
         """route = (path_cells, exit_dir); 从当前边界锚编译返航链 + 终端 STOP."""

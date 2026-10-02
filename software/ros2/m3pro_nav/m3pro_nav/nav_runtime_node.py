@@ -28,7 +28,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from nav_msgs.msg import Odometry
-from sensor_msgs.msg import LaserScan
+from sensor_msgs.msg import LaserScan, Imu
 from geometry_msgs.msg import Twist
 
 from m3pro_nav.frame_projector import LaserExtrinsic
@@ -162,6 +162,9 @@ class NavRuntimeNode(Node):
             Odometry, odom_topic, self._on_odom, qos)
         self._scan_sub = self.create_subscription(
             LaserScan, scan_topic, self._on_scan, qos)
+        imu_topic = ros_cfg.get('imu_topic', '/imu/data_raw')
+        self._imu_sub = self.create_subscription(
+            Imu, imu_topic, self._on_imu, qos)
         self._planner_timer = self.create_timer(
             PLANNER_PERIOD_S, self._planner_tick)
         self._control_timer = self.create_timer(
@@ -280,8 +283,16 @@ class NavRuntimeNode(Node):
                 't': stats.stamp, 'kind': 'scan',
                 **stats.to_json()}) + '\n')
 
+    def _on_imu(self, msg):
+        stamp = (float(msg.header.stamp.sec) +
+                 float(msg.header.stamp.nanosec) * 1e-9)
+        if not self.runtime.on_imu(stamp, msg.angular_velocity.z):
+            self.get_logger().warn('IMU sample rejected',
+                                   throttle_duration_sec=5.0)
+
     def _planner_tick(self):
         try:
+            self.runtime.process_shadow_pending(max_frames=1)
             self.runtime.planner_tick(
                 self.get_clock().now().nanoseconds * 1e-9)
         except Exception as exc:                          # noqa: BLE001

@@ -146,6 +146,18 @@ class MotionRuntimeCore:
         chain = self._active_chain()
         return primitive_end(chain[-1]) if chain else None
 
+    @property
+    def has_queued_suffix(self):
+        """Whether an appended suffix is still waiting beyond the live plan."""
+        return self._queued_suffix is not None
+
+    def cancel_queued_suffix(self):
+        """Drop an unapplied suffix while TRACKING; never edits live follower."""
+        if self._state != RuntimeState.TRACKING or self._queued_suffix is None:
+            return False
+        self._queued_suffix = None
+        return True
+
     def _active_chain(self):
         if self._follower is None:
             return None

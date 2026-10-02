@@ -24,6 +24,7 @@ sys.path.insert(0, str(ROOT / 'software' / 'tools'))
 
 from m3pro_nav.edge_map import EdgeMap, WALL, UNKNOWN
 from m3pro_nav.grid_association import edge_id_for_line
+from m3pro_nav.wall_evidence_quality import add_temporal_evidence
 from audit_lidar_odom_calibration import edge_truth
 
 N = 7
@@ -147,14 +148,14 @@ def _pose(frame):
     return [float(v) for v in p]
 
 
-def _view_clusters(samples):
+def _view_clusters(samples, position_m=VIEW_POSITION_M, yaw_rad=VIEW_YAW_RAD):
     reps = []
     for sample in samples:
         pose = sample['pose']
         for rep in reps:
             rp = rep['pose']
-            if (math.dist(pose[:2], rp[:2]) <= VIEW_POSITION_M and
-                    abs(wrap(pose[2] - rp[2])) <= VIEW_YAW_RAD):
+            if (math.dist(pose[:2], rp[:2]) <= position_m and
+                    abs(wrap(pose[2] - rp[2])) <= yaw_rad):
                 rep['frames'].append(sample['frame_index'])
                 break
         else:
@@ -193,6 +194,10 @@ def _dedupe_frame_hits(frames):
 
 
 def _passes(sample, config):
+    if sample.get('edge_id_jump_abstain'):
+        return False
+    if sample.get('temporal_streak', 1) < config.get('min_temporal_streak', 0):
+        return False
     hit = sample['hit']
     if config.get('use_roi_support', True):
         count, span = _roi_measure(hit, config['roi_half_width_cm'])
@@ -232,6 +237,12 @@ def _passes(sample, config):
 
 def _simulate(edge_votes, config):
     """Apply quality filter, per-frame cap, and EdgeMap; returns pre-truth state."""
+    if not all(samples and 'temporal_streak' in samples[0]
+               for samples in edge_votes.values()):
+        for edge, samples in edge_votes.items():
+            for sample in samples:
+                sample['edge'] = edge
+        add_temporal_evidence(edge_votes)
     em = EdgeMap(N)
     all_edges = canonical_edges()
     for edge in all_edges:
@@ -241,6 +252,8 @@ def _simulate(edge_votes, config):
         portal = (cell, direction) in {((3, 0), 'S'), ((0, 0), 'W')}
         em.set_boundary(cell, direction, 'OPEN' if portal else WALL)
     result = {}
+    view_position_m = config.get('view_position_m', VIEW_POSITION_M)
+    view_yaw_rad = config.get('view_yaw_rad', VIEW_YAW_RAD)
     for edge in all_edges:
         eligible = [v for v in edge_votes.get(edge, []) if _passes(v, config)]
         required_views = config['independent_view_confirmations']
@@ -272,8 +285,8 @@ def _simulate(edge_votes, config):
             if required_views == 0:
                 apply_vote(v)
                 continue
-            if any(math.dist(v['pose'][:2], rep['pose'][:2]) <= VIEW_POSITION_M and
-                   abs(wrap(v['pose'][2] - rep['pose'][2])) <= VIEW_YAW_RAD
+            if any(math.dist(v['pose'][:2], rep['pose'][:2]) <= view_position_m and
+                   abs(wrap(v['pose'][2] - rep['pose'][2])) <= view_yaw_rad
                    for rep in view_reps):
                 continue
             view_reps.append({'pose': v['pose']})
@@ -300,6 +313,12 @@ def _simulate(edge_votes, config):
         result[edge] = {
             'wall_hits': votes_applied, 'quality_hits': len(eligible),
             'independent_views': len(views),
+            'max_temporal_streak': max((v.get('temporal_streak', 1)
+                                        for v in edge_votes.get(edge, [])), default=0),
+            'temporal_continuity_hits': sum(bool(v.get('temporal_continuity'))
+                                             for v in edge_votes.get(edge, [])),
+            'edge_id_jump_abstentions': sum(bool(v.get('edge_id_jump_abstain'))
+                                             for v in edge_votes.get(edge, [])),
             'final_state': em.soft.get(edge, {'state': UNKNOWN})['state'],
             'effective_final_state': em.state(c, d),
             'ever_wall': first_wall is not None,
@@ -345,7 +364,7 @@ def _configurations():
                'max_distance_m': None, 'max_grazing_deg': None,
                'max_yaw_rate_rad_s': yaw,
                'independent_view_confirmations': views,
-               'max_normal_mad_m': mad}
+               'max_normal_mad_m': mad, 'min_temporal_streak': 0}
         unique = add(cfg)
         if unique is not None:
             yield unique
@@ -356,7 +375,7 @@ def _fixed_baseline_config():
             'min_support_points': 6, 'min_span_m': .08,
             'max_distance_m': None, 'max_grazing_deg': None,
             'max_yaw_rate_rad_s': None, 'independent_view_confirmations': 0,
-            'max_normal_mad_m': None}
+            'max_normal_mad_m': None, 'min_temporal_streak': 0}
 
 
 def _span_view_configurations():
@@ -368,7 +387,7 @@ def _span_view_configurations():
                'max_distance_m': None, 'max_grazing_deg': None,
                'max_yaw_rate_rad_s': None,
                'independent_view_confirmations': views,
-               'max_normal_mad_m': None}
+               'max_normal_mad_m': None, 'min_temporal_streak': 0}
 
 
 def _contiguous_roi_configurations():
@@ -379,7 +398,23 @@ def _contiguous_roi_configurations():
                'contiguous_roi_half_width_cm': cm,
                'min_contiguous_support_points': 6,
                'min_contiguous_span_m': span,
-               'independent_view_confirmations': views}
+               'independent_view_confirmations': views,
+               'min_temporal_streak': 0}
+
+
+def _temporal_configurations():
+    """Persistence sweep; independent viewpoints remain a separate gate."""
+    for streak, view_position_m, view_yaw_deg in itertools.product(
+            (2, 3), (.05, .10, .20), (5, 10, 20)):
+        yield {'roi_half_width_cm': 2, 'use_roi_support': True,
+               'min_support_points': 6, 'min_span_m': .08,
+               'max_distance_m': None, 'max_grazing_deg': None,
+               'max_yaw_rate_rad_s': None,
+               'independent_view_confirmations': 1,
+               'view_position_m': view_position_m,
+               'view_yaw_rad': math.radians(view_yaw_deg),
+               'max_normal_mad_m': None,
+               'min_temporal_streak': streak}
 
 
 def _score(simulated, truth):
@@ -401,6 +436,9 @@ def _score(simulated, truth):
                     'wall_hits': simulated[e]['wall_hits'],
                     'quality_hits': simulated[e]['quality_hits'],
                     'independent_views': simulated[e]['independent_views'],
+                    'max_temporal_streak': simulated[e]['max_temporal_streak'],
+                    'temporal_continuity_hits': simulated[e]['temporal_continuity_hits'],
+                    'edge_id_jump_abstentions': simulated[e]['edge_id_jump_abstentions'],
                     'final_state': simulated[e]['final_state'],
                     'effective_final_state': simulated[e]['effective_final_state'],
                     'ever_wall': simulated[e]['ever_wall'],
@@ -440,6 +478,9 @@ def sweep(log_path, truth_path, json_path, csv_path):
     contiguous_candidates = [
         {'config': cfg, 'simulation': _simulate(edge_votes, cfg)}
         for cfg in _contiguous_roi_configurations()]
+    temporal_candidates = [
+        {'config': cfg, 'simulation': _simulate(edge_votes, cfg)}
+        for cfg in _temporal_configurations()]
     truth = edge_truth(json.loads(Path(truth_path).read_text()))
     if set(truth) != canonical_edges():
         raise ValueError('truth must resolve exactly 112 canonical edges')
@@ -453,6 +494,9 @@ def sweep(log_path, truth_path, json_path, csv_path):
     contiguous_results = [
         {'config': item['config'], 'metrics': _score(item['simulation'], truth)}
         for item in contiguous_candidates]
+    temporal_results = [
+        {'config': item['config'], 'metrics': _score(item['simulation'], truth)}
+        for item in temporal_candidates]
     pareto = [item for item in candidates
               if not any(_dominates(other, item) for other in candidates)]
     # Keep the Pareto records sorted in a useful recall/false-wall order.
@@ -481,24 +525,33 @@ def sweep(log_path, truth_path, json_path, csv_path):
               'method': {'pose_correction_changed': False, 'truth_used_online': False,
                          'edge_map': 'm3pro_nav.edge_map.EdgeMap',
                          'vote_policy': 'one quality-selected hit per edge/frame; independent view clusters only cast votes',
+                         'temporal_evidence': {
+                             'module': 'm3pro_nav.wall_evidence_quality',
+                             'matching': 'same canonical edge in adjacent logged frames, <=0.25 s, overlapping post-snap endpoint support, stable world normal position',
+                             'edge_id_jump': 'abstain only if the prior ID disappears and a neighboring tangent-cell ID has matching physical endpoints under a small corrected-pose delta',
+                             'temporal_persistence_and_independent_view_credit_are_separate': True},
                          'heading_metric': 'endpoint geometry proxy; not per-beam incidence angle',
                          'view_cluster': {'position_m': VIEW_POSITION_M, 'yaw_deg': math.degrees(VIEW_YAW_RAD)},
                          'quality_sweep_configurations': len(configurations),
                          'targeted_span_view_configurations': len(span_view_results),
                          'contiguous_roi_configurations': len(contiguous_results),
+                         'temporal_configurations': len(temporal_results),
                          'contiguous_gap_m': CONTIGUOUS_GAP_M,
                          'targeted_span_view_policy': 'original per-edge support_points/span_m; no distance, heading, yaw-rate, ROI, or MAD gate',
                          'comparison_note': 'The fixed baseline uses existing per-cell >=6 points and >=8 cm producer support, all distances/angles/rates, and EdgeMap frame voting.'},
               'fixed_baseline': {'config': baseline_cfg, 'metrics': baseline_scored},
               'targeted_span_view_sweep': span_view_results,
               'contiguous_roi_sweep': contiguous_results,
+              'temporal_sweep': temporal_results,
               'pareto': pareto, 'all_candidates': all_candidate_summaries}
     Path(json_path).write_text(json.dumps(output, indent=2, ensure_ascii=False, allow_nan=False) + '\n')
     cols = ['sweep_kind', 'min_span_m', 'roi_half_width_cm',
             'contiguous_roi_half_width_cm', 'min_contiguous_support_points',
             'min_contiguous_span_m', 'max_distance_m', 'max_grazing_deg',
             'max_yaw_rate_rad_s', 'independent_view_confirmations',
-            'max_normal_mad_m', 'true_wall_confirmed', 'true_wall_total',
+            'max_normal_mad_m', 'min_temporal_streak',
+            'view_position_m', 'view_yaw_rad',
+            'true_wall_confirmed', 'true_wall_total',
             'true_wall_recall', 'open_final_soft_wall', 'open_ever_soft_wall',
             'open_final_effective_wall', 'missed_true_wall_edges', 'false_final_edges', 'false_ever_edges']
     with Path(csv_path).open('w', newline='') as f:
@@ -516,6 +569,11 @@ def sweep(log_path, truth_path, json_path, csv_path):
             writer.writerow({k: row.get(k) for k in cols})
         for item in contiguous_results:
             row = {'sweep_kind': 'contiguous_roi', **item['config'], **item['metrics']}
+            for key in ('missed_true_wall_edges', 'false_final_edges', 'false_ever_edges'):
+                row[key] = json.dumps(row[key], ensure_ascii=False)
+            writer.writerow({k: row.get(k) for k in cols})
+        for item in temporal_results:
+            row = {'sweep_kind': 'temporal', **item['config'], **item['metrics']}
             for key in ('missed_true_wall_edges', 'false_final_edges', 'false_ever_edges'):
                 row[key] = json.dumps(row[key], ensure_ascii=False)
             writer.writerow({k: row.get(k) for k in cols})

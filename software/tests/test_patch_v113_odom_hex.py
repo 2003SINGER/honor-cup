@@ -146,6 +146,7 @@ def test_lidar_combined_variant_rejects_duplicate_140ms_timer(monkeypatch):
     lines.insert(-1, _record(0x100, 0, (140_000_000).to_bytes(8, "little")))
     duplicate_source = "".join(lines).encode("ascii")
     monkeypatch.setattr(patcher, "EXPECTED_INPUT_SHA256", hashlib.sha256(duplicate_source).hexdigest())
+    monkeypatch.setattr(patcher, "IMU_TIMER_ADDRESS", 0x08000050)
 
     with pytest.raises(patcher.HexError, match="unique adjacent 140 ms lidar timer"):
         patcher.create_variant(duplicate_source, 30, 30, 70)

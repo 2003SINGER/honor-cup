@@ -200,6 +200,30 @@ def test_gate_f_wait_stop_holds_indefinitely():
     assert rt.state == RuntimeState.TRACKING
 
 
+def test_cancel_queued_suffix_preserves_live_follower():
+    rt = make_runtime()
+    chain, pose = build_chain()
+    rt.arm()
+    rt.update(0.0, fb(0.0, pose))
+    rt.load_plan(chain)
+    rt.update(0.02, fb(0.02, pose))
+    live_follower = rt._follower
+    tail_x, tail_y = rt.plan_tail
+    segment = MotionPrimitive(
+        'STRAIGHT', Pose2D(tail_x, tail_y, pose.yaw),
+        p0=(tail_x, tail_y), p1=(tail_x + 0.1, tail_y),
+        length=0.1, v_max=0.1, v_end=0.0)
+    stop = MotionPrimitive('STOP', Pose2D(tail_x + 0.1, tail_y, pose.yaw),
+                           p0=(tail_x + 0.1, tail_y), yaw0=pose.yaw,
+                           duration=0.2)
+    rt.append_suffix([segment, stop])
+    assert rt.has_queued_suffix
+    assert rt.cancel_queued_suffix()
+    assert not rt.has_queued_suffix
+    assert rt._follower is live_follower
+    assert rt.state == RuntimeState.TRACKING
+
+
 def test_gate_f_terminal_stop_settles_to_finished():
     """终端 STOP (无 meta['wait']) = 任务终点: settle 后 FINISHED."""
     rt = make_runtime()

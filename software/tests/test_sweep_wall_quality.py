@@ -7,6 +7,7 @@ sys.path.insert(0, str(ROOT / 'software' / 'tools'))
 
 import sweep_wall_quality as sweep
 from m3pro_nav.edge_map import UNKNOWN, WALL
+from m3pro_nav.wall_evidence_quality import add_temporal_evidence
 
 
 def vote(edge, frame, pose, *, roi_count=8, roi_span=.12):
@@ -32,6 +33,58 @@ def config(views=1):
 
 
 class WallQualitySweepTests(unittest.TestCase):
+    @staticmethod
+    def temporal_vote(edge, frame, tangent_points, pose=None):
+        sample = vote(edge, frame, pose or [0.0, 0.0, 0.0])
+        sample['edge'] = edge
+        sample['stamp'] = frame * .1 + 1.0
+        sample['hit'].update({
+            'normal_residual_m': .01,
+            'roi_tangent_m': tangent_points,
+            'roi_signed_normal_m': [.01] * len(tangent_points),
+        })
+        return sample
+
+    def test_same_canonical_edge_tracks_across_adjacent_frames(self):
+        edge = ((1, 0), 'E')
+        samples = [self.temporal_vote(edge, i, [.10, .13, .16]) for i in (0, 1)]
+        add_temporal_evidence({edge: samples})
+        self.assertEqual([s['temporal_streak'] for s in samples], [1, 2])
+        self.assertFalse(samples[0]['temporal_continuity'])
+        self.assertTrue(samples[1]['temporal_continuity'])
+
+    def test_adjacent_edge_id_jump_only_abstains_for_matching_cluster(self):
+        old_edge, new_edge = ((1, 0), 'E'), ((1, 1), 'E')
+        before = self.temporal_vote(old_edge, 0, [.36, .38, .39])
+        after = self.temporal_vote(new_edge, 1, [.41, .42, .44])
+        add_temporal_evidence({old_edge: [before], new_edge: [after]})
+        self.assertTrue(after['edge_id_jump_abstain'])
+
+        unrelated = self.temporal_vote(new_edge, 1, [.65, .68, .70])
+        add_temporal_evidence({old_edge: [before], new_edge: [unrelated]})
+        self.assertFalse(unrelated['edge_id_jump_abstain'])
+
+    def test_temporal_persistence_does_not_create_view_credits(self):
+        edge = ((1, 0), 'E')
+        samples = [self.temporal_vote(edge, i, [.10, .13, .16]) for i in range(30)]
+        votes = {edge: samples}
+        add_temporal_evidence(votes)
+        self.assertEqual(samples[-1]['temporal_streak'], 30)
+        self.assertEqual(len(sweep._view_clusters(samples)), 1)
+
+    def test_stationary_temporal_streak_still_gets_only_one_map_vote(self):
+        edge = ((1, 0), 'E')
+        samples = [self.temporal_vote(edge, i, [.10, .13, .16])
+                   for i in range(30)]
+        cfg = {**sweep._fixed_baseline_config(), 'roi_half_width_cm': 5,
+               'use_roi_support': True, 'independent_view_confirmations': 1,
+               'min_temporal_streak': 2}
+        result = sweep._simulate({edge: samples}, cfg)[edge]
+        self.assertEqual(result['max_temporal_streak'], 30)
+        self.assertEqual(result['independent_views'], 1)
+        self.assertEqual(result['wall_hits'], 1)
+        self.assertEqual(result['final_state'], UNKNOWN)
+
     def test_contiguous_roi_rejects_two_clusters_with_large_global_span(self):
         hit = {'roi': {'2': {'support_points': 10, 'span_m': .38}},
                'roi_tangent_m': [.00, .01, .02, .03, .30, .32, .34, .36, .38],

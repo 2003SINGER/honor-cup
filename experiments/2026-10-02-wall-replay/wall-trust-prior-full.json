@@ -1,0 +1,103 @@
+{
+  "status": "DIAGNOSTIC_ONLY_POST_SNAP_PRIOR_SWEEP",
+  "input_log": "experiments/2026-10-02-wall-replay/frame-grid-snap-quality.jsonl.zst",
+  "frames": 1763,
+  "truth_path": "field/maze_truth_7x7.json",
+  "pose_correction_weight": 1.0,
+  "spatial_floor": {
+    "source": "existing contiguous ROI candidate",
+    "normal_half_width_cm": 5,
+    "min_cluster_points": 6,
+    "min_contiguous_span_m": 0.18
+  },
+  "view_cluster": {
+    "position_m": 0.2,
+    "yaw_rad": 0.3490658503988659,
+    "credits_per_cluster": 1
+  },
+  "diagnostics": {
+    "eligible_edges": 63,
+    "independent_view_credits": 601,
+    "mean_promotion_weight": 0.7428244139795402,
+    "wall_side_credits": 327,
+    "front_wall_credits": 274,
+    "turning_credits": 81
+  },
+  "thresholds": [
+    {
+      "credit_threshold": 0.0,
+      "required_independent_views": "2 for far; 1 otherwise",
+      "true_wall_confirmed": 62,
+      "true_wall_total": 62,
+      "true_wall_recall": 1.0,
+      "false_open_confirmed": 1,
+      "false_open_edge_ids": [
+        "((4, 5), 'N')"
+      ],
+      "missed_true_edge_ids": []
+    },
+    {
+      "credit_threshold": 1.0,
+      "required_independent_views": "2 for far; 1 otherwise",
+      "true_wall_confirmed": 62,
+      "true_wall_total": 62,
+      "true_wall_recall": 1.0,
+      "false_open_confirmed": 0,
+      "false_open_edge_ids": [],
+      "missed_true_edge_ids": []
+    },
+    {
+      "credit_threshold": 1.25,
+      "required_independent_views": "2 for far; 1 otherwise",
+      "true_wall_confirmed": 62,
+      "true_wall_total": 62,
+      "true_wall_recall": 1.0,
+      "false_open_confirmed": 0,
+      "false_open_edge_ids": [],
+      "missed_true_edge_ids": []
+    },
+    {
+      "credit_threshold": 1.5,
+      "required_independent_views": "2 for far; 1 otherwise",
+      "true_wall_confirmed": 62,
+      "true_wall_total": 62,
+      "true_wall_recall": 1.0,
+      "false_open_confirmed": 0,
+      "false_open_edge_ids": [],
+      "missed_true_edge_ids": []
+    },
+    {
+      "credit_threshold": 1.75,
+      "required_independent_views": "2 for far; 1 otherwise",
+      "true_wall_confirmed": 62,
+      "true_wall_total": 62,
+      "true_wall_recall": 1.0,
+      "false_open_confirmed": 0,
+      "false_open_edge_ids": [],
+      "missed_true_edge_ids": []
+    },
+    {
+      "credit_threshold": 2.0,
+      "required_independent_views": "2 for far; 1 otherwise",
+      "true_wall_confirmed": 62,
+      "true_wall_total": 62,
+      "true_wall_recall": 1.0,
+      "false_open_confirmed": 0,
+      "false_open_edge_ids": [],
+      "missed_true_edge_ids": []
+    },
+    {
+      "credit_threshold": 2.5,
+      "required_independent_views": "2 for far; 1 otherwise",
+      "true_wall_confirmed": 60,
+      "true_wall_total": 62,
+      "true_wall_recall": 0.967741935483871,
+      "false_open_confirmed": 0,
+      "false_open_edge_ids": [],
+      "missed_true_edge_ids": [
+        "((5, 5), 'E')",
+        "('B', (3, 6), 'N')"
+      ]
+    }
+  ]
+}

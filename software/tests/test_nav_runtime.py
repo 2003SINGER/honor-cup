@@ -325,6 +325,144 @@ def test_evidence_snapshot_is_json_serializable():
     assert 'events' in snap and 'mismatches' in snap
 
 
+def test_gyro_yaw_fusion_uses_short_interval_rate_and_falls_back_on_gap():
+    from m3pro_nav.nav_runtime import _GyroYawFusion
+
+    fusion = _GyroYawFusion(enabled=True, imu_weight=0.5,
+                            max_age_s=0.12, max_gap_s=0.12)
+    fusion.add_gyro(0.0, 1.0)
+    fusion.fuse(0.0, Pose2D(0.0, 0.0, 0.0))
+    fusion.add_gyro(0.05, 1.0)
+    fusion.add_gyro(0.10, 1.0)
+    fused, mode = fusion.fuse(0.10, Pose2D(0.0, 0.0, 0.0))
+    assert mode == 'WHEEL_GYRO'
+    assert fused.yaw == pytest.approx(0.05)
+
+    fallback, mode = fusion.fuse(0.30, Pose2D(0.0, 0.0, 0.2))
+    assert mode == 'WHEEL_FALLBACK'
+    assert fallback.yaw == pytest.approx(0.25)
+
+
+def test_gyro_yaw_fusion_does_not_require_future_imu_sample():
+    from m3pro_nav.nav_runtime import _GyroYawFusion
+
+    fusion = _GyroYawFusion(enabled=True, imu_weight=1.0,
+                            max_age_s=0.12, max_gap_s=0.12)
+    fusion.add_gyro(0.0, 1.0)
+    fusion.fuse(0.0, Pose2D(0.0, 0.0, 0.0))
+    # Typical callback ordering: latest gyro precedes the new odom stamp.
+    fusion.add_gyro(0.04, 1.0)
+    fused, mode = fusion.fuse(0.05, Pose2D(0.0, 0.0, 0.0))
+    assert mode == 'WHEEL_GYRO'
+    assert fused.yaw == pytest.approx(0.05)
+
+
+def test_frame_grid_shadow_is_dry_run_only_and_does_not_replace_runtime_state():
+    walls, entry, ex, side = maze_sim.gen_maze(0)
+    perception = {'frame_grid_shadow': {'enabled': True}}
+    dry, *_ = make_runtime((walls, entry, ex))
+    shadow = NavRuntime(entry=entry, cell=entry, heading='N', dry_run=True,
+                        perception=perception,
+                        extrinsic=LaserExtrinsic.from_yaml(0, 0, 0))
+    live, *_ = (NavRuntime(entry=entry, cell=entry, heading='N', dry_run=False,
+                           perception=perception,
+                           extrinsic=LaserExtrinsic.from_yaml(0, 0, 0)),)
+    assert shadow._frame_grid_shadow is not None
+    assert live._frame_grid_shadow is None
+    assert shadow.anchor is None and not shadow.nav.edges.soft
+    assert dry._frame_grid_shadow is None
+    assert NavRuntime._shadow_json({'predicted_pose': [0.1, 0.2, 0.3]}) == {
+        'predicted_pose': [0.1, 0.2, 0.3]}
+
+
+def test_shadow_source_time_queue_runs_even_when_legacy_scan_alignment_abstains():
+    walls, entry, ex, side = maze_sim.gen_maze(0)
+    rt = NavRuntime(
+        entry=entry, cell=entry, heading='N', dry_run=True,
+        perception={'frame_grid_shadow': {'enabled': True}},
+        extrinsic=LaserExtrinsic.from_yaml(0, 0, 0))
+    rt.set_anchor_spec(entry, 'N')
+    rt.on_odom(odom_state(Pose2D(0.2, 0.2, 0.0), 1.0))
+    rt.on_odom(odom_state(Pose2D(0.2, 0.2, 0.0), 1.1))
+    seen = []
+    rt._frame_grid_shadow.process = lambda *args: seen.append(args) or {
+        'accepted': False, 'reason': 'diagnostic'}
+    scan = FakeLaserScan([1.0] * 180, 1.05)
+    scan.time_increment = 0.0
+    assert rt.on_scan(scan) is None       # legacy requires later static window
+    rt.on_odom(odom_state(Pose2D(0.2, 0.2, 0.0), 1.2))
+    assert rt.process_shadow_pending(max_frames=1) == 1
+    assert len(seen) == 1
+    assert any(e['kind'] == 'frame_grid_shadow' for e in rt.events)
+
+
+def test_runtime_defers_expansion_when_planned_task_suffix_becomes_pruned():
+    walls, entry, ex, side = maze_sim.gen_maze(0)
+    rt, *_ = make_runtime((walls, entry, ex), task_mode=True)
+    rt.cursor = ((0, 0), (0, 1))
+    rt.planned_cells = [(0, 0), (0, 1), (0, 2), (0, 3)]
+    rt.nav._is_pruned = lambda parent, child: (parent, child) == ((0, 1), (0, 2))
+    assert rt._planned_prune_candidate() == ((0, 1), (0, 2))
+
+    from m3pro_nav.motion_runtime import RuntimeState, SafetyState
+    calls = []
+    rt.required_blocks = 8
+    rt.nav.active_frontier = lambda: [(0, 2)]
+    rt.nav.home_route = lambda _cell: None
+    rt.core._safety = SafetyState.ARMED
+    rt.core._state = RuntimeState.TRACKING
+    rt.phase = NavRuntimePhase.EXPLORING
+    rt.core.tail_wait_stop = lambda: ((0.2, 0.4), (0, 3))
+    rt.core.append_suffix = lambda _suffix: calls.append('append')
+    rt._planned_prune_candidate = lambda: ((0, 1), (0, 2))
+    rt.planner_tick(1.0)
+    assert calls == []
+    assert rt.core.state == RuntimeState.TRACKING
+    assert any(event['kind'] == 'task_prune_suffix_pending'
+               for event in rt.events)
+
+
+def test_runtime_cancels_unapplied_pruned_suffix_and_replans_from_wait_anchor():
+    from types import SimpleNamespace
+    from m3pro_nav.motion_runtime import RuntimeState, SafetyState
+
+    walls, entry, ex, side = maze_sim.gen_maze(0)
+    rt, *_ = make_runtime((walls, entry, ex), task_mode=True)
+    rt.phase = NavRuntimePhase.EXPLORING
+    rt.required_blocks = 8
+    rt.nav.active_frontier = lambda: [(0, 2)]
+    rt.nav.home_route = lambda _cell: None
+    rt.cursor = ((0, 3), (0, 4))
+    rt.plan_state = {'old': {'done': set()}}
+    rt.planned_cells = [(0, 2), (0, 3), (0, 4)]
+    base = (((0, 1), (0, 2)), {'kept': {'done': set()}}, [(0, 1), (0, 2)])
+    rt._queued_plan_base = base
+    rt._planned_prune_candidate = lambda: ((0, 2), (0, 3))
+    rt.anchor = SimpleNamespace(maze_anchor=Pose2D(0.2, 0.2, 0.0))
+    rt.core._safety = SafetyState.ARMED
+    rt.core._state = RuntimeState.TRACKING
+    rt.core._queued_suffix = (object(),)
+    def cancel_queue():
+        rt.core._queued_suffix = None
+        return True
+    rt.core.cancel_queued_suffix = cancel_queue
+    rt.core.tail_wait_stop = lambda: ((0.6, 0.6), (0, 2))
+    compiled_from = []
+
+    def compile_at_anchor(_nav, _pose, cursor, state):
+        compiled_from.append((cursor, state))
+        return [], cursor, [cursor[1]], state
+
+    rt.horizon.compile_with_state = compile_at_anchor
+    rt.planner_tick(2.0)
+    assert compiled_from and compiled_from[0][0] == base[0]
+    assert compiled_from[0][1] == base[1]
+    assert rt.cursor == base[0]
+    assert rt.planned_cells == base[2]
+    assert any(event['kind'] == 'task_prune_queued_suffix_cancelled'
+               for event in rt.events)
+
+
 # =========== 节点级契约 (rclpy stub): dry-run / fail-closed ===========
 
 def _install_nav_ros_stubs():

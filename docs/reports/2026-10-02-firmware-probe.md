@@ -48,4 +48,10 @@
 
 当前建议维持底板 odom 30 Hz、IMU 定时 30 Hz（实测约 26 Hz）、雷达发布 140 ms（实测约 7.1 Hz）、上位机控制 60 Hz。`2:1` 是调度选择，不代表每个控制 tick 都有新里程计；程序按新 odom 样本更新反馈，其间保持上一命令。车辆装回并摆好后，以 `ground_loop_trial.sh --run --control-hz 60` 采集同一轨迹 CSV，再根据新样本数、hold tick、实际控制间隔及轨迹误差决定是否优化或回退。在找到两路 T-mini Plus 的物理转速命令接口并验证完整新扫描之前，不再缩短雷达发布定时。当前 CP2104 的 DTR/RTS 自动进 ROM 尚未证实，不应以旧 Rosmaster CH340 的方法代替。
 
+## 宿舍复跑前的 USB 断连（同日稍后）
+
+- 用户已将车摆好并授权宿舍往返试跑。预检发现 `/cmd_vel` 无其他发布者，但 `/odom_raw` 无实时帧；`/dev/myserial` 和 USB ID `10c4:ea60` 均消失，代理进程仍在。内核日志显示 CP2104 在 10:43:30 从 `1-2.3` 断开；这晚于前述成功测频，不能把当时的帧率结果当成当前链路状态。
+- 用户确认接线牢固且未改动。整车重启后，CP2104 未重新枚举；针对其原 USB hub 端口 3 的 `uhubctl` 断电重上电由用户在车端执行成功，但端口状态为 `0100 power`（连接位未置位），Jetson 仍只有雷达 CH340。现有证据不足以区分线缆、端口、CP2104 或板级电源/复位问题；没有证据指向 ROS 进程或固件仍在下载模式。
+- **本次没有发运动命令，也没有生成宿舍试跑 CSV。** 试跑脚本已支持 `--site dorm`，新的 CSV 会存到 `field_data/dorm/`；CSV 只含里程计、IMU 和控制数据，不含雷达扫描。恢复 CP2104 枚举和实时 `/odom_raw` 后才能继续闭环试跑。
+
 参考： [M3 PRO 控制板接口](https://www.yahboom.net/public/upload/upload-html/1755253726/1.Introduction%20to%20the%20Control%20Board.html)、[M3 PRO BOOT0/RESET 烧录步骤](https://www.yahboom.net/public/upload/upload-html/1755254244/13.Flash%20access%20data.html)、[旧 Rosmaster CH340 教程](https://www.yahboom.net/public/upload/upload-html/1758600901/1.%20Update%20the%20expansion%20board%20firmware.html)、[stm32flash 参数说明](https://github.com/stm32duino/stm32flash/blob/main/stm32flash.1)。

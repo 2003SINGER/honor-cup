@@ -47,3 +47,30 @@ SQLite bag 实际录了 `/scan_multi`，没有录 `/scan0` 或 `/scan1`（虽然
 5. 只有离线逐帧校正能在留出数据持续降低误差、且不会把真开口吸成墙或反向错误后，再把估计器接入在线 `maze←odom` 更新；先影子运行记录提案，再启用地图写入。
 
 相关只读工具：`software/tools/audit_full_maze_scan.py`（时间、运动/静止、里程分桶）；`software/tools/benchmark_field_edges.py`（软 EdgeMap 误写统计）；`software/tools/replay_truth_pose_correction.py`（静止帧 oracle 修正回放）。这些工具均不发布 ROS 命令、不修改 bag。
+
+## 逐帧因果回放（2026-10-02）
+
+新增 `software/tools/replay_dynamic_wall_snap.py`：按扫描源时间戳在不超过 150 ms 的里程计括区内插值；每一帧**先**只用此前扫描确认的软 WALL 边提出位姿修正，**后**把当前帧的有限命中端点投到格线并登记墙证据。修正时从修正后的车体位姿与同一帧 odom 位姿反解新的 `maze←odom`，不旋转轮式里程计本身。`/scan_multi` 缺失真实束起点，因此这个试验不写 OPEN。完整真值图只在重放日志写完之后用于单独评分，不参与估计。
+
+```bash
+python3 software/tools/replay_dynamic_wall_snap.py \
+  --truth-score /tmp/honor-cup-dynamic-wall-snap-truth-score.json
+```
+
+1,769 帧均有逐帧日志；1,763 帧处理，6 帧因无合格 odom 括区跳过。现有两次不同扫描时间戳即确认软墙的规则，在这个数据集上累计确认了 105 条格边为墙；按当前尚未核实的物理轴锚点事后评分，55 条是真墙、50 条是假墙，唯一墙边精度仅 **52.38%**。16 次位姿修正提案被求解器接受，但整个试验判为 **诊断失败，不可上线**。这说明“当前扫描给自己创造参考墙”的直接实现会自我强化；即便排除了同帧自证，两个相邻扫描也不能作为独立的物理确认。求解器对单方向墙观测拒绝三自由度修正是合理的：沿墙平移不可观。
+
+另对无校正的原始投影做了一个端点支持门槛探针：每帧至少 4 点、沿墙跨度至少 0.08 m、残差 P90 不超过 0.03 m、至少 3 帧支持，仍有 56 条候选中的 22 条是假墙（上述锚点条件下）。这只是离线诊断；不能通过单纯增加点数门槛解决数据关联与累计漂移。
+
+## 相邻扫描匹配对照
+
+新增 `software/tools/replay_scan_match_odom.py`，在 Mac 上以 wheel odom 相邻位移为初值，对 `/scan_multi` 的有限端点做 trimmed point-to-point ICP。它只读原始 bag，不读真值图、不写导航地图；依赖 Mac 当前 Python 的 NumPy/SciPy，不是车端运行组件。
+
+```bash
+python3 software/tools/replay_scan_match_odom.py
+```
+
+固定门槛全程 1,768 对扫描中，1,762 对产生 ICP 估计；局部匹配残差 P90 的跨帧中位数约 **6.7 mm**，但累计的雷达辅助轨迹与轮式里程计轨迹在前 30 秒相差 **0.284 m**，末端相差 **0.865 m / 7.98°**。没有独立物理位姿真值，不能据此判断哪条轨迹更准。点到点最近邻在平行走廊和重复墙形里可取得很低残差，同时沿墙滑动或错配；这个对照**没有提供可安全接入墙吸附的位姿先验**。
+
+开源可借鉴的结构是：[Cartographer 的 local SLAM](https://github.com/cartographer-project/cartographer_ros/blob/master/docs/source/algo_walkthrough.rst) 用运动预测初始化 scan-to-submap 匹配；[CSM](https://github.com/AndreaCensi/csm) 提供二维激光点到线扫描匹配。它们解决连续几何匹配的一部分，仍需要为本项目建立格边的有限线段关联、历史确认、退化方向检测和校正后的留出帧验收；不能把低拟合残差当作“已找到真墙”。
+
+下一轮算法应先以原始 `/scan0`、`/scan1` 重采，保留各束传感器起点与时间；在多视角上拟合物理墙段并记录其实际偏移，只有稳定且唯一关联的历史墙才能修正 `maze←odom`。在线执行前还必须处理当前 `ScanTimeAligner` 对零时间增量扫描的近静止门槛：本次离线使用未来 odom 括区插值，现有在线代码会拒绝大部分行驶扫描。原 bag 未修改；负结果保存在本报告，逐帧日志写入 `/tmp`。

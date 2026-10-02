@@ -10,6 +10,9 @@
 > [固件记录](docs/reports/2026-10-02-firmware-probe.md)。轮速 PID 参数仍未知。
 > 10 月 2 日动态墙体回放仍未通过上线验收；结果和 raw-odom 对照见
 > [连续物理墙离线报告](docs/reports/2026-10-02-physical-wall-track-replay.md)。
+> 后续逐帧共同格线吸附已完成离线原型与原始 odom 对照；条件墙号评分改善，
+> 独立位姿精度尚未测量，原型未接入车端。见
+> [逐帧格线吸附报告](docs/reports/2026-10-02-frame-grid-snap-replay.md)。
 
 > 数字只代表所列代码版本与 Gate。任一 seed 失败时，该轮 Gate 不算通过。
 > 历史 R3 真相板见 `docs/decisions/2026-09-25-旧TODO-R3真相板.md`。

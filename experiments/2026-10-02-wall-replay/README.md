@@ -8,6 +8,7 @@
 | `continuous-wall-geometry` | `replay_continuous_wall_geometry.py` | 线坐标可连续，但以格边为历史主键仍有冲突；不能上线。 |
 | `pointcloud-wall-match` | `replay_pointcloud_wall_match.py` | 从融合端点拟合实测墙段并按本格真实点切长墙；独立视角 bootstrap 未成功，校正数为零。 |
 | `physical-wall-tracks` | `replay_physical_wall_tracks.py` | 连续物理墙作历史实体；后半程关联率和条件身份评分改善，但晋升后冲突多，尚无定位精度验收。 |
+| `frame-grid-snap` | `replay_frame_grid_snap.py` | 当前帧墙的共同偏差直接修 pose；按用户给定墙表，同墙段墙号评分覆盖 89.7%、命中率 99.1%。详见[报告](../../docs/reports/2026-10-02-frame-grid-snap-replay.md)。 |
 | `honor-cup-conservative-open.json` | `analyze_conservative_open.py` | 旧包的保守 OPEN 候选有 543/1908 张逐帧票落在真墙上，仅作诊断。 |
 
-报告中的条件性真值评分依赖人工 `(3,0), N` 锚点与物理网格方向正确；该轴向尚无独立测量。动态 `WALL → pose correction` 仍是待验收目标，不能把这些离线输出当作在线导航许可。
+`frame-grid-snap` 按用户提供的 `(3,0), N` 起点和 7×7 墙表完成离线 WALL → pose correction 原型；墙号评分已有数据支持。车身相对地面的位姿误差仍需单独测量，原型尚未接入在线导航。

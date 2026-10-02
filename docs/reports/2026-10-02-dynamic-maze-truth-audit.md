@@ -74,3 +74,5 @@ python3 software/tools/replay_scan_match_odom.py
 开源可借鉴的结构是：[Cartographer 的 local SLAM](https://github.com/cartographer-project/cartographer_ros/blob/master/docs/source/algo_walkthrough.rst) 用运动预测初始化 scan-to-submap 匹配；[CSM](https://github.com/AndreaCensi/csm) 提供二维激光点到线扫描匹配。它们解决连续几何匹配的一部分，仍需要为本项目建立格边的有限线段关联、历史确认、退化方向检测和校正后的留出帧验收；不能把低拟合残差当作“已找到真墙”。
 
 下一轮算法应先以原始 `/scan0`、`/scan1` 重采，保留各束传感器起点与时间；在多视角上拟合物理墙段并记录其实际偏移，只有稳定且唯一关联的历史墙才能修正 `maze←odom`。在线执行前还必须处理当前 `ScanTimeAligner` 对零时间增量扫描的近静止门槛：本次离线使用未来 odom 括区插值，现有在线代码会拒绝大部分行驶扫描。原 bag 未修改；负结果保存在本报告，逐帧日志写入 `/tmp`。
+
+随后按“离散格边 ID、连续墙线坐标”做的第二个离线原型及其真实 bag 失败指标，见 [连续墙几何逐帧原型](2026-10-02-continuous-wall-geometry-prototype.md)。相邻扫描 ICP 仍仅作为短程运动对照，不参与该原型的绝对墙校正主链。

@@ -62,6 +62,39 @@ stop_group "$SESSION_DIR/bag.pid" "rosbag"
 stop_group "$SESSION_DIR/launch.pid" "scan_debug launch"
 stop_group "$SESSION_DIR/rviz.pid" "RViz"
 
+# Rosbag can exit successfully while a requested topic produced no messages.
+# Check the finalized SQLite bag after rosbag closes, and keep all original
+# bag files even when this diagnostic marks the session incomplete.
+if ! python3 - "$SESSION_DIR" "$REPO_ROOT" >> "$LOG_FILE" 2>&1 <<'PY'
+import json
+import pathlib
+import sys
+
+session = pathlib.Path(sys.argv[1])
+sys.path.insert(0, str(pathlib.Path(sys.argv[2]) / 'software' / 'tools'))
+from scan_session_summary import audit_capture_topics
+
+report = audit_capture_topics(session)
+(session / 'raw_scan_capture_check.json').write_text(
+    json.dumps(report, indent=2) + '\n', encoding='utf-8')
+for name, entry in report['required_topics'].items():
+    print(f"[field_session] bag topic {name}: type={entry['type'] or '<missing>'} "
+          f"messages={entry['message_count']}")
+bag_dir = session / 'bag' / 'record'
+if not report['complete']:
+    print('[field_session] WARNING: CAPTURE INCOMPLETE; required bag topics '
+          f"missing/empty={report['missing_or_empty_topics']}; "
+          f"raw bag retained at {bag_dir}")
+    if report['errors']:
+        print(f"[field_session] bag verification errors: {report['errors']}")
+    sys.exit(1)
+print('[field_session] required raw and motion topics have recorded messages')
+PY
+then
+    log "WARNING: bag topic verification failed; capture is incomplete and raw bag is retained at $SESSION_DIR/bag/record"
+    exit_status=1
+fi
+
 if [[ -s "$SESSION_DIR/frames.jsonl" ]]; then
     log "generating summary..."
     if ! python3 "$REPO_ROOT/software/tools/scan_session_summary.py" "$SESSION_DIR" \
@@ -77,6 +110,25 @@ if [[ -s "$SESSION_DIR/frames.jsonl" ]]; then
 else
     log "ERROR: frames.jsonl is missing or empty; scan_debug did not produce observations. Session is incomplete: $SESSION_DIR"
     exit_status=1
+fi
+
+if [[ -s "$SESSION_DIR/summary.json" && -s "$SESSION_DIR/raw_scan_capture_check.json" ]]; then
+    if ! python3 - "$SESSION_DIR/summary.json" "$SESSION_DIR/raw_scan_capture_check.json" <<'PY' >> "$LOG_FILE" 2>&1
+import json
+import pathlib
+import sys
+
+summary_path, check_path = map(pathlib.Path, sys.argv[1:])
+summary = json.loads(summary_path.read_text(encoding='utf-8'))
+summary['raw_scan_capture_check'] = json.loads(
+    check_path.read_text(encoding='utf-8'))
+summary_path.write_text(json.dumps(summary, indent=2) + '\n',
+                         encoding='utf-8')
+PY
+    then
+        log "WARNING: could not add raw topic counts to summary.json; standalone raw_scan_capture_check.json retained"
+        exit_status=1
+    fi
 fi
 
 printf '%s\n' "$exit_status" > "$DONE_FILE"

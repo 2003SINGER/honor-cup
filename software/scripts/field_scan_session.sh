@@ -92,7 +92,7 @@ for RAW_SCAN_TOPIC in $RAW_SCAN_TOPICS; do
         RAW_FRAME=$(timeout 5 ros2 topic echo --once --field header.frame_id "$RAW_SCAN_TOPIC" 2>/dev/null | sed -n '1p' || true)
         log "raw scan $RAW_SCAN_TOPIC frame_id: ${RAW_FRAME:-<unread>}"
     else
-        log "raw scan $RAW_SCAN_TOPIC absent at capture start; rosbag will discover it if published later"
+        log "WARNING: required raw scan $RAW_SCAN_TOPIC absent at capture start; capture may be incomplete unless it publishes before shutdown"
     fi
 done
 LASER_FRAME=$(timeout 5 ros2 topic echo --once --field header.frame_id "$SCAN_TOPIC" 2>/dev/null | sed -n '1p' || true)
@@ -183,6 +183,9 @@ cleanup() {
     [[ -e "$WATCHDOG_DONE" ]] || watchdog_status=1
     if [[ "$exit_status" -eq 0 && "$watchdog_status" -ne 0 ]]; then
         exit_status="$watchdog_status"
+    fi
+    if [[ "$watchdog_status" -ne 0 ]]; then
+        log "WARNING: session finalized as incomplete; raw bag and verification details retained in $SESSION_DIR"
     fi
     exit "$exit_status"
 }

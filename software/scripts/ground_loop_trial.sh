@@ -6,6 +6,7 @@
 # Usage:
 #   bash software/scripts/ground_loop_trial.sh --run
 #   bash software/scripts/ground_loop_trial.sh --run --csv-prefix dorm_retry
+#   bash software/scripts/ground_loop_trial.sh --run --control-hz 60
 #
 # --run is mandatory. Without it, this script exits before loading ROS or
 # checking the robot. CSVs are written under field_data/ with a UTC timestamp.
@@ -18,10 +19,11 @@ ROS_INSTALL="$REPO_ROOT/software/ros2/install/setup.bash"
 FIELD_DATA="$REPO_ROOT/field_data"
 RUN=0
 CSV_PREFIX="ground_loop_trial"
+CONTROL_HZ=50
 
 usage() {
     cat <<'USAGE'
-Usage: ground_loop_trial.sh --run [--csv-prefix PREFIX]
+Usage: ground_loop_trial.sh --run [--csv-prefix PREFIX] [--control-hz 50|60]
 
 WARNING: --run launches a live ground trial. The node publishes /cmd_vel and
 the robot will move. Use only in a clear test area with an operator ready to
@@ -30,6 +32,7 @@ stop the run. This script does not start or stop m3.sh or the micro-ROS agent.
 Options:
   --run                 Explicitly authorize this live motion run (required)
   --csv-prefix PREFIX   CSV filename prefix (default: ground_loop_trial)
+  --control-hz HZ       Control/publish cadence: 50 or 60 (default: 50)
   -h, --help            Show this help without loading ROS or moving the robot
 USAGE
 }
@@ -43,6 +46,13 @@ while (($#)); do
         --csv-prefix)
             (($# >= 2)) || die '--csv-prefix requires a value'
             CSV_PREFIX="$2"
+            shift 2
+            ;;
+        --control-hz)
+            (($# >= 2)) || die '--control-hz requires a value'
+            [[ "$2" == 50 || "$2" == 60 ]] \
+                || die '--control-hz must be 50 or 60'
+            CONTROL_HZ="$2"
             shift 2
             ;;
         -h|--help) usage; exit 0 ;;
@@ -102,10 +112,12 @@ csv_path="$FIELD_DATA/${CSV_PREFIX}_${stamp}.csv"
 log 'LIVE MOTION RUN: publishing /cmd_vel; operator must remain ready to stop the robot'
 log "ROS_DOMAIN_ID=$ROS_DOMAIN_ID; odom frame=$odom_frame; base frame=$base_frame"
 log "CSV=$csv_path"
+log "requested control cadence=${CONTROL_HZ}Hz; odom-synchronous updates remain gated by new /odom_raw samples"
 exec ros2 run m3pro_nav ground_loop_trial \
     --run \
     --expected-odom-frame odom \
     --expected-base-frame base_footprint \
     --odom-synchronous-control \
+    --control-hz "$CONTROL_HZ" \
     --yaw-source odom \
     --csv "$csv_path"

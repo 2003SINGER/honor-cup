@@ -18,7 +18,11 @@ from patch_factory_odom_hex import HexError, checksum, decode_hex
 EXPECTED_INPUT_SHA256 = "e0db7805de6691b6b5d83c8b348f1477553c9547524cd69d6fc7673c4fcc1cc0"
 OLD_TIMER_NS = 90_000_000
 ADJACENT_LIDAR_TIMER_NS = 140_000_000
+IMU_TIMER_ADDRESS = 0x0800B870
+IMU_TIMER_NS = 40_000_000
+LIDAR_TIMER_NS = 140_000_000
 TIMER_WORD_BYTES = 8
+IMU_TIMER_WORD_BYTES = 4
 ARCHIVE_DIR = Path(__file__).resolve().parents[2] / "field_data/firmware_archive/2026-10-02"
 DEFAULT_INPUT = ARCHIVE_DIR / "microROS_STM32-FW_V1.1.3.hex"
 
@@ -112,9 +116,17 @@ def patch_timer_lines(
     return patched
 
 
-def create_variant(source_bytes: bytes, hz: int) -> tuple[bytes, int, int]:
-    if hz not in (20, 50):
-        raise HexError("supported rates are 20 or 50 Hz")
+def create_variant(
+    source_bytes: bytes, hz: int, imu_hz: int | None = None, lidar_ms: int | None = None
+) -> tuple[bytes, int, int]:
+    if hz not in (20, 25, 30, 50):
+        raise HexError("supported rates are 20, 25, 30, or 50 Hz")
+    allowed_combinations = ((25, 50, None), (30, 60, None), (30, 30, 70), (30, 30, 140))
+    if (imu_hz is not None or lidar_ms is not None) and (hz, imu_hz, lidar_ms) not in allowed_combinations:
+        raise HexError(
+            "supported combined variants are odom25+IMU50, odom30+IMU60, "
+            "or odom30+IMU30+lidar70ms/140ms"
+        )
     source_sha = hashlib.sha256(source_bytes).hexdigest()
     if source_sha != EXPECTED_INPUT_SHA256:
         raise HexError(f"V1.1.3 source SHA-256 mismatch: got {source_sha}")
@@ -132,42 +144,90 @@ def create_variant(source_bytes: bytes, hz: int) -> tuple[bytes, int, int]:
         raise HexError("timer source word changed after location")
 
     output_lines = patch_timer_lines(lines, records, address, new_word)
+    imu_new_word = None
+    if imu_hz is not None:
+        imu_old_word = IMU_TIMER_NS.to_bytes(IMU_TIMER_WORD_BYTES, "little")
+        imu_locations = find_all(source_image, imu_old_word)
+        if imu_locations != [IMU_TIMER_ADDRESS]:
+            raise HexError(
+                "expected one inferred 40 ms IMU timer literal at "
+                f"0x{IMU_TIMER_ADDRESS:08X}, found {[hex(x) for x in imu_locations]}"
+            )
+        imu_new_word = (1_000_000_000 // imu_hz).to_bytes(IMU_TIMER_WORD_BYTES, "little")
+        output_lines = patch_timer_lines(output_lines, records, IMU_TIMER_ADDRESS, imu_new_word)
+    lidar_new_word = None
+    if lidar_ms is not None:
+        lidar_address = address + TIMER_WORD_BYTES
+        lidar_old_word = LIDAR_TIMER_NS.to_bytes(TIMER_WORD_BYTES, "little")
+        lidar_locations = find_all(source_image, lidar_old_word)
+        if lidar_locations != [lidar_address]:
+            raise HexError(
+                "expected one unique adjacent 140 ms lidar timer word at "
+                f"0x{lidar_address:08X}, found {[hex(x) for x in lidar_locations]}"
+            )
+        lidar_new_word = (lidar_ms * 1_000_000).to_bytes(TIMER_WORD_BYTES, "little")
+        output_lines = patch_timer_lines(output_lines, records, lidar_address, lidar_new_word)
     output_image, _ = decode_hex(output_lines)
     if source_image.keys() != output_image.keys():
         raise HexError("patched HEX changed the mapped address set")
     diffs = {a for a in source_image if source_image[a] != output_image[a]}
     allowed = set(range(address, address + TIMER_WORD_BYTES))
+    if imu_new_word is not None:
+        allowed.update(range(IMU_TIMER_ADDRESS, IMU_TIMER_ADDRESS + IMU_TIMER_WORD_BYTES))
+    if lidar_new_word is not None:
+        allowed.update(range(address + TIMER_WORD_BYTES, address + 2 * TIMER_WORD_BYTES))
     if not diffs or not diffs <= allowed:
-        raise HexError(f"unexpected image changes outside timer word: {[hex(a) for a in sorted(diffs)]}")
+        raise HexError(f"unexpected image changes outside guarded timer word(s): {[hex(a) for a in sorted(diffs)]}")
     if not matches_at(output_image, address, new_word):
         raise HexError("patched timer does not equal the requested interval")
+    if imu_new_word is not None and not matches_at(output_image, IMU_TIMER_ADDRESS, imu_new_word):
+        raise HexError("patched inferred IMU timer does not equal the requested interval")
+    if lidar_new_word is not None and not matches_at(output_image, address + TIMER_WORD_BYTES, lidar_new_word):
+        raise HexError("patched inferred lidar timer does not equal the requested interval")
     return "".join(output_lines).encode("ascii"), address, len(diffs)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT)
-    parser.add_argument("--hz", type=int, choices=(20, 50), required=True)
+    parser.add_argument("--hz", type=int, choices=(20, 25, 30, 50), required=True)
+    parser.add_argument("--imu-hz", type=int, choices=(30, 50, 60))
+    parser.add_argument("--lidar-ms", type=int, choices=(70, 140))
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
 
     source_bytes = args.input.read_bytes()
-    output = args.output or ARCHIVE_DIR / f"microROS_STM32-FW_V1.1.3_odom_{args.hz}Hz.hex"
+    suffix = f"odom_{args.hz}Hz"
+    if args.imu_hz is not None:
+        suffix += f"_imu_{args.imu_hz}Hz"
+    if args.lidar_ms is not None:
+        suffix += f"_lidar_{args.lidar_ms}ms"
+    output = args.output or ARCHIVE_DIR / f"microROS_STM32-FW_V1.1.3_{suffix}.hex"
     if args.input.resolve() == output.resolve():
         raise HexError("refusing to overwrite the original input")
     if output.exists():
         raise HexError(f"refusing to overwrite existing output: {output}")
 
-    candidate, address, changed_bytes = create_variant(source_bytes, args.hz)
+    candidate, address, changed_bytes = create_variant(source_bytes, args.hz, args.imu_hz, args.lidar_ms)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_bytes(candidate)
-    interval_ms = 1000 // args.hz
+    interval_ns = 1_000_000_000 // args.hz
     print(f"Source:      {args.input}")
     print(f"Source SHA:  {hashlib.sha256(source_bytes).hexdigest()}")
     print(f"Candidate:   {output}")
     print(f"Output SHA:  {hashlib.sha256(candidate).hexdigest()}")
-    print(f"Timer:       0x{address:08X}, 90 ms -> {interval_ms} ms ({args.hz} Hz)")
-    print(f"Verified:    checksums valid; same address map; {changed_bytes} changed byte(s), timer word only")
+    print(f"Timer:       0x{address:08X}, 90 ms -> {interval_ns} ns ({args.hz} Hz nominal)")
+    if args.imu_hz is not None:
+        print(
+            f"IMU timer:   0x{IMU_TIMER_ADDRESS:08X}, inferred 40 ms -> "
+            f"{1_000_000_000 // args.imu_hz} ns ({args.imu_hz} Hz nominal)"
+        )
+    if args.lidar_ms is not None:
+        print(
+            f"Lidar timer: 0x{address + TIMER_WORD_BYTES:08X}, inferred 140 ms -> "
+            f"{args.lidar_ms} ms ({1000 / args.lidar_ms:.3f} Hz publisher nominal)"
+        )
+    print(f"Verified:    checksums valid; same address map; {changed_bytes} changed byte(s), guarded timer word(s) only")
     print("Status:      offline candidate only; not programmed or runtime-validated")
     return 0
 

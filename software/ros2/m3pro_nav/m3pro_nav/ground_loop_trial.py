@@ -24,7 +24,7 @@ from .relative_yaw import RelativeYawEstimator
 from .speed_profile import SpeedProfile
 from .trajectory_reference import TrajectoryReference
 
-from .control_probe import (CONTROL_PERIOD_S, MAX_SENSOR_AGE_S,
+from .control_probe import (MAX_SENSOR_AGE_S,
     ground_odom_gate, limit_command, next_control_deadline, send_zero_window)
 
 CELL_M = 0.4
@@ -50,6 +50,7 @@ MAX_COMMAND_MPS = 0.50
 MAX_COMMAND_CAP_MPS = 0.50
 MAX_WALL_S = 18.0
 SETTLE_TIMEOUT_S = 5.0
+SUPPORTED_CONTROL_HZ = (50, 60)
 
 CSV_FIELDS = (
     'monotonic_s', 'record_type', 'segment', 'primitive_index',
@@ -181,6 +182,21 @@ def control_update_permissions(odom_synchronous, yaw_source,
 
 def control_mode_log_value(odom_synchronous):
     return f'odom_synchronous_control={str(bool(odom_synchronous)).lower()}'
+
+
+def control_period_for_hz(control_hz):
+    if control_hz not in SUPPORTED_CONTROL_HZ:
+        choices = ', '.join(str(value) for value in SUPPORTED_CONTROL_HZ)
+        raise ValueError(f'control_hz must be one of: {choices}')
+    return 1.0 / control_hz
+
+
+def observed_control_hz(tick_count, first_tick_s, last_tick_s):
+    """Estimate loop cadence from monotonic tick starts; None if too short."""
+    if tick_count < 2 or first_tick_s is None or last_tick_s is None:
+        return None
+    duration = last_tick_s - first_tick_s
+    return (tick_count - 1) / duration if duration > 0 else None
 
 
 def require_fresh_imu_yaw(imu_estimator, imu_received_s, now_s,
@@ -398,6 +414,9 @@ def parser():
     p.add_argument('--csv', default='/tmp/ground_loop_trial.csv')
     p.add_argument('--odom-synchronous-control', action='store_true',
                    help='update control only on a newer /odom_raw source stamp')
+    p.add_argument('--control-hz', type=int, choices=SUPPORTED_CONTROL_HZ,
+                   default=50,
+                   help='outer control/publish cadence (50 or 60 Hz; default 50)')
     p.add_argument('--speed', type=float, default=SPEED_MPS)
     p.add_argument('--command-cap', type=float, default=MAX_COMMAND_MPS,
                    help='linear command cap in m/s (must be >= speed and <= 0.50)')
@@ -416,6 +435,7 @@ def parser():
 
 def main(args=None):
     options = parser().parse_args(args)
+    control_period_s = control_period_for_hz(options.control_hz)
     validate_trial_limits(options.speed, options.command_cap)
     validate_controller_gains(options.kp_pos, options.kd_vel)
     validate_yaw_gains(options.kp_yaw, options.kd_yaw)
@@ -571,7 +591,7 @@ def main(args=None):
                 if rclpy.ok():
                     rclpy.spin_once(self, timeout_sec=0.0)
 
-            send_zero_window(self.publisher, Twist,
+            send_zero_window(self.publisher, Twist, period=control_period_s,
                              on_publish=record_zero)
             self._zero_sent = True
 
@@ -708,6 +728,7 @@ def main(args=None):
                         f'profile_s={profile_duration:.6f};speed={options.speed:.3f};'
                         f'a_acc={ACCEL_MPS2:.3f};a_dec={DECEL_MPS2:.3f};'
                         f'command_decel={COMMAND_DECEL_MPS2:.3f};'
+                        f'control_hz_requested={options.control_hz};'
                         f'midpoint_stop=true;'
                         f'yaw_source={options.yaw_source};'
                         f'{control_mode_log_value(options.odom_synchronous_control)};'
@@ -722,6 +743,11 @@ def main(args=None):
             phase_primitives = outbound
             phase_hold_logged = False
             deadline = started
+            control_tick_count = 0
+            control_first_tick_s = None
+            control_last_tick_s = None
+            new_odom_tick_count = 0
+            hold_tick_count = 0
             last_primitive = None
             last_progress_s = 0.0
             progress_stall_since = started
@@ -730,6 +756,14 @@ def main(args=None):
             try:
                 while rclpy.ok() and not stop['requested']:
                     now = time.monotonic()
+                    control_tick_count += 1
+                    if control_first_tick_s is None:
+                        control_first_tick_s = now
+                    control_last_tick_s = now
+                    # Follower command slew uses differences between these
+                    # monotonic elapsed values; odom-synchronous mode therefore
+                    # limits over actual new-sample intervals, not a hard-coded
+                    # nominal 20 ms controller period.
                     elapsed = now - phase_started
                     total_elapsed = now - started
                     if total_elapsed > MAX_WALL_S:
@@ -766,6 +800,8 @@ def main(args=None):
                         options.odom_synchronous_control, options.yaw_source,
                         self._last_control_source_stamp, self.odom.stamp,
                         self._last_yaw_imu_source_stamp, imu_source_stamp)
+                    if new_odom_sample:
+                        new_odom_tick_count += 1
                     if update_allowed:
                         if options.odom_synchronous_control:
                             self._last_control_source_stamp = self.odom.stamp
@@ -824,6 +860,7 @@ def main(args=None):
                             self.zero()
                             break
                         self._held_control_ticks += 1
+                        hold_tick_count += 1
                         self.write('control_hold',
                             phase=phase_name,
                             source_stamp_s=control_feedback.stamp,
@@ -838,7 +875,7 @@ def main(args=None):
                         self.publisher.publish(msg)
                         self.service_callbacks()
                         deadline = next_control_deadline(deadline,
-                                                         time.monotonic())
+                            time.monotonic(), control_period_s)
                         remaining = deadline - time.monotonic()
                         if remaining > 0 and stop_requested_wait(remaining):
                             break
@@ -954,12 +991,13 @@ def main(args=None):
                             last_primitive = None
                             self.service_callbacks()
                             deadline = next_control_deadline(
-                                deadline, time.monotonic())
+                                deadline, time.monotonic(), control_period_s)
                             continue
                         reason = 'settled'
                         return
                     self.service_callbacks()
-                    deadline = next_control_deadline(deadline, time.monotonic())
+                    deadline = next_control_deadline(
+                        deadline, time.monotonic(), control_period_s)
                     remaining = deadline - time.monotonic()
                     if remaining > 0 and stop_requested_wait(remaining):
                         break
@@ -970,6 +1008,19 @@ def main(args=None):
                 raise
             finally:
                 self.zero()
+                observed_hz = observed_control_hz(
+                    control_tick_count, control_first_tick_s,
+                    control_last_tick_s)
+                observed_hz_text = (f'{observed_hz:.3f}'
+                                    if observed_hz is not None else 'unavailable')
+                self.write('control_rate_summary', yaw_source=options.yaw_source,
+                    reason=(f'control_hz_requested={options.control_hz};'
+                            f'control_hz_observed={observed_hz_text};'
+                            f'control_ticks={control_tick_count};'
+                            f'new_odom_ticks={new_odom_tick_count};'
+                            f'hold_ticks={hold_tick_count};'
+                            f'odom_synchronous_control='
+                            f'{str(bool(options.odom_synchronous_control)).lower()}'))
                 self.write('trial_stop', reason=reason,
                     source_stamp_s=self.odom.stamp if self.odom else '',
                     pose_x_m=self.odom.pose.x if self.odom else '',

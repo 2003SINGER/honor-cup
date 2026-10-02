@@ -8,6 +8,8 @@ from m3pro_nav.ground_loop_trial import (ARC_SPEED_MPS, compile_loop_route,
                                          validate_controller_gains,
                                          split_route_at_west_center,
                                          validate_trial_limits, parser,
+                                         control_period_for_hz,
+                                         observed_control_hz,
                                          control_update_permissions,
                                          yaw_only_control_state,
                                          control_mode_log_value)
@@ -28,6 +30,22 @@ from m3pro_nav.pose import Pose2D, Twist2D
 from m3pro_nav.position_controller import PositionController
 from m3pro_nav.speed_profile import SpeedProfile
 from m3pro_nav.trajectory_reference import TrajectoryReference
+
+
+def test_ground_loop_control_rate_choices_and_observed_cadence():
+    assert control_period_for_hz(50) == pytest.approx(0.02)
+    assert control_period_for_hz(60) == pytest.approx(1 / 60)
+    with pytest.raises(ValueError, match='50, 60'):
+        control_period_for_hz(30)
+    assert parser().parse_args([
+        '--run', '--expected-odom-frame', 'odom',
+        '--expected-base-frame', 'base_footprint']).control_hz == 50
+    assert parser().parse_args([
+        '--run', '--expected-odom-frame', 'odom',
+        '--expected-base-frame', 'base_footprint',
+        '--control-hz', '60']).control_hz == 60
+    assert observed_control_hz(61, 10.0, 11.0) == pytest.approx(60.0)
+    assert observed_control_hz(1, 10.0, 10.0) is None
 
 
 def test_ground_loop_route_uses_fixed_left_and_reverse_turn_templates_and_closes():

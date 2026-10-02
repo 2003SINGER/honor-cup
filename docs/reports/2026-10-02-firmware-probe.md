@@ -1,6 +1,6 @@
 # 2026-10-02 M3 PRO 固件与车端探测记录
 
-本记录区分离线 HEX 候选与实车状态。2026-10-02 已依次刷入 20 Hz 和 50 Hz 候选并完成静态读回及话题验收；尚未发送运动命令。
+本记录区分离线 HEX 候选与实车状态。2026-10-02 已依次测过 20 Hz、50 Hz、odom 30 Hz + IMU 60 Hz、雷达发布 70 ms，并恢复到 odom 30 Hz + IMU 30 Hz + 雷达发布 140 ms。所有版本均做过静态读回和话题测频；尚未发送运动命令。
 
 ## 实车只读结果
 
@@ -24,14 +24,28 @@
 - `stm32flash -g 0x0` 后 `/YB_Node` 再次上线。50 Hz 定时配置的 `/odom_raw` **实际约 42.8 Hz**，不是标称 50 Hz。300 条消息的 header 时间戳平均频率 42.8 Hz，中位间隔 20 ms，但 299 个间隔中有 100 个超过 30 ms；因此不是单纯 `ros2 topic hz` 接收端计算偏差。实际跳过/延迟的层级尚未定位，不能断言串口或 executor 已饱和。
 - 修改 odom 后，`/imu/data_raw` 仍约 25.0 Hz；`/scan0`、`/scan1`、`/scan_multi` 仍约 7.1 Hz。官方 [IMU 发布例程](https://www.yahboom.net/public/upload/upload-html/1755256575/8.Publish%20IMU%20data%20topic.html) 用 40 ms publisher timer，官方 [雷达发布例程](https://www.yahboom.net/public/upload/upload-html/1770371947/9.Publish%20radar%20data%20topic.html) 用 140 ms publisher timer。两者是教学例程，不能直接证明实车集成固件的全部配置，更不能把 ROS 发布率当作物理采样率。官方 [T-mini Plus 说明](https://www.yahboom.net/public/upload/upload-html/1770202281/01.Lidar%20introduction%20and%20use.html) 给出转镜 6–12 Hz 可调、测距 4000 Hz。
 
+## odom 30 Hz + IMU 60 Hz 定时版上板结果（已替换）
+
+- 用户再次进入 ROM，`stm32flash -e 3 -w ...odom_30Hz_imu_60Hz.hex -v` 只擦写前 3 个程序扇区。独立读回前 384 KiB，与候选全部 353,336 个映射字节一致，额外非 `FF` 字节为零。配置扇区与最初 2 MiB 备份逐字节相同。读回文件已复制到 Mac 固件归档。
+- 板上两个定时字分别为 `33,333,333 ns`（odom）和 `16,666,666 ns`（推定 IMU）。`/YB_Node` 正常恢复，12 秒双话题订阅得到 `/odom_raw` 360 帧，header 时间戳约 **30.027 Hz**；`/imu/data_raw` 499 帧，header 时间戳约 **41.923 Hz**，并未达到标称 60 Hz。IMU 相邻 498 帧中有 8 对加速度/角速度载荷完全相同；具体限制位于传感器采样、MCU 调度还是通信链仍未定位。改变该常量后 IMU 频率从约 25 Hz 升到约 42 Hz，支持它与 IMU 发布定时有关，但不证明 IMU 物理采样率为 60 Hz。
+- `/scan0`、`/scan1`、`/scan_multi` 仍分别约 7.14、7.18、7.14 Hz。车载 Ubuntu 上独立空载 ROS 60 Hz timer 连续 12 秒运行 720 tick，平均 **60.0 Hz**（中位间隔 16.66 ms，最大 22.33 ms）。这证明上位机具备 60 Hz 定时节拍；实际地面试验程序尚未运行。
+- 30/60 固件 HEX SHA-256 为 `9a484bf6026a418ab16e38a53f3b51aec140fcec64b1bf0388e613bada2e2625`。25/50 是尚未上板的备用候选。雷达 10 Hz 需要改变物理转速并验证每圈完整数据；只改 ROS 的 140 ms timer 不构成真实 10 Hz 扫描。
+
+## 雷达 70 ms 对照与当前固件
+
+- 先录制静止基线 `field_data/scan_rate_baseline_140ms_20261002/`，再刷入 odom 30 Hz、IMU 30 Hz、雷达发布 70 ms 诊断版，读回与目标 HEX 的 353,336 个映射字节一致，配置扇区未变。诊断数据保存于 `field_data/scan_rate_diagnostic_70ms_20261002/`，两组数据均已复制到 Mac。
+- 70 ms 时 `/scan0`、`/scan1` 发布约 14.3 Hz，相邻帧 `ranges` 数组无完全重复；但相邻有效波束的变化比例从 140 ms 基线的 0.731/0.698 降至 0.364/0.352，隔一帧比较则为 0.735/0.723。新增消息没有带来相同比例的新测量信息；ROS 数据还不足以直接断定物理转速。
+- 70 ms 版本还使标称 30 Hz 的 odom/IMU 实际降到约 21.1/20.3 Hz。已重新刷入 **odom 30 Hz、IMU 30 Hz、雷达 140 ms** 版本，SHA-256 `b421bea1a402392e1ca58ddd75c24f93d5a674a1cdd979e06115e0fa2a4af9da`。独立读回程序区与 HEX 完全一致，原配置扇区与备份完全相同；`/YB_Node` 已恢复。
+- 当前 12 秒静态订阅实测：`/odom_raw` header 约 **29.972 Hz**、`/imu/data_raw` header 约 **26.224 Hz**、`/scan0` 约 **7.142 Hz**、`/scan1` 约 **7.126 Hz**、`/scan_multi` 约 **7.159 Hz**。上位机独立 60 Hz timer 12 秒运行 720 次，平均 60.0 Hz。IMU 30 Hz 是定时器目标，实际约 26 Hz。
+
 ## 离线准备
 
 - Mac `field_data/firmware_archive/2026-10-02/` 存有经哈希校验的 V1.1.2、V1.1.3 原厂 HEX 及对应 20/50 Hz 候选。V1.1.3 补丁只修改唯一 odom 定时字（`0x0800B818`），保留地址映射并重算 Intel HEX 校验；具体 SHA 见归档 README。
-- `software/tools/patch_v113_odom_hex.py` 的 5 个离线测试通过。此前导航/观测测试 331 项通过。
-- Mac 当前 `ground_loop_trial.py` 已同步到车端并由 `colcon build --packages-select m3pro_nav` 成功编译。50 Hz 定时版本当前在板上运行；地面轨迹等待车辆装回并摆入净空。
+- `software/tools/patch_v113_odom_hex.py` 限定原厂映像哈希、唯一待改字与 Intel HEX 校验；各候选已做映射与读回核对。此前导航/观测测试 331 项通过；本次新增测试尚未在缺少 pytest 的 Mac 环境运行。
+- Mac 当前 `ground_loop_trial.py` 已同步到车端并由 `colcon build --packages-select m3pro_nav` 成功编译。地面试验入口支持 `--control-hz 50|60`，请求和实际循环、hold/new-odom tick 数写入 CSV；当前 odom30/IMU30/雷达140 ms 固件在板上运行，地面轨迹等待车辆装回并摆入净空。
 
 ## 下一步接口
 
-用户决定跳过 20 Hz 地面试验，当前保持 50 Hz 定时版。车辆装回并摆好后，以实测约 43 Hz 的里程计反馈跑同一位置环轨迹并保存 CSV；随后根据跟踪误差、消息间隔和现场净空决定是否调整定时器、控制器或运动参数。IMU 与雷达先保持官方例程对应的 25 Hz、约 7 Hz 发布率：要提高它们，须分别确认新的 IMU/DMP 样本率和雷达真实扫描周期，并评估增加的 micro-ROS 传输负载。当前 CP2104 的 DTR/RTS 自动进 ROM 尚未证实，不应以旧 Rosmaster CH340 的方法代替。
+当前建议维持底板 odom 30 Hz、IMU 定时 30 Hz（实测约 26 Hz）、雷达发布 140 ms（实测约 7.1 Hz）、上位机控制 60 Hz。`2:1` 是调度选择，不代表每个控制 tick 都有新里程计；程序按新 odom 样本更新反馈，其间保持上一命令。车辆装回并摆好后，以 `ground_loop_trial.sh --run --control-hz 60` 采集同一轨迹 CSV，再根据新样本数、hold tick、实际控制间隔及轨迹误差决定是否优化或回退。在找到两路 T-mini Plus 的物理转速命令接口并验证完整新扫描之前，不再缩短雷达发布定时。当前 CP2104 的 DTR/RTS 自动进 ROM 尚未证实，不应以旧 Rosmaster CH340 的方法代替。
 
 参考： [M3 PRO 控制板接口](https://www.yahboom.net/public/upload/upload-html/1755253726/1.Introduction%20to%20the%20Control%20Board.html)、[M3 PRO BOOT0/RESET 烧录步骤](https://www.yahboom.net/public/upload/upload-html/1755254244/13.Flash%20access%20data.html)、[旧 Rosmaster CH340 教程](https://www.yahboom.net/public/upload/upload-html/1758600901/1.%20Update%20the%20expansion%20board%20firmware.html)、[stm32flash 参数说明](https://github.com/stm32duino/stm32flash/blob/main/stm32flash.1)。

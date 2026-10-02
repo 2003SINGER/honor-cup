@@ -1,0 +1,4107 @@
+{
+  "status": "OFFLINE_EXPERIMENT_ONLY",
+  "session": "/Users/2003singer/Workspace/Projects/honor cup/field_data/20261001_174719_joystick_full_maze",
+  "model": "continuous finite physical wall tracks; angle+normal+finite overlap association; no grid coordinate snapping",
+  "counts": {
+    "no_odom_bracket": 6,
+    "frames": 1763,
+    "segments": 13374,
+    "accepted_corrections": 170
+  },
+  "stable_tracks": {
+    "corrected": 62,
+    "raw_odom": 68
+  },
+  "track_counts": {
+    "corrected": 4257,
+    "raw_odom": 4591
+  },
+  "stable_track_details": {
+    "corrected": [
+      {
+        "track_id": 0,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.8958276211443054,
+        "angle_rad": -0.02612966347619085,
+        "supported_span_m": 0.31291425402225853
+      },
+      {
+        "track_id": 4,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.021703021260011217,
+        "angle_rad": -0.013678987627656432,
+        "supported_span_m": 0.24560436160991544
+      },
+      {
+        "track_id": 8,
+        "independent_view_count": 3,
+        "conflicts": 4,
+        "normal_coordinate_m": 2.27051574605749,
+        "angle_rad": 1.4637822521250001,
+        "supported_span_m": 0.30665460454981985
+      },
+      {
+        "track_id": 29,
+        "independent_view_count": 3,
+        "conflicts": 3,
+        "normal_coordinate_m": 2.4260908022555854,
+        "angle_rad": 1.565001114636255,
+        "supported_span_m": 0.35966991678059873
+      },
+      {
+        "track_id": 36,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -0.8407933115813374,
+        "angle_rad": 0.02083440673639945,
+        "supported_span_m": 0.3833254766098327
+      },
+      {
+        "track_id": 40,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -0.7097936177193871,
+        "angle_rad": 0.0764734700703469,
+        "supported_span_m": 0.3755968288660274
+      },
+      {
+        "track_id": 54,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.8884954920379529,
+        "angle_rad": -0.013580825144191516,
+        "supported_span_m": 0.35944734651195454
+      },
+      {
+        "track_id": 64,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 2.7805731779147016,
+        "angle_rad": 1.5796167631295908,
+        "supported_span_m": 0.34194252953916593
+      },
+      {
+        "track_id": 66,
+        "independent_view_count": 4,
+        "conflicts": 0,
+        "normal_coordinate_m": -1.1796152998736884,
+        "angle_rad": 0.01592415449626725,
+        "supported_span_m": 0.12119373548203961
+      },
+      {
+        "track_id": 76,
+        "independent_view_count": 3,
+        "conflicts": 2,
+        "normal_coordinate_m": 0.46233965938942206,
+        "angle_rad": -0.028674686421527252,
+        "supported_span_m": 0.3700184855053991
+      },
+      {
+        "track_id": 87,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.574960395995427,
+        "angle_rad": -0.07747931497390054,
+        "supported_span_m": 0.3620848157093614
+      },
+      {
+        "track_id": 92,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 1.6554604586238326,
+        "angle_rad": 1.5958801044563193,
+        "supported_span_m": 0.1866137015026969
+      },
+      {
+        "track_id": 117,
+        "independent_view_count": 3,
+        "conflicts": 3,
+        "normal_coordinate_m": 0.007627740686081074,
+        "angle_rad": 0.006122034404170293,
+        "supported_span_m": 0.361552312182379
+      },
+      {
+        "track_id": 131,
+        "independent_view_count": 4,
+        "conflicts": 1,
+        "normal_coordinate_m": -2.4648718223866597,
+        "angle_rad": 0.007742736102379722,
+        "supported_span_m": 0.15686087271252214
+      },
+      {
+        "track_id": 178,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -0.3768134416968386,
+        "angle_rad": 0.03127805049977647,
+        "supported_span_m": 0.28699826342594087
+      },
+      {
+        "track_id": 195,
+        "independent_view_count": 3,
+        "conflicts": 1,
+        "normal_coordinate_m": 0.24372442967199376,
+        "angle_rad": 0.10310156139976157,
+        "supported_span_m": 0.3302128261154076
+      },
+      {
+        "track_id": 216,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -0.41951421933614697,
+        "angle_rad": 0.006961205244945903,
+        "supported_span_m": 0.39181581500011625
+      },
+      {
+        "track_id": 230,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -2.4684404487025087,
+        "angle_rad": 0.01902662887966375,
+        "supported_span_m": 0.35798326940831027
+      },
+      {
+        "track_id": 248,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 2.283424982073817,
+        "angle_rad": 1.5574020185953517,
+        "supported_span_m": 0.33385963995857343
+      },
+      {
+        "track_id": 254,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -2.232721884937384,
+        "angle_rad": 0.10795946266760421,
+        "supported_span_m": 0.18635995287653775
+      },
+      {
+        "track_id": 313,
+        "independent_view_count": 3,
+        "conflicts": 1,
+        "normal_coordinate_m": 2.0084146545950996,
+        "angle_rad": 1.6935627589833626,
+        "supported_span_m": 0.615395098022791
+      },
+      {
+        "track_id": 455,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -0.18897648487274576,
+        "angle_rad": 0.43444490332172864,
+        "supported_span_m": 0.3288471872357306
+      },
+      {
+        "track_id": 458,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -1.6330476804268181,
+        "angle_rad": 0.3438642295046156,
+        "supported_span_m": 0.26376762213182975
+      },
+      {
+        "track_id": 467,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -1.6282549869651726,
+        "angle_rad": 0.3562670920651607,
+        "supported_span_m": 0.25637160544231663
+      },
+      {
+        "track_id": 474,
+        "independent_view_count": 3,
+        "conflicts": 12,
+        "normal_coordinate_m": 2.249168200135413,
+        "angle_rad": 1.9552507613155867,
+        "supported_span_m": 1.1974818109082601
+      },
+      {
+        "track_id": 479,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 2.134368971804921,
+        "angle_rad": 1.8759101595935168,
+        "supported_span_m": 0.12051561835715913
+      },
+      {
+        "track_id": 483,
+        "independent_view_count": 3,
+        "conflicts": 2,
+        "normal_coordinate_m": -1.3034281428352705,
+        "angle_rad": 0.46442925634051435,
+        "supported_span_m": 0.2958083743262158
+      },
+      {
+        "track_id": 517,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -1.378931823747193,
+        "angle_rad": 0.45402978683521367,
+        "supported_span_m": 0.3043678704418877
+      },
+      {
+        "track_id": 661,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 2.291316159641058,
+        "angle_rad": 1.9459562802422041,
+        "supported_span_m": 0.8485034859592305
+      },
+      {
+        "track_id": 771,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -1.4305905802829586,
+        "angle_rad": 0.4085224524899937,
+        "supported_span_m": 0.29779272933698575
+      },
+      {
+        "track_id": 782,
+        "independent_view_count": 3,
+        "conflicts": 1,
+        "normal_coordinate_m": 1.027546380056976,
+        "angle_rad": 0.42327605809239,
+        "supported_span_m": 0.2800665676722025
+      },
+      {
+        "track_id": 809,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -1.541744839417915,
+        "angle_rad": 0.3694296171083846,
+        "supported_span_m": 0.2076807422617416
+      },
+      {
+        "track_id": 854,
+        "independent_view_count": 3,
+        "conflicts": 1,
+        "normal_coordinate_m": 2.5483848169688845,
+        "angle_rad": 2.019085754180145,
+        "supported_span_m": 0.3613141240993774
+      },
+      {
+        "track_id": 879,
+        "independent_view_count": 3,
+        "conflicts": 9,
+        "normal_coordinate_m": 1.7682972893135447,
+        "angle_rad": 1.9966151452568903,
+        "supported_span_m": 0.586267934296052
+      },
+      {
+        "track_id": 884,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 2.930838243178652,
+        "angle_rad": 1.9745472172521563,
+        "supported_span_m": 0.67340360399553
+      },
+      {
+        "track_id": 959,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 2.910836948527279,
+        "angle_rad": 2.0159714347019664,
+        "supported_span_m": 0.3645532469895949
+      },
+      {
+        "track_id": 1044,
+        "independent_view_count": 3,
+        "conflicts": 5,
+        "normal_coordinate_m": 1.7651059888510021,
+        "angle_rad": 2.0117514351260724,
+        "supported_span_m": 0.22941996546818413
+      },
+      {
+        "track_id": 1074,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 1.2408823814806946,
+        "angle_rad": 1.920615781833219,
+        "supported_span_m": 0.12209562909930985
+      },
+      {
+        "track_id": 1156,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 2.558067622323018,
+        "angle_rad": 1.7717638215491185,
+        "supported_span_m": 0.22263744172910396
+      },
+      {
+        "track_id": 1337,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -2.5446543671991355,
+        "angle_rad": 0.11213649025205578,
+        "supported_span_m": 1.114177809232304
+      },
+      {
+        "track_id": 1339,
+        "independent_view_count": 3,
+        "conflicts": 1,
+        "normal_coordinate_m": 1.3152159461882416,
+        "angle_rad": 1.720739220461,
+        "supported_span_m": 0.33780128284746413
+      },
+      {
+        "track_id": 1361,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.686671126038597,
+        "angle_rad": 1.6551108432754735,
+        "supported_span_m": 0.1510598955404214
+      },
+      {
+        "track_id": 1362,
+        "independent_view_count": 3,
+        "conflicts": 1,
+        "normal_coordinate_m": -1.7710539873681785,
+        "angle_rad": 0.12594147360945282,
+        "supported_span_m": 0.3576403595227837
+      },
+      {
+        "track_id": 1392,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -0.6400422587378234,
+        "angle_rad": 0.08407695477928,
+        "supported_span_m": 0.34836862030144355
+      },
+      {
+        "track_id": 1410,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.4656425922681422,
+        "angle_rad": 1.5390089492763186,
+        "supported_span_m": 0.4194570776935242
+      },
+      {
+        "track_id": 1413,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -0.6122238956823927,
+        "angle_rad": 0.09579504297068078,
+        "supported_span_m": 0.18583285616829168
+      },
+      {
+        "track_id": 1424,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 1.3532731999699998,
+        "angle_rad": 1.5894736027762475,
+        "supported_span_m": 0.7422695058440149
+      },
+      {
+        "track_id": 1434,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -1.8266002700214485,
+        "angle_rad": 0.07589472719442758,
+        "supported_span_m": 0.38488690961097255
+      },
+      {
+        "track_id": 1448,
+        "independent_view_count": 3,
+        "conflicts": 3,
+        "normal_coordinate_m": 2.6683373187294492,
+        "angle_rad": -0.008613315553079731,
+        "supported_span_m": 0.40342140972046253
+      },
+      {
+        "track_id": 1479,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -2.5867223756357096,
+        "angle_rad": 0.08796304490920899,
+        "supported_span_m": 0.21554393514236217
+      },
+      {
+        "track_id": 1546,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -1.8365615906309702,
+        "angle_rad": 0.014332045587215243,
+        "supported_span_m": 0.3471130801810371
+      },
+      {
+        "track_id": 1608,
+        "independent_view_count": 4,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.3819894897218262,
+        "angle_rad": 1.4831721873392367,
+        "supported_span_m": 0.7675756365974288
+      },
+      {
+        "track_id": 1618,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.7374136161187077,
+        "angle_rad": -0.03617090944352779,
+        "supported_span_m": 0.3360164832665086
+      },
+      {
+        "track_id": 1657,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.8143230235053412,
+        "angle_rad": 1.5126122203214907,
+        "supported_span_m": 0.9315680877934777
+      },
+      {
+        "track_id": 1659,
+        "independent_view_count": 3,
+        "conflicts": 1,
+        "normal_coordinate_m": 0.6536473130749175,
+        "angle_rad": 1.4289022498345134,
+        "supported_span_m": 0.4017685025255703
+      },
+      {
+        "track_id": 1679,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 1.1476631514924527,
+        "angle_rad": 1.4809143364105628,
+        "supported_span_m": 0.9947300128207928
+      },
+      {
+        "track_id": 1681,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.9368613359518658,
+        "angle_rad": 1.5842514204192846,
+        "supported_span_m": 0.7454465342450111
+      },
+      {
+        "track_id": 1691,
+        "independent_view_count": 3,
+        "conflicts": 3,
+        "normal_coordinate_m": 0.8735799274920371,
+        "angle_rad": 1.5593939568474517,
+        "supported_span_m": 1.1204037653238235
+      },
+      {
+        "track_id": 1704,
+        "independent_view_count": 3,
+        "conflicts": 1,
+        "normal_coordinate_m": 0.7647672568815957,
+        "angle_rad": 1.4871133454963432,
+        "supported_span_m": 0.9969539344016299
+      },
+      {
+        "track_id": 1740,
+        "independent_view_count": 3,
+        "conflicts": 1,
+        "normal_coordinate_m": -1.0597069916550181,
+        "angle_rad": 0.03631451624186032,
+        "supported_span_m": 0.409615485233708
+      },
+      {
+        "track_id": 1753,
+        "independent_view_count": 3,
+        "conflicts": 1,
+        "normal_coordinate_m": -0.17910750367307066,
+        "angle_rad": 0.03400702867110708,
+        "supported_span_m": 0.13395233458604278
+      },
+      {
+        "track_id": 1755,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 2.098597095873166,
+        "angle_rad": 1.579254793304145,
+        "supported_span_m": 0.14979984564105908
+      },
+      {
+        "track_id": 1769,
+        "independent_view_count": 3,
+        "conflicts": 1,
+        "normal_coordinate_m": -0.16064109326596934,
+        "angle_rad": -0.01682835650324199,
+        "supported_span_m": 0.197922564358433
+      },
+      {
+        "track_id": 1796,
+        "independent_view_count": 3,
+        "conflicts": 4,
+        "normal_coordinate_m": -0.14157012081090026,
+        "angle_rad": -0.029244790040046348,
+        "supported_span_m": 0.1396808177492188
+      },
+      {
+        "track_id": 1803,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.24020757597068565,
+        "angle_rad": 0.06648155380846504,
+        "supported_span_m": 0.3299248069617337
+      },
+      {
+        "track_id": 1809,
+        "independent_view_count": 3,
+        "conflicts": 1,
+        "normal_coordinate_m": -0.042568516661485624,
+        "angle_rad": 1.515549318174707,
+        "supported_span_m": 0.17757657456455164
+      },
+      {
+        "track_id": 1812,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.22069755884135306,
+        "angle_rad": 0.05939390400700939,
+        "supported_span_m": 0.34328485222742205
+      },
+      {
+        "track_id": 1816,
+        "independent_view_count": 3,
+        "conflicts": 2,
+        "normal_coordinate_m": -0.692034712068119,
+        "angle_rad": 0.027885406450066617,
+        "supported_span_m": 0.3842902242580092
+      },
+      {
+        "track_id": 1851,
+        "independent_view_count": 3,
+        "conflicts": 10,
+        "normal_coordinate_m": 0.2472562381303951,
+        "angle_rad": -0.007363032446881578,
+        "supported_span_m": 1.1809483285047757
+      },
+      {
+        "track_id": 1856,
+        "independent_view_count": 3,
+        "conflicts": 2,
+        "normal_coordinate_m": -0.7271622165543399,
+        "angle_rad": 1.5260912059040903,
+        "supported_span_m": 0.21378444619039902
+      },
+      {
+        "track_id": 1880,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.6460053739779128,
+        "angle_rad": -0.03889414537021076,
+        "supported_span_m": 0.1222522611940814
+      },
+      {
+        "track_id": 1889,
+        "independent_view_count": 3,
+        "conflicts": 1,
+        "normal_coordinate_m": 1.4229361134951726,
+        "angle_rad": -0.028420260500171164,
+        "supported_span_m": 0.40710207402364423
+      },
+      {
+        "track_id": 1971,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.03384572770022101,
+        "angle_rad": 1.5207171692952208,
+        "supported_span_m": 0.1985437511848768
+      },
+      {
+        "track_id": 1978,
+        "independent_view_count": 3,
+        "conflicts": 1,
+        "normal_coordinate_m": 0.21746970767403948,
+        "angle_rad": 1.5993791883793562,
+        "supported_span_m": 0.11156073173061998
+      },
+      {
+        "track_id": 1981,
+        "independent_view_count": 3,
+        "conflicts": 9,
+        "normal_coordinate_m": -2.2443131472412055,
+        "angle_rad": 0.022765764052556738,
+        "supported_span_m": 0.33890382876659664
+      },
+      {
+        "track_id": 2046,
+        "independent_view_count": 3,
+        "conflicts": 4,
+        "normal_coordinate_m": 2.6474575862012055,
+        "angle_rad": -0.07420097769527127,
+        "supported_span_m": 0.3637067934136324
+      },
+      {
+        "track_id": 2104,
+        "independent_view_count": 3,
+        "conflicts": 2,
+        "normal_coordinate_m": -0.7292206914111548,
+        "angle_rad": 1.5542610464131348,
+        "supported_span_m": 0.4079612930486752
+      },
+      {
+        "track_id": 2108,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.4854805700045766,
+        "angle_rad": 1.5415417743880855,
+        "supported_span_m": 0.7005064974477992
+      },
+      {
+        "track_id": 2112,
+        "independent_view_count": 3,
+        "conflicts": 1,
+        "normal_coordinate_m": -0.26889346889146526,
+        "angle_rad": 1.4001767840384602,
+        "supported_span_m": 0.2814655168388886
+      },
+      {
+        "track_id": 2124,
+        "independent_view_count": 3,
+        "conflicts": 19,
+        "normal_coordinate_m": 1.8448207996053145,
+        "angle_rad": -0.11709416214385773,
+        "supported_span_m": 0.6569109206903736
+      },
+      {
+        "track_id": 2129,
+        "independent_view_count": 3,
+        "conflicts": 5,
+        "normal_coordinate_m": -0.9941544206085262,
+        "angle_rad": 1.4044325102102664,
+        "supported_span_m": 0.43109353414846446
+      },
+      {
+        "track_id": 2191,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.2919463223237187,
+        "angle_rad": 1.451660080442312,
+        "supported_span_m": 0.7099252041619076
+      },
+      {
+        "track_id": 2287,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -0.37585216585959874,
+        "angle_rad": 1.3239568731241464,
+        "supported_span_m": 0.28372719082296305
+      },
+      {
+        "track_id": 2290,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -0.4627183751494416,
+        "angle_rad": 1.2912884312844122,
+        "supported_span_m": 0.3152568341763887
+      },
+      {
+        "track_id": 2307,
+        "independent_view_count": 3,
+        "conflicts": 2,
+        "normal_coordinate_m": 1.7740731084900259,
+        "angle_rad": -0.15503623539841788,
+        "supported_span_m": 0.6512185171569599
+      },
+      {
+        "track_id": 2361,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -0.6153097751811325,
+        "angle_rad": 1.6318103942974704,
+        "supported_span_m": 0.26569775696120373
+      },
+      {
+        "track_id": 2369,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 1.8175371189044403,
+        "angle_rad": -0.06576705082682613,
+        "supported_span_m": 0.33224360466716885
+      },
+      {
+        "track_id": 2386,
+        "independent_view_count": 3,
+        "conflicts": 3,
+        "normal_coordinate_m": -1.3579723983049317,
+        "angle_rad": 0.05341650609712562,
+        "supported_span_m": 0.3798901617760188
+      },
+      {
+        "track_id": 2401,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.19335204650375715,
+        "angle_rad": 1.647363545325015,
+        "supported_span_m": 0.38991617277923535
+      },
+      {
+        "track_id": 2691,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.5900327917514615,
+        "angle_rad": 1.6556563165263807,
+        "supported_span_m": 0.32737163242210277
+      },
+      {
+        "track_id": 2711,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -1.688986702031472,
+        "angle_rad": 0.07535555672328659,
+        "supported_span_m": 0.40860316539647296
+      },
+      {
+        "track_id": 2758,
+        "independent_view_count": 3,
+        "conflicts": 47,
+        "normal_coordinate_m": 0.5586947661879601,
+        "angle_rad": -0.004958712795907053,
+        "supported_span_m": 0.37681825327481083
+      },
+      {
+        "track_id": 2762,
+        "independent_view_count": 3,
+        "conflicts": 31,
+        "normal_coordinate_m": -0.13700894120738122,
+        "angle_rad": 0.025850017945578313,
+        "supported_span_m": 0.8545692106296027
+      },
+      {
+        "track_id": 3022,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -0.12866096018164463,
+        "angle_rad": 0.1204630285293182,
+        "supported_span_m": 0.16500002916382026
+      },
+      {
+        "track_id": 3059,
+        "independent_view_count": 3,
+        "conflicts": 2,
+        "normal_coordinate_m": -0.1784702664559991,
+        "angle_rad": 0.13146293346300297,
+        "supported_span_m": 0.15281996536575024
+      },
+      {
+        "track_id": 3073,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -0.5640444689591603,
+        "angle_rad": 0.15801963571888494,
+        "supported_span_m": 0.33431512121070206
+      },
+      {
+        "track_id": 3118,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.30297118755392216,
+        "angle_rad": 0.1681621278912658,
+        "supported_span_m": 0.3450264816602478
+      },
+      {
+        "track_id": 3160,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -1.7740496752638109,
+        "angle_rad": 0.05079996354386918,
+        "supported_span_m": 0.327352537370751
+      },
+      {
+        "track_id": 3167,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.958069440511657,
+        "angle_rad": -0.02772857335041778,
+        "supported_span_m": 0.3232519239314646
+      },
+      {
+        "track_id": 3230,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -0.6588724729714689,
+        "angle_rad": 1.6298998122568533,
+        "supported_span_m": 0.8055021794786317
+      },
+      {
+        "track_id": 3275,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -0.6009433614510644,
+        "angle_rad": 1.6447887344437244,
+        "supported_span_m": 0.7038970100886872
+      },
+      {
+        "track_id": 3324,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -0.6055667482614621,
+        "angle_rad": 0.04519937732679312,
+        "supported_span_m": 0.35592965145044025
+      },
+      {
+        "track_id": 3494,
+        "independent_view_count": 3,
+        "conflicts": 1,
+        "normal_coordinate_m": 0.9654728650712217,
+        "angle_rad": 1.5923742973601678,
+        "supported_span_m": 0.1906123761212117
+      },
+      {
+        "track_id": 3939,
+        "independent_view_count": 3,
+        "conflicts": 7,
+        "normal_coordinate_m": 0.14208285244315774,
+        "angle_rad": -0.033739979104400214,
+        "supported_span_m": 0.8276466056991877
+      }
+    ],
+    "raw_odom": [
+      {
+        "track_id": 0,
+        "independent_view_count": 3,
+        "conflicts": 1,
+        "normal_coordinate_m": 0.8958276211443053,
+        "angle_rad": -0.026129663476190813,
+        "supported_span_m": 0.312914254022259
+      },
+      {
+        "track_id": 2,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -0.34450413282190256,
+        "angle_rad": 0.06193918695181293,
+        "supported_span_m": 0.24800084456745383
+      },
+      {
+        "track_id": 4,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.02170302126001316,
+        "angle_rad": -0.01367898762765651,
+        "supported_span_m": 0.24560436160991556
+      },
+      {
+        "track_id": 23,
+        "independent_view_count": 3,
+        "conflicts": 1,
+        "normal_coordinate_m": -0.002361012258138895,
+        "angle_rad": -0.020281724926251774,
+        "supported_span_m": 0.34668684130949556
+      },
+      {
+        "track_id": 29,
+        "independent_view_count": 3,
+        "conflicts": 15,
+        "normal_coordinate_m": 2.4260908022555854,
+        "angle_rad": 1.565001114636255,
+        "supported_span_m": 0.35966991678059884
+      },
+      {
+        "track_id": 36,
+        "independent_view_count": 3,
+        "conflicts": 3,
+        "normal_coordinate_m": -0.8414949687010217,
+        "angle_rad": 0.02048812299615477,
+        "supported_span_m": 0.39747801538302446
+      },
+      {
+        "track_id": 40,
+        "independent_view_count": 3,
+        "conflicts": 4,
+        "normal_coordinate_m": -0.7472738066321417,
+        "angle_rad": 0.05430775880768829,
+        "supported_span_m": 0.3754977689237205
+      },
+      {
+        "track_id": 54,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.870689153058936,
+        "angle_rad": -0.019323401562762497,
+        "supported_span_m": 0.3109009236309875
+      },
+      {
+        "track_id": 62,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.06827860706992839,
+        "angle_rad": -0.04378219839479578,
+        "supported_span_m": 0.3798519562884181
+      },
+      {
+        "track_id": 69,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -0.3056091311080653,
+        "angle_rad": 0.014351154431860557,
+        "supported_span_m": 0.2442889980692242
+      },
+      {
+        "track_id": 82,
+        "independent_view_count": 3,
+        "conflicts": 3,
+        "normal_coordinate_m": 0.5309260663208326,
+        "angle_rad": -0.07655458497911322,
+        "supported_span_m": 0.37722635831968643
+      },
+      {
+        "track_id": 92,
+        "independent_view_count": 3,
+        "conflicts": 2,
+        "normal_coordinate_m": 0.698634392308716,
+        "angle_rad": -0.16515970837356983,
+        "supported_span_m": 0.35784365329898793
+      },
+      {
+        "track_id": 95,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 1.6501214117311385,
+        "angle_rad": 1.493896409873875,
+        "supported_span_m": 0.3613114202988517
+      },
+      {
+        "track_id": 105,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 2.5525604509428965,
+        "angle_rad": 1.5435018005645613,
+        "supported_span_m": 0.2064235662409328
+      },
+      {
+        "track_id": 121,
+        "independent_view_count": 3,
+        "conflicts": 4,
+        "normal_coordinate_m": 0.042538015236421284,
+        "angle_rad": -0.06790825213387248,
+        "supported_span_m": 0.7549965729074418
+      },
+      {
+        "track_id": 162,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 2.8560631187762304,
+        "angle_rad": 1.5204961358815428,
+        "supported_span_m": 1.1459571682195744
+      },
+      {
+        "track_id": 224,
+        "independent_view_count": 3,
+        "conflicts": 1,
+        "normal_coordinate_m": 2.729977756886996,
+        "angle_rad": -0.12882999011521404,
+        "supported_span_m": 0.22782687773647356
+      },
+      {
+        "track_id": 232,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 1.4940562409723137,
+        "angle_rad": -0.12188230148793434,
+        "supported_span_m": 0.3477775154417683
+      },
+      {
+        "track_id": 233,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 2.8564148951814836,
+        "angle_rad": -0.168938936608941,
+        "supported_span_m": 0.22339812028850015
+      },
+      {
+        "track_id": 239,
+        "independent_view_count": 3,
+        "conflicts": 1,
+        "normal_coordinate_m": 2.5028570002403443,
+        "angle_rad": -0.041958028389370884,
+        "supported_span_m": 0.23858562819524468
+      },
+      {
+        "track_id": 269,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 2.017114188363297,
+        "angle_rad": 1.4539621474561488,
+        "supported_span_m": 0.31434459369876483
+      },
+      {
+        "track_id": 279,
+        "independent_view_count": 3,
+        "conflicts": 11,
+        "normal_coordinate_m": 2.378207217082088,
+        "angle_rad": 1.4408611532879985,
+        "supported_span_m": 0.5947244703556165
+      },
+      {
+        "track_id": 284,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 2.2835490768255804,
+        "angle_rad": 1.4008465274474728,
+        "supported_span_m": 0.5879920666595557
+      },
+      {
+        "track_id": 449,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -0.19103263837117945,
+        "angle_rad": 0.36930587918534974,
+        "supported_span_m": 0.3288471872357318
+      },
+      {
+        "track_id": 456,
+        "independent_view_count": 4,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.17242963789171495,
+        "angle_rad": 0.5073204358066674,
+        "supported_span_m": 0.4149878081832464
+      },
+      {
+        "track_id": 461,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -1.6197425826379916,
+        "angle_rad": 0.3011193306444031,
+        "supported_span_m": 0.256645878035623
+      },
+      {
+        "track_id": 471,
+        "independent_view_count": 3,
+        "conflicts": 17,
+        "normal_coordinate_m": 2.448900220484674,
+        "angle_rad": 1.8885694076971673,
+        "supported_span_m": 1.1974206534278036
+      },
+      {
+        "track_id": 511,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -1.3770394487105957,
+        "angle_rad": 0.38889076269883627,
+        "supported_span_m": 0.30436787044188884
+      },
+      {
+        "track_id": 659,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 2.492443930510453,
+        "angle_rad": 1.8808172561058258,
+        "supported_span_m": 0.8485034859592304
+      },
+      {
+        "track_id": 667,
+        "independent_view_count": 3,
+        "conflicts": 1,
+        "normal_coordinate_m": 1.077130904874814,
+        "angle_rad": 0.36822136189738713,
+        "supported_span_m": 0.3046254487699328
+      },
+      {
+        "track_id": 721,
+        "independent_view_count": 4,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.9660487764941897,
+        "angle_rad": 0.3304822689526553,
+        "supported_span_m": 0.3323084808931437
+      },
+      {
+        "track_id": 892,
+        "independent_view_count": 3,
+        "conflicts": 3,
+        "normal_coordinate_m": 2.05328286176813,
+        "angle_rad": 2.050128295509499,
+        "supported_span_m": 0.586267934296052
+      },
+      {
+        "track_id": 896,
+        "independent_view_count": 3,
+        "conflicts": 1,
+        "normal_coordinate_m": 3.2241448721941097,
+        "angle_rad": 2.0280603675047653,
+        "supported_span_m": 0.6734036039955307
+      },
+      {
+        "track_id": 908,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.7890120032407737,
+        "angle_rad": 0.418774522968863,
+        "supported_span_m": 0.3542763563098771
+      },
+      {
+        "track_id": 910,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 1.5133123702292892,
+        "angle_rad": 0.5299808520220188,
+        "supported_span_m": 0.11840866481589221
+      },
+      {
+        "track_id": 911,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.6597042363727254,
+        "angle_rad": 0.57051022578222,
+        "supported_span_m": 0.3620102698462459
+      },
+      {
+        "track_id": 949,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 3.1939140606978484,
+        "angle_rad": 2.0647525198678105,
+        "supported_span_m": 0.43030169342109176
+      },
+      {
+        "track_id": 951,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 2.7747617455602387,
+        "angle_rad": 2.0672306685659394,
+        "supported_span_m": 0.30481968041495244
+      },
+      {
+        "track_id": 967,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 2.0008989253608727,
+        "angle_rad": 2.055838040520657,
+        "supported_span_m": 0.35298429932261327
+      },
+      {
+        "track_id": 1002,
+        "independent_view_count": 3,
+        "conflicts": 8,
+        "normal_coordinate_m": 2.0443036997332933,
+        "angle_rad": 2.065264585378682,
+        "supported_span_m": 0.22941996546818452
+      },
+      {
+        "track_id": 1131,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 2.8337270389598386,
+        "angle_rad": 1.789841254646,
+        "supported_span_m": 0.2523432038641376
+      },
+      {
+        "track_id": 1325,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -1.9711716741634995,
+        "angle_rad": 0.15197838233088684,
+        "supported_span_m": 0.7327198342142465
+      },
+      {
+        "track_id": 1326,
+        "independent_view_count": 3,
+        "conflicts": 2,
+        "normal_coordinate_m": 1.6941917173698595,
+        "angle_rad": 1.7746332792635569,
+        "supported_span_m": 0.33780128284746147
+      },
+      {
+        "track_id": 1339,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 2.621295708731209,
+        "angle_rad": 1.6820702382426806,
+        "supported_span_m": 0.3275475427654896
+      },
+      {
+        "track_id": 1343,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 1.6319607327640147,
+        "angle_rad": 1.7687864302747012,
+        "supported_span_m": 0.3061878129163769
+      },
+      {
+        "track_id": 1349,
+        "independent_view_count": 3,
+        "conflicts": 5,
+        "normal_coordinate_m": -1.5500757755123613,
+        "angle_rad": 0.16097132660443259,
+        "supported_span_m": 0.3663920732144717
+      },
+      {
+        "track_id": 1350,
+        "independent_view_count": 3,
+        "conflicts": 2,
+        "normal_coordinate_m": 1.5642103624202806,
+        "angle_rad": 1.7498157881201784,
+        "supported_span_m": 0.2506563492662107
+      },
+      {
+        "track_id": 1352,
+        "independent_view_count": 4,
+        "conflicts": 0,
+        "normal_coordinate_m": 1.9173640458486751,
+        "angle_rad": 1.72797927915398,
+        "supported_span_m": 1.2271329418268808
+      },
+      {
+        "track_id": 1354,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -0.48535984520524733,
+        "angle_rad": 0.10202822964521287,
+        "supported_span_m": 0.14429706598916836
+      },
+      {
+        "track_id": 1375,
+        "independent_view_count": 3,
+        "conflicts": 1,
+        "normal_coordinate_m": 1.4821287279518143,
+        "angle_rad": 1.7029022718033286,
+        "supported_span_m": 0.4067971466230647
+      },
+      {
+        "track_id": 1377,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -1.6042803752506127,
+        "angle_rad": 0.121990125589902,
+        "supported_span_m": 0.34173128118751844
+      },
+      {
+        "track_id": 1385,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 1.560059676237207,
+        "angle_rad": 1.7238378076513943,
+        "supported_span_m": 0.34826106315263594
+      },
+      {
+        "track_id": 1400,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 1.9765442290881199,
+        "angle_rad": 1.7684822760865637,
+        "supported_span_m": 0.7742779036349007
+      },
+      {
+        "track_id": 1414,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 1.0362962264939528,
+        "angle_rad": 1.6927047252584693,
+        "supported_span_m": 0.8104184347461637
+      },
+      {
+        "track_id": 1415,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -1.342999537090099,
+        "angle_rad": 0.2990337069873406,
+        "supported_span_m": 0.41676062967939476
+      },
+      {
+        "track_id": 1432,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 1.8079853869088953,
+        "angle_rad": 1.6544272824269173,
+        "supported_span_m": 0.5270539735910833
+      },
+      {
+        "track_id": 1433,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -1.6249481581481295,
+        "angle_rad": 0.09280378258550935,
+        "supported_span_m": 0.3471049861349421
+      },
+      {
+        "track_id": 1495,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -1.5786038559543902,
+        "angle_rad": 0.1543336299269889,
+        "supported_span_m": 0.39608001696321693
+      },
+      {
+        "track_id": 1549,
+        "independent_view_count": 3,
+        "conflicts": 4,
+        "normal_coordinate_m": -0.4851329825390408,
+        "angle_rad": 0.069410089458267,
+        "supported_span_m": 0.24779733566284337
+      },
+      {
+        "track_id": 1561,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 1.328588952870886,
+        "angle_rad": 1.6159880659884645,
+        "supported_span_m": 0.71655064780021
+      },
+      {
+        "track_id": 1564,
+        "independent_view_count": 3,
+        "conflicts": 4,
+        "normal_coordinate_m": 0.5967660025012874,
+        "angle_rad": -0.009475613947493342,
+        "supported_span_m": 0.3919657570896733
+      },
+      {
+        "track_id": 1614,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 1.6565849915489523,
+        "angle_rad": 1.544429175129845,
+        "supported_span_m": 0.9475760801894118
+      },
+      {
+        "track_id": 1620,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 1.3986288014565327,
+        "angle_rad": 1.651022915082075,
+        "supported_span_m": 0.7541740391388064
+      },
+      {
+        "track_id": 1783,
+        "independent_view_count": 3,
+        "conflicts": 4,
+        "normal_coordinate_m": 2.61289722865159,
+        "angle_rad": 1.637145040080191,
+        "supported_span_m": 0.35812876045861475
+      },
+      {
+        "track_id": 1784,
+        "independent_view_count": 3,
+        "conflicts": 4,
+        "normal_coordinate_m": 2.1959965719567998,
+        "angle_rad": 1.6820831117611197,
+        "supported_span_m": 0.23533916007402647
+      },
+      {
+        "track_id": 1839,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 1.474805342526838,
+        "angle_rad": 1.7007682053723387,
+        "supported_span_m": 0.18936205386455304
+      },
+      {
+        "track_id": 1847,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.3531141609853573,
+        "angle_rad": 0.02902534938094817,
+        "supported_span_m": 0.11458362194557875
+      },
+      {
+        "track_id": 1947,
+        "independent_view_count": 3,
+        "conflicts": 2,
+        "normal_coordinate_m": 0.45132205671857095,
+        "angle_rad": 1.5480873824249541,
+        "supported_span_m": 0.17757657456455095
+      },
+      {
+        "track_id": 1954,
+        "independent_view_count": 3,
+        "conflicts": 2,
+        "normal_coordinate_m": -0.4963331200171405,
+        "angle_rad": 0.06042347070031352,
+        "supported_span_m": 0.38429022425800885
+      },
+      {
+        "track_id": 1966,
+        "independent_view_count": 3,
+        "conflicts": 5,
+        "normal_coordinate_m": -0.05992475628687239,
+        "angle_rad": 0.06736738076868594,
+        "supported_span_m": 0.7331223860826336
+      },
+      {
+        "track_id": 1978,
+        "independent_view_count": 3,
+        "conflicts": 1,
+        "normal_coordinate_m": 0.5086088699868512,
+        "angle_rad": 1.6251816350307906,
+        "supported_span_m": 0.18677539609448365
+      },
+      {
+        "track_id": 1984,
+        "independent_view_count": 3,
+        "conflicts": 11,
+        "normal_coordinate_m": -1.243625392945306,
+        "angle_rad": 0.06741304210748687,
+        "supported_span_m": 0.3093214945661097
+      },
+      {
+        "track_id": 1985,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -0.5390339581711604,
+        "angle_rad": 0.01589692648615025,
+        "supported_span_m": 0.3783070480934804
+      },
+      {
+        "track_id": 2011,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -0.12318965689746904,
+        "angle_rad": 0.04310917227409355,
+        "supported_span_m": 0.7679882276166096
+      },
+      {
+        "track_id": 2144,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.4671165154855769,
+        "angle_rad": 1.6003981986342835,
+        "supported_span_m": 0.19854375118487672
+      },
+      {
+        "track_id": 2156,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -2.0277188093145964,
+        "angle_rad": 0.1024467933916198,
+        "supported_span_m": 0.33890382876659664
+      },
+      {
+        "track_id": 2175,
+        "independent_view_count": 3,
+        "conflicts": 2,
+        "normal_coordinate_m": 0.5910432926038223,
+        "angle_rad": 1.6659907967368008,
+        "supported_span_m": 0.3956112035091924
+      },
+      {
+        "track_id": 2245,
+        "independent_view_count": 3,
+        "conflicts": 2,
+        "normal_coordinate_m": 0.5433525982825962,
+        "angle_rad": 1.641758640587143,
+        "supported_span_m": 0.33859384054419417
+      },
+      {
+        "track_id": 2267,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.21351829933331268,
+        "angle_rad": 1.5157946406810385,
+        "supported_span_m": 0.28449738612457526
+      },
+      {
+        "track_id": 2312,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.32194064862910915,
+        "angle_rad": 1.549461595013147,
+        "supported_span_m": 0.28537938016287684
+      },
+      {
+        "track_id": 2329,
+        "independent_view_count": 3,
+        "conflicts": 1,
+        "normal_coordinate_m": 0.656119694131345,
+        "angle_rad": 1.7155534988465484,
+        "supported_span_m": 0.3183108589547382
+      },
+      {
+        "track_id": 2442,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.3798540562042829,
+        "angle_rad": 1.5844386060404656,
+        "supported_span_m": 0.2709064729191423
+      },
+      {
+        "track_id": 2479,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -1.987259949333655,
+        "angle_rad": 0.042840725417976566,
+        "supported_span_m": 0.32854430249155375
+      },
+      {
+        "track_id": 2559,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -0.25698775110769656,
+        "angle_rad": 1.6834428274403213,
+        "supported_span_m": 0.5415355689184241
+      },
+      {
+        "track_id": 2640,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -1.921080155260246,
+        "angle_rad": 0.050770604398864584,
+        "supported_span_m": 0.3581264620736627
+      },
+      {
+        "track_id": 2686,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 1.299786327038431,
+        "angle_rad": 1.6065946774932687,
+        "supported_span_m": 0.415898891460399
+      },
+      {
+        "track_id": 2723,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -1.0410370923059584,
+        "angle_rad": 0.13572823330109665,
+        "supported_span_m": 0.3860834927335578
+      },
+      {
+        "track_id": 2776,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.36839495904079206,
+        "angle_rad": 1.583371351500311,
+        "supported_span_m": 0.2392779999289557
+      },
+      {
+        "track_id": 2899,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.5448976349330918,
+        "angle_rad": 1.6682442907115542,
+        "supported_span_m": 0.3622296101540824
+      },
+      {
+        "track_id": 3060,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -1.404014402672408,
+        "angle_rad": 0.1358077325364342,
+        "supported_span_m": 0.38209507694710715
+      },
+      {
+        "track_id": 3068,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -0.38025208080760053,
+        "angle_rad": 0.013791104795137824,
+        "supported_span_m": 0.35374039984107203
+      },
+      {
+        "track_id": 3091,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.9163899633770052,
+        "angle_rad": 1.6425718024485945,
+        "supported_span_m": 0.34959838146342853
+      },
+      {
+        "track_id": 3103,
+        "independent_view_count": 3,
+        "conflicts": 3,
+        "normal_coordinate_m": -0.26577074726050326,
+        "angle_rad": 0.07255699693565534,
+        "supported_span_m": 0.3489395214872046
+      },
+      {
+        "track_id": 3157,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.9243995838905961,
+        "angle_rad": 1.6855171163617957,
+        "supported_span_m": 0.3503469294152726
+      },
+      {
+        "track_id": 3358,
+        "independent_view_count": 3,
+        "conflicts": 9,
+        "normal_coordinate_m": -1.393787614596313,
+        "angle_rad": 0.3085114051835298,
+        "supported_span_m": 0.25870308864146346
+      },
+      {
+        "track_id": 3438,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -1.4253280601423892,
+        "angle_rad": 0.28479587514944354,
+        "supported_span_m": 0.30258204575521797
+      },
+      {
+        "track_id": 3477,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.3826886834665489,
+        "angle_rad": 0.45058006226752734,
+        "supported_span_m": 0.13250876245261647
+      },
+      {
+        "track_id": 3483,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.5099713059814417,
+        "angle_rad": 0.5910998345360721,
+        "supported_span_m": 0.13944202051900412
+      },
+      {
+        "track_id": 3485,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": 0.3318179421574031,
+        "angle_rad": 0.3622187921442812,
+        "supported_span_m": 0.11912322107847925
+      },
+      {
+        "track_id": 3570,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -0.1609317568623766,
+        "angle_rad": 0.2740409043194865,
+        "supported_span_m": 0.23289433276448712
+      },
+      {
+        "track_id": 3888,
+        "independent_view_count": 3,
+        "conflicts": 1,
+        "normal_coordinate_m": 0.2882380546342282,
+        "angle_rad": 0.22570027732894168,
+        "supported_span_m": 0.2134297551336721
+      },
+      {
+        "track_id": 4451,
+        "independent_view_count": 3,
+        "conflicts": 1,
+        "normal_coordinate_m": -0.624073614282353,
+        "angle_rad": -0.030948905553129704,
+        "supported_span_m": 0.35145091703470827
+      },
+      {
+        "track_id": 4466,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -0.6437609646095381,
+        "angle_rad": -0.006480208222241566,
+        "supported_span_m": 0.82786349367299
+      },
+      {
+        "track_id": 4503,
+        "independent_view_count": 3,
+        "conflicts": 0,
+        "normal_coordinate_m": -0.21777281776601673,
+        "angle_rad": -0.009575251706825171,
+        "supported_span_m": 1.1347122125080942
+      },
+      {
+        "track_id": 4518,
+        "independent_view_count": 3,
+        "conflicts": 4,
+        "normal_coordinate_m": 1.5323802823571968,
+        "angle_rad": 1.629794149696773,
+        "supported_span_m": 0.3394071035745583
+      }
+    ]
+  },
+  "orthogonal_stable_track_pairs": {
+    "corrected": 1002,
+    "raw_odom": 1284
+  },
+  "second_half_association": {
+    "corrected": {
+      "frames": 882,
+      "matched_segment_fraction": 0.6488571027906325,
+      "mean_associated_segments_per_frame": 5.246031746031746,
+      "stable_track_true_samples_posthoc": 47,
+      "stable_track_false_samples_posthoc": 34,
+      "stable_track_conditional_precision_posthoc": 0.5802469135802469
+    },
+    "raw_odom": {
+      "frames": 882,
+      "matched_segment_fraction": 0.615621932407797,
+      "mean_associated_segments_per_frame": 4.977324263038549,
+      "stable_track_true_samples_posthoc": 11,
+      "stable_track_false_samples_posthoc": 93,
+      "stable_track_conditional_precision_posthoc": 0.10576923076923077
+    }
+  },
+  "orthogonal_stable_tracks_first_seen_elapsed_s": 7.28000020980835,
+  "correction_count": 170,
+  "accepted_correction_abs_p50_p90_max": {
+    "dx_m": {
+      "p50": 0.01095661903085631,
+      "p90": 0.04152232713842208,
+      "max": 0.08082514527651223
+    },
+    "dy_m": {
+      "p50": 0.00900033800112455,
+      "p90": 0.0347539972129645,
+      "max": 0.09737212140546399
+    },
+    "dyaw_rad": {
+      "p50": 0.013195658460969865,
+      "p90": 0.051623975115247196,
+      "max": 0.08675568670549758
+    }
+  },
+  "limitations": [
+    "viewpoint independence uses wheel odometry, so odometry drift can still counterfeit spatial diversity",
+    "continuous track ID association is greedy and can fragment or merge tracks after large drift",
+    "no independently surveyed pose or wall coordinates; topology only used post-run for conditional scoring",
+    "segment extraction/replay is offline and never controls the robot"
+  ],
+  "post_run_topology_hints": {
+    "corrected": {
+      "hint_count": 45,
+      "hints": [
+        [
+          "H",
+          2,
+          3
+        ],
+        [
+          "H",
+          0,
+          2
+        ],
+        [
+          "V",
+          6,
+          3
+        ],
+        [
+          "V",
+          6,
+          2
+        ],
+        [
+          "H",
+          2,
+          4
+        ],
+        [
+          "V",
+          7,
+          0
+        ],
+        [
+          "H",
+          1,
+          5
+        ],
+        [
+          "H",
+          1,
+          5
+        ],
+        [
+          "V",
+          4,
+          1
+        ],
+        [
+          "H",
+          0,
+          6
+        ],
+        [
+          "H",
+          1,
+          6
+        ],
+        [
+          "V",
+          6,
+          2
+        ],
+        [
+          "V",
+          5,
+          3
+        ],
+        [
+          "V",
+          6,
+          5
+        ],
+        [
+          "V",
+          3,
+          5
+        ],
+        [
+          "V",
+          2,
+          4
+        ],
+        [
+          "V",
+          1,
+          5
+        ],
+        [
+          "V",
+          3,
+          4
+        ],
+        [
+          "H",
+          7,
+          1
+        ],
+        [
+          "V",
+          1,
+          5
+        ],
+        [
+          "H",
+          2,
+          2
+        ],
+        [
+          "V",
+          2,
+          3
+        ],
+        [
+          "V",
+          2,
+          4
+        ],
+        [
+          "V",
+          3,
+          4
+        ],
+        [
+          "V",
+          2,
+          3
+        ],
+        [
+          "V",
+          2,
+          3
+        ],
+        [
+          "V",
+          2,
+          3
+        ],
+        [
+          "H",
+          0,
+          3
+        ],
+        [
+          "H",
+          0,
+          2
+        ],
+        [
+          "H",
+          0,
+          0
+        ],
+        [
+          "H",
+          1,
+          2
+        ],
+        [
+          "V",
+          0,
+          2
+        ],
+        [
+          "H",
+          1,
+          2
+        ],
+        [
+          "H",
+          4,
+          0
+        ],
+        [
+          "V",
+          0,
+          5
+        ],
+        [
+          "V",
+          1,
+          4
+        ],
+        [
+          "H",
+          7,
+          0
+        ],
+        [
+          "V",
+          1,
+          5
+        ],
+        [
+          "V",
+          1,
+          5
+        ],
+        [
+          "V",
+          0,
+          3
+        ],
+        [
+          "V",
+          1,
+          2
+        ],
+        [
+          "H",
+          0,
+          0
+        ],
+        [
+          "H",
+          0,
+          1
+        ],
+        [
+          "H",
+          1,
+          3
+        ],
+        [
+          "V",
+          2,
+          0
+        ]
+      ],
+      "stable_track_truth": [
+        {
+          "track_id": 0,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "H",
+            2,
+            3
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 4,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "H",
+            0,
+            2
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 8,
+          "view_count": 3,
+          "conflicts": 4,
+          "topology_hint": [
+            "V",
+            6,
+            3
+          ],
+          "posthoc_truth_wall": false
+        },
+        {
+          "track_id": 29,
+          "view_count": 3,
+          "conflicts": 3,
+          "topology_hint": [
+            "V",
+            6,
+            2
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 36,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 40,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 54,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "H",
+            2,
+            4
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 64,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            7,
+            0
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 66,
+          "view_count": 4,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 76,
+          "view_count": 3,
+          "conflicts": 2,
+          "topology_hint": [
+            "H",
+            1,
+            5
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 87,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "H",
+            1,
+            5
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 92,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            4,
+            1
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 117,
+          "view_count": 3,
+          "conflicts": 3,
+          "topology_hint": [
+            "H",
+            0,
+            6
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 131,
+          "view_count": 4,
+          "conflicts": 1,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 178,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 195,
+          "view_count": 3,
+          "conflicts": 1,
+          "topology_hint": [
+            "H",
+            1,
+            6
+          ],
+          "posthoc_truth_wall": false
+        },
+        {
+          "track_id": 216,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 230,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 248,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            6,
+            2
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 254,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 313,
+          "view_count": 3,
+          "conflicts": 1,
+          "topology_hint": [
+            "V",
+            5,
+            3
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 455,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 458,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 467,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 474,
+          "view_count": 3,
+          "conflicts": 12,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 479,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 483,
+          "view_count": 3,
+          "conflicts": 2,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 517,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 661,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 771,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 782,
+          "view_count": 3,
+          "conflicts": 1,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 809,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 854,
+          "view_count": 3,
+          "conflicts": 1,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 879,
+          "view_count": 3,
+          "conflicts": 9,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 884,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 959,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 1044,
+          "view_count": 3,
+          "conflicts": 5,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 1074,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 1156,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            6,
+            5
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 1337,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 1339,
+          "view_count": 3,
+          "conflicts": 1,
+          "topology_hint": [
+            "V",
+            3,
+            5
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 1361,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            2,
+            4
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 1362,
+          "view_count": 3,
+          "conflicts": 1,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 1392,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 1410,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            1,
+            5
+          ],
+          "posthoc_truth_wall": false
+        },
+        {
+          "track_id": 1413,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 1424,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            3,
+            4
+          ],
+          "posthoc_truth_wall": false
+        },
+        {
+          "track_id": 1434,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 1448,
+          "view_count": 3,
+          "conflicts": 3,
+          "topology_hint": [
+            "H",
+            7,
+            1
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 1479,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 1546,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 1608,
+          "view_count": 4,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            1,
+            5
+          ],
+          "posthoc_truth_wall": false
+        },
+        {
+          "track_id": 1618,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "H",
+            2,
+            2
+          ],
+          "posthoc_truth_wall": false
+        },
+        {
+          "track_id": 1657,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            2,
+            3
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 1659,
+          "view_count": 3,
+          "conflicts": 1,
+          "topology_hint": [
+            "V",
+            2,
+            4
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 1679,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            3,
+            4
+          ],
+          "posthoc_truth_wall": false
+        },
+        {
+          "track_id": 1681,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            2,
+            3
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 1691,
+          "view_count": 3,
+          "conflicts": 3,
+          "topology_hint": [
+            "V",
+            2,
+            3
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 1704,
+          "view_count": 3,
+          "conflicts": 1,
+          "topology_hint": [
+            "V",
+            2,
+            3
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 1740,
+          "view_count": 3,
+          "conflicts": 1,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 1753,
+          "view_count": 3,
+          "conflicts": 1,
+          "topology_hint": [
+            "H",
+            0,
+            3
+          ],
+          "posthoc_truth_wall": false
+        },
+        {
+          "track_id": 1755,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 1769,
+          "view_count": 3,
+          "conflicts": 1,
+          "topology_hint": [
+            "H",
+            0,
+            2
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 1796,
+          "view_count": 3,
+          "conflicts": 4,
+          "topology_hint": [
+            "H",
+            0,
+            0
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 1803,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "H",
+            1,
+            2
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 1809,
+          "view_count": 3,
+          "conflicts": 1,
+          "topology_hint": [
+            "V",
+            0,
+            2
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 1812,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "H",
+            1,
+            2
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 1816,
+          "view_count": 3,
+          "conflicts": 2,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 1851,
+          "view_count": 3,
+          "conflicts": 10,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 1856,
+          "view_count": 3,
+          "conflicts": 2,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 1880,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 1889,
+          "view_count": 3,
+          "conflicts": 1,
+          "topology_hint": [
+            "H",
+            4,
+            0
+          ],
+          "posthoc_truth_wall": false
+        },
+        {
+          "track_id": 1971,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            0,
+            5
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 1978,
+          "view_count": 3,
+          "conflicts": 1,
+          "topology_hint": [
+            "V",
+            1,
+            4
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 1981,
+          "view_count": 3,
+          "conflicts": 9,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 2046,
+          "view_count": 3,
+          "conflicts": 4,
+          "topology_hint": [
+            "H",
+            7,
+            0
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 2104,
+          "view_count": 3,
+          "conflicts": 2,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 2108,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            1,
+            5
+          ],
+          "posthoc_truth_wall": false
+        },
+        {
+          "track_id": 2112,
+          "view_count": 3,
+          "conflicts": 1,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 2124,
+          "view_count": 3,
+          "conflicts": 19,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 2129,
+          "view_count": 3,
+          "conflicts": 5,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 2191,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            1,
+            5
+          ],
+          "posthoc_truth_wall": false
+        },
+        {
+          "track_id": 2287,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 2290,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 2307,
+          "view_count": 3,
+          "conflicts": 2,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 2361,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 2369,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 2386,
+          "view_count": 3,
+          "conflicts": 3,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 2401,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            0,
+            3
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 2691,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            1,
+            2
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 2711,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 2758,
+          "view_count": 3,
+          "conflicts": 47,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 2762,
+          "view_count": 3,
+          "conflicts": 31,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 3022,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "H",
+            0,
+            0
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 3059,
+          "view_count": 3,
+          "conflicts": 2,
+          "topology_hint": [
+            "H",
+            0,
+            1
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 3073,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 3118,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "H",
+            1,
+            3
+          ],
+          "posthoc_truth_wall": false
+        },
+        {
+          "track_id": 3160,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 3167,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 3230,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 3275,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 3324,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 3494,
+          "view_count": 3,
+          "conflicts": 1,
+          "topology_hint": [
+            "V",
+            2,
+            0
+          ],
+          "posthoc_truth_wall": false
+        },
+        {
+          "track_id": 3939,
+          "view_count": 3,
+          "conflicts": 7,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        }
+      ],
+      "truth_use": "post-run only; hint values never enter track association, promotion, or correction"
+    },
+    "raw_odom": {
+      "hint_count": 53,
+      "hints": [
+        [
+          "H",
+          2,
+          3
+        ],
+        [
+          "H",
+          0,
+          2
+        ],
+        [
+          "H",
+          0,
+          4
+        ],
+        [
+          "V",
+          6,
+          2
+        ],
+        [
+          "H",
+          2,
+          4
+        ],
+        [
+          "H",
+          0,
+          2
+        ],
+        [
+          "H",
+          1,
+          5
+        ],
+        [
+          "H",
+          2,
+          5
+        ],
+        [
+          "V",
+          4,
+          1
+        ],
+        [
+          "V",
+          6,
+          2
+        ],
+        [
+          "H",
+          0,
+          6
+        ],
+        [
+          "V",
+          7,
+          1
+        ],
+        [
+          "H",
+          7,
+          6
+        ],
+        [
+          "H",
+          4,
+          5
+        ],
+        [
+          "H",
+          7,
+          6
+        ],
+        [
+          "V",
+          5,
+          4
+        ],
+        [
+          "V",
+          6,
+          5
+        ],
+        [
+          "V",
+          6,
+          6
+        ],
+        [
+          "V",
+          7,
+          4
+        ],
+        [
+          "V",
+          4,
+          5
+        ],
+        [
+          "V",
+          7,
+          5
+        ],
+        [
+          "V",
+          4,
+          5
+        ],
+        [
+          "V",
+          4,
+          3
+        ],
+        [
+          "V",
+          5,
+          3
+        ],
+        [
+          "V",
+          4,
+          3
+        ],
+        [
+          "V",
+          4,
+          5
+        ],
+        [
+          "V",
+          5,
+          3
+        ],
+        [
+          "V",
+          3,
+          4
+        ],
+        [
+          "V",
+          5,
+          3
+        ],
+        [
+          "V",
+          3,
+          3
+        ],
+        [
+          "H",
+          1,
+          3
+        ],
+        [
+          "V",
+          4,
+          3
+        ],
+        [
+          "V",
+          3,
+          3
+        ],
+        [
+          "V",
+          5,
+          1
+        ],
+        [
+          "V",
+          4,
+          1
+        ],
+        [
+          "H",
+          1,
+          3
+        ],
+        [
+          "V",
+          1,
+          2
+        ],
+        [
+          "H",
+          0,
+          1
+        ],
+        [
+          "V",
+          1,
+          2
+        ],
+        [
+          "H",
+          0,
+          0
+        ],
+        [
+          "V",
+          1,
+          5
+        ],
+        [
+          "V",
+          1,
+          3
+        ],
+        [
+          "V",
+          1,
+          5
+        ],
+        [
+          "V",
+          1,
+          5
+        ],
+        [
+          "V",
+          1,
+          5
+        ],
+        [
+          "V",
+          2,
+          3
+        ],
+        [
+          "V",
+          1,
+          5
+        ],
+        [
+          "V",
+          3,
+          2
+        ],
+        [
+          "V",
+          1,
+          5
+        ],
+        [
+          "V",
+          1,
+          3
+        ],
+        [
+          "V",
+          2,
+          2
+        ],
+        [
+          "V",
+          2,
+          1
+        ],
+        [
+          "H",
+          1,
+          1
+        ]
+      ],
+      "stable_track_truth": [
+        {
+          "track_id": 0,
+          "view_count": 3,
+          "conflicts": 1,
+          "topology_hint": [
+            "H",
+            2,
+            3
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 2,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 4,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "H",
+            0,
+            2
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 23,
+          "view_count": 3,
+          "conflicts": 1,
+          "topology_hint": [
+            "H",
+            0,
+            4
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 29,
+          "view_count": 3,
+          "conflicts": 15,
+          "topology_hint": [
+            "V",
+            6,
+            2
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 36,
+          "view_count": 3,
+          "conflicts": 3,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 40,
+          "view_count": 3,
+          "conflicts": 4,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 54,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "H",
+            2,
+            4
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 62,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "H",
+            0,
+            2
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 69,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 82,
+          "view_count": 3,
+          "conflicts": 3,
+          "topology_hint": [
+            "H",
+            1,
+            5
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 92,
+          "view_count": 3,
+          "conflicts": 2,
+          "topology_hint": [
+            "H",
+            2,
+            5
+          ],
+          "posthoc_truth_wall": false
+        },
+        {
+          "track_id": 95,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            4,
+            1
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 105,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            6,
+            2
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 121,
+          "view_count": 3,
+          "conflicts": 4,
+          "topology_hint": [
+            "H",
+            0,
+            6
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 162,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            7,
+            1
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 224,
+          "view_count": 3,
+          "conflicts": 1,
+          "topology_hint": [
+            "H",
+            7,
+            6
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 232,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "H",
+            4,
+            5
+          ],
+          "posthoc_truth_wall": false
+        },
+        {
+          "track_id": 233,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "H",
+            7,
+            6
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 239,
+          "view_count": 3,
+          "conflicts": 1,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 269,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            5,
+            4
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 279,
+          "view_count": 3,
+          "conflicts": 11,
+          "topology_hint": [
+            "V",
+            6,
+            5
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 284,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            6,
+            6
+          ],
+          "posthoc_truth_wall": false
+        },
+        {
+          "track_id": 449,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 456,
+          "view_count": 4,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 461,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 471,
+          "view_count": 3,
+          "conflicts": 17,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 511,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 659,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 667,
+          "view_count": 3,
+          "conflicts": 1,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 721,
+          "view_count": 4,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 892,
+          "view_count": 3,
+          "conflicts": 3,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 896,
+          "view_count": 3,
+          "conflicts": 1,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 908,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 910,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 911,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 949,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 951,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 967,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 1002,
+          "view_count": 3,
+          "conflicts": 8,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 1131,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            7,
+            4
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 1325,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 1326,
+          "view_count": 3,
+          "conflicts": 2,
+          "topology_hint": [
+            "V",
+            4,
+            5
+          ],
+          "posthoc_truth_wall": false
+        },
+        {
+          "track_id": 1339,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            7,
+            5
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 1343,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            4,
+            5
+          ],
+          "posthoc_truth_wall": false
+        },
+        {
+          "track_id": 1349,
+          "view_count": 3,
+          "conflicts": 5,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 1350,
+          "view_count": 3,
+          "conflicts": 2,
+          "topology_hint": [
+            "V",
+            4,
+            3
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 1352,
+          "view_count": 4,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            5,
+            3
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 1354,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 1375,
+          "view_count": 3,
+          "conflicts": 1,
+          "topology_hint": [
+            "V",
+            4,
+            3
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 1377,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 1385,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            4,
+            5
+          ],
+          "posthoc_truth_wall": false
+        },
+        {
+          "track_id": 1400,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            5,
+            3
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 1414,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            3,
+            4
+          ],
+          "posthoc_truth_wall": false
+        },
+        {
+          "track_id": 1415,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 1432,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            5,
+            3
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 1433,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 1495,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 1549,
+          "view_count": 3,
+          "conflicts": 4,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 1561,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            3,
+            3
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 1564,
+          "view_count": 3,
+          "conflicts": 4,
+          "topology_hint": [
+            "H",
+            1,
+            3
+          ],
+          "posthoc_truth_wall": false
+        },
+        {
+          "track_id": 1614,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            4,
+            3
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 1620,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            3,
+            3
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 1783,
+          "view_count": 3,
+          "conflicts": 4,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 1784,
+          "view_count": 3,
+          "conflicts": 4,
+          "topology_hint": [
+            "V",
+            5,
+            1
+          ],
+          "posthoc_truth_wall": false
+        },
+        {
+          "track_id": 1839,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            4,
+            1
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 1847,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "H",
+            1,
+            3
+          ],
+          "posthoc_truth_wall": false
+        },
+        {
+          "track_id": 1947,
+          "view_count": 3,
+          "conflicts": 2,
+          "topology_hint": [
+            "V",
+            1,
+            2
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 1954,
+          "view_count": 3,
+          "conflicts": 2,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 1966,
+          "view_count": 3,
+          "conflicts": 5,
+          "topology_hint": [
+            "H",
+            0,
+            1
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 1978,
+          "view_count": 3,
+          "conflicts": 1,
+          "topology_hint": [
+            "V",
+            1,
+            2
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 1984,
+          "view_count": 3,
+          "conflicts": 11,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 1985,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 2011,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "H",
+            0,
+            0
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 2144,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            1,
+            5
+          ],
+          "posthoc_truth_wall": false
+        },
+        {
+          "track_id": 2156,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 2175,
+          "view_count": 3,
+          "conflicts": 2,
+          "topology_hint": [
+            "V",
+            1,
+            3
+          ],
+          "posthoc_truth_wall": false
+        },
+        {
+          "track_id": 2245,
+          "view_count": 3,
+          "conflicts": 2,
+          "topology_hint": [
+            "V",
+            1,
+            5
+          ],
+          "posthoc_truth_wall": false
+        },
+        {
+          "track_id": 2267,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            1,
+            5
+          ],
+          "posthoc_truth_wall": false
+        },
+        {
+          "track_id": 2312,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            1,
+            5
+          ],
+          "posthoc_truth_wall": false
+        },
+        {
+          "track_id": 2329,
+          "view_count": 3,
+          "conflicts": 1,
+          "topology_hint": [
+            "V",
+            2,
+            3
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 2442,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            1,
+            5
+          ],
+          "posthoc_truth_wall": false
+        },
+        {
+          "track_id": 2479,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 2559,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 2640,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 2686,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            3,
+            2
+          ],
+          "posthoc_truth_wall": false
+        },
+        {
+          "track_id": 2723,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 2776,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            1,
+            5
+          ],
+          "posthoc_truth_wall": false
+        },
+        {
+          "track_id": 2899,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            1,
+            3
+          ],
+          "posthoc_truth_wall": false
+        },
+        {
+          "track_id": 3060,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 3068,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 3091,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            2,
+            2
+          ],
+          "posthoc_truth_wall": false
+        },
+        {
+          "track_id": 3103,
+          "view_count": 3,
+          "conflicts": 3,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 3157,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": [
+            "V",
+            2,
+            1
+          ],
+          "posthoc_truth_wall": false
+        },
+        {
+          "track_id": 3358,
+          "view_count": 3,
+          "conflicts": 9,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 3438,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 3477,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 3483,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 3485,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 3570,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 3888,
+          "view_count": 3,
+          "conflicts": 1,
+          "topology_hint": [
+            "H",
+            1,
+            1
+          ],
+          "posthoc_truth_wall": true
+        },
+        {
+          "track_id": 4451,
+          "view_count": 3,
+          "conflicts": 1,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 4466,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 4503,
+          "view_count": 3,
+          "conflicts": 0,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        },
+        {
+          "track_id": 4518,
+          "view_count": 3,
+          "conflicts": 4,
+          "topology_hint": null,
+          "posthoc_truth_wall": null
+        }
+      ],
+      "truth_use": "post-run only; hint values never enter track association, promotion, or correction"
+    }
+  }
+}

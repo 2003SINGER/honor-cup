@@ -7,6 +7,7 @@
 | `dynamic-wall-snap` | `replay_dynamic_wall_snap.py` | 理想格线关联随里程计漂移失效；不能上线。 |
 | `continuous-wall-geometry` | `replay_continuous_wall_geometry.py` | 线坐标可连续，但以格边为历史主键仍有冲突；不能上线。 |
 | `pointcloud-wall-match` | `replay_pointcloud_wall_match.py` | 从融合端点拟合实测墙段并按本格真实点切长墙；独立视角 bootstrap 未成功，校正数为零。 |
+| `physical-wall-tracks` | `replay_physical_wall_tracks.py` | 连续物理墙作历史实体；后半程关联率和条件身份评分改善，但晋升后冲突多，尚无定位精度验收。 |
 | `honor-cup-conservative-open.json` | `analyze_conservative_open.py` | 旧包的保守 OPEN 候选有 543/1908 张逐帧票落在真墙上，仅作诊断。 |
 
 报告中的条件性真值评分依赖人工 `(3,0), N` 锚点与物理网格方向正确；该轴向尚无独立测量。动态 `WALL → pose correction` 仍是待验收目标，不能把这些离线输出当作在线导航许可。

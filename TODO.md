@@ -8,6 +8,8 @@
 > 约 11 Hz；10 月 2 日已确认原厂 V1.1.3 并刷入 odom 30 Hz、IMU 30 Hz、
 > 雷达 140 ms 版本，后续 USB 故障与实测见
 > [固件记录](docs/reports/2026-10-02-firmware-probe.md)。轮速 PID 参数仍未知。
+> 10 月 2 日动态墙体回放仍未通过上线验收；结果和 raw-odom 对照见
+> [连续物理墙离线报告](docs/reports/2026-10-02-physical-wall-track-replay.md)。
 
 > 数字只代表所列代码版本与 Gate。任一 seed 失败时，该轮 Gate 不算通过。
 > 历史 R3 真相板见 `docs/decisions/2026-09-25-旧TODO-R3真相板.md`。

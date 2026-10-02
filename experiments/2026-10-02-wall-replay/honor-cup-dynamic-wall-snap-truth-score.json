@@ -1,0 +1,13 @@
+{
+  "evaluation": "post-hoc prior-wall scoring; truth is read only after the estimation JSONL is complete",
+  "truth_path": "/Users/2003singer/Workspace/Projects/honor cup/field/maze_truth_7x7.json",
+  "frame_wall_observations": 151044,
+  "frame_wall_true_positive": 80072,
+  "frame_wall_false_positive": 70972,
+  "frame_wall_precision": 0.5301236725722306,
+  "unique_predicted_edges": 105,
+  "unique_true_positive_edges": 55,
+  "unique_false_positive_edges": 50,
+  "unique_edge_precision": 0.5238095238095238,
+  "limitations": "frame votes are temporally correlated; truth physical image transform unresolved; conditional on session anchor and ideal grid axes"
+}

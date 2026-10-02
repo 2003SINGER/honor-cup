@@ -1,0 +1,581 @@
+{
+  "result": "DIAGNOSTIC_FAILURE_NOT_FOR_ONLINE_USE",
+  "result_note": "This raw-candidate replay does not establish reliable correction. Acceptance here is not evidence of online readiness; the map is vulnerable to correlated-frame self-reinforcement.",
+  "session": "20261001_174719_joystick_full_maze",
+  "scan_topic": "/scan_multi",
+  "odom_topic": "/odom_raw",
+  "scan_frame": "base_link",
+  "odom_frame": "odom",
+  "base_frame": "base_footprint",
+  "scans_replayed": 1763,
+  "scans_skipped_no_odom_pose": 6,
+  "odom_bracket_max_gap_s": 0.15,
+  "proposal_reasons": {
+    "NO_ODOM_BRACKET": 6,
+    "INSUFFICIENT_WALL_DIRECTIONS": 2,
+    "POOR_WALL_SUPPORT": 222,
+    "POOR_FIT": 1227,
+    "UNOBSERVABLE": 200,
+    "RESIDUAL_TOO_LARGE": 2,
+    "INSUFFICIENT_WALL_SUPPORT": 18,
+    "CORRECTION_EXCEEDS_BOUND": 15,
+    "ACCEPTED": 16,
+    "INSUFFICIENT_ASSOCIATIONS": 61
+  },
+  "proposals_applied": 16,
+  "wall_votes_added": 17522,
+  "frames_with_prior_confirmed_walls": 1761,
+  "max_prior_confirmed_wall_segments": 105,
+  "final_confirmed_wall_segments": 105,
+  "final_edge_states": [
+    {
+      "edge_id": "B|0|0|S",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "B|0|0|W",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "B|0|1|W",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "B|0|2|W",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "B|0|3|W",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "B|0|4|W",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "B|0|5|W",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "B|0|6|W",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "B|1|0|S",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "B|2|0|S",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "B|3|0|S",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "B|4|0|S",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "B|4|6|N",
+      "state": "WALL",
+      "score": 3.0
+    },
+    {
+      "edge_id": "B|5|0|S",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "B|5|6|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "B|6|0|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "B|6|0|S",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "B|6|1|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "B|6|2|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "B|6|4|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "B|6|5|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|0|0|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|0|0|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|0|1|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|0|1|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|0|2|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|0|2|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|0|3|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|0|3|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|0|4|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|0|4|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|0|5|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|0|5|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|0|6|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|1|0|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|1|0|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|1|1|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|1|1|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|1|2|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|1|2|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|1|3|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|1|3|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|1|4|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|1|4|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|1|5|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|1|5|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|1|6|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|2|0|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|2|0|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|2|1|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|2|1|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|2|2|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|2|2|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|2|3|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|2|3|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|2|4|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|2|4|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|2|5|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|2|5|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|2|6|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|3|0|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|3|0|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|3|1|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|3|1|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|3|2|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|3|2|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|3|3|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|3|3|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|3|4|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|3|4|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|3|5|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|3|5|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|3|6|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|4|0|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|4|0|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|4|1|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|4|1|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|4|2|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|4|2|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|4|3|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|4|3|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|4|4|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|4|4|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|4|5|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|4|5|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|4|6|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|5|0|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|5|0|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|5|1|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|5|1|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|5|2|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|5|2|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|5|3|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|5|3|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|5|4|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|5|4|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|5|5|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|5|5|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|5|6|E",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|6|0|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|6|1|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|6|2|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|6|3|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|6|4|N",
+      "state": "WALL",
+      "score": 4
+    },
+    {
+      "edge_id": "I|6|5|N",
+      "state": "WALL",
+      "score": 4
+    }
+  ],
+  "final_maze_from_odom": [
+    3.0346013733784103,
+    -1.3850253254745364,
+    1.9989789593823075
+  ],
+  "estimator_inputs": "previous-frame EdgeMap soft SENSOR WALL edges only; diagnostic raw candidates, not production-trusted physical walls; no truth map; no OPEN votes",
+  "edge_map_confirmation_limit": "EdgeMap confirms SENSOR WALL after two distinct scan stamps; this replay bypasses TrustPolicy and is susceptible to adjacent-frame correlated evidence and self-reinforcement",
+  "observability_limit": "A single wall direction constrains wall-normal translation and some yaw but leaves along-wall translation unobservable; the existing solver requires nonparallel wall support and should reject straight-corridor-only frames.",
+  "scan_geometry_limit": "/scan_multi has merged endpoints; original beam source/origin/time lost; no deskew or OPEN inference",
+  "log_path": "/tmp/honor-cup-dynamic-wall-snap.jsonl",
+  "posthoc_truth_score": {
+    "evaluation": "post-hoc prior-wall scoring; truth is read only after the estimation JSONL is complete",
+    "truth_path": "/Users/2003singer/Workspace/Projects/honor cup/field/maze_truth_7x7.json",
+    "frame_wall_observations": 151044,
+    "frame_wall_true_positive": 80072,
+    "frame_wall_false_positive": 70972,
+    "frame_wall_precision": 0.5301236725722306,
+    "unique_predicted_edges": 105,
+    "unique_true_positive_edges": 55,
+    "unique_false_positive_edges": 50,
+    "unique_edge_precision": 0.5238095238095238,
+    "limitations": "frame votes are temporally correlated; truth physical image transform unresolved; conditional on session anchor and ideal grid axes"
+  },
+  "truth_score_path": "/tmp/honor-cup-dynamic-wall-snap-truth-score.json"
+}

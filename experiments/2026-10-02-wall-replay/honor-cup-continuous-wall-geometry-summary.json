@@ -1,0 +1,271 @@
+{
+  "result": "OFFLINE_EXPERIMENT_ONLY",
+  "session": "20261001_174719_joystick_full_maze",
+  "model": "discrete edge identity; continuous axis-aligned normal coordinate per edge",
+  "prediction": "previous corrected pose composed with relative wheel-odometry increment",
+  "update_order": "historical stable conflict-free walls correct pose first; current scan updates candidate geometry after correction; promoted geometry is frozen and conflicts only logged",
+  "scans": 1763,
+  "skipped_no_odom_bracket": 6,
+  "edge_measurements": 7176,
+  "stable_edges_promoted": 20,
+  "stable_edges_at_end": 20,
+  "stable_edges_with_conflicts": 19,
+  "total_post_promotion_conflicting_viewpoints": 104,
+  "stable_edge_geometry": [
+    {
+      "edge_id": "((2, 0), 'N')",
+      "orientation": "H",
+      "coordinate_m": 0.4274041279026196,
+      "ideal_coordinate_m": 0.4,
+      "offset_from_ideal_m": 0.02740412790261959,
+      "independent_view_clusters": 20,
+      "conflict_viewpoints": 6
+    },
+    {
+      "edge_id": "('B', (1, 0), 'S')",
+      "orientation": "H",
+      "coordinate_m": 0.0597068919395961,
+      "ideal_coordinate_m": 0.0,
+      "offset_from_ideal_m": 0.0597068919395961,
+      "independent_view_clusters": 20,
+      "conflict_viewpoints": 2
+    },
+    {
+      "edge_id": "((4, 1), 'E')",
+      "orientation": "V",
+      "coordinate_m": 2.0318366990839687,
+      "ideal_coordinate_m": 2.0,
+      "offset_from_ideal_m": 0.03183669908396869,
+      "independent_view_clusters": 14,
+      "conflict_viewpoints": 9
+    },
+    {
+      "edge_id": "((3, 5), 'N')",
+      "orientation": "H",
+      "coordinate_m": 2.3994225205606234,
+      "ideal_coordinate_m": 2.4000000000000004,
+      "offset_from_ideal_m": -0.0005774794393769156,
+      "independent_view_clusters": 19,
+      "conflict_viewpoints": 8
+    },
+    {
+      "edge_id": "((2, 5), 'E')",
+      "orientation": "V",
+      "coordinate_m": 1.1878008326132186,
+      "ideal_coordinate_m": 1.2000000000000002,
+      "offset_from_ideal_m": -0.012199167386781617,
+      "independent_view_clusters": 24,
+      "conflict_viewpoints": 14
+    },
+    {
+      "edge_id": "((3, 5), 'E')",
+      "orientation": "V",
+      "coordinate_m": 1.6397382695602025,
+      "ideal_coordinate_m": 1.6,
+      "offset_from_ideal_m": 0.03973826956020243,
+      "independent_view_clusters": 12,
+      "conflict_viewpoints": 3
+    },
+    {
+      "edge_id": "((1, 4), 'E')",
+      "orientation": "V",
+      "coordinate_m": 0.8507731274610308,
+      "ideal_coordinate_m": 0.8,
+      "offset_from_ideal_m": 0.0507731274610308,
+      "independent_view_clusters": 22,
+      "conflict_viewpoints": 8
+    },
+    {
+      "edge_id": "((3, 3), 'N')",
+      "orientation": "H",
+      "coordinate_m": 1.5474009094643628,
+      "ideal_coordinate_m": 1.6,
+      "offset_from_ideal_m": -0.05259909053563727,
+      "independent_view_clusters": 7,
+      "conflict_viewpoints": 2
+    },
+    {
+      "edge_id": "((3, 4), 'E')",
+      "orientation": "V",
+      "coordinate_m": 1.6577156613263235,
+      "ideal_coordinate_m": 1.6,
+      "offset_from_ideal_m": 0.05771566132632344,
+      "independent_view_clusters": 12,
+      "conflict_viewpoints": 2
+    },
+    {
+      "edge_id": "((2, 5), 'N')",
+      "orientation": "H",
+      "coordinate_m": 2.471881164744305,
+      "ideal_coordinate_m": 2.4000000000000004,
+      "offset_from_ideal_m": 0.07188116474430473,
+      "independent_view_clusters": 9,
+      "conflict_viewpoints": 4
+    },
+    {
+      "edge_id": "((2, 2), 'E')",
+      "orientation": "V",
+      "coordinate_m": 1.2920789054696846,
+      "ideal_coordinate_m": 1.2000000000000002,
+      "offset_from_ideal_m": 0.09207890546968445,
+      "independent_view_clusters": 21,
+      "conflict_viewpoints": 2
+    },
+    {
+      "edge_id": "((2, 0), 'E')",
+      "orientation": "V",
+      "coordinate_m": 1.2198456819632895,
+      "ideal_coordinate_m": 1.2000000000000002,
+      "offset_from_ideal_m": 0.019845681963289286,
+      "independent_view_clusters": 18,
+      "conflict_viewpoints": 7
+    },
+    {
+      "edge_id": "('B', (0, 0), 'S')",
+      "orientation": "H",
+      "coordinate_m": 0.06686856607341002,
+      "ideal_coordinate_m": 0.0,
+      "offset_from_ideal_m": 0.06686856607341002,
+      "independent_view_clusters": 23,
+      "conflict_viewpoints": 11
+    },
+    {
+      "edge_id": "((1, 2), 'N')",
+      "orientation": "H",
+      "coordinate_m": 1.2579179873274473,
+      "ideal_coordinate_m": 1.2000000000000002,
+      "offset_from_ideal_m": 0.05791798732744713,
+      "independent_view_clusters": 23,
+      "conflict_viewpoints": 4
+    },
+    {
+      "edge_id": "((1, 2), 'E')",
+      "orientation": "V",
+      "coordinate_m": 0.877465176958979,
+      "ideal_coordinate_m": 0.8,
+      "offset_from_ideal_m": 0.07746517695897892,
+      "independent_view_clusters": 15,
+      "conflict_viewpoints": 1
+    },
+    {
+      "edge_id": "((0, 3), 'E')",
+      "orientation": "V",
+      "coordinate_m": 0.44851619324998865,
+      "ideal_coordinate_m": 0.4,
+      "offset_from_ideal_m": 0.048516193249988626,
+      "independent_view_clusters": 16,
+      "conflict_viewpoints": 4
+    },
+    {
+      "edge_id": "('B', (0, 2), 'W')",
+      "orientation": "V",
+      "coordinate_m": 0.022624609501927778,
+      "ideal_coordinate_m": 0.0,
+      "offset_from_ideal_m": 0.022624609501927778,
+      "independent_view_clusters": 8,
+      "conflict_viewpoints": 0
+    },
+    {
+      "edge_id": "((0, 5), 'E')",
+      "orientation": "V",
+      "coordinate_m": 0.38103403769152727,
+      "ideal_coordinate_m": 0.4,
+      "offset_from_ideal_m": -0.01896596230847275,
+      "independent_view_clusters": 17,
+      "conflict_viewpoints": 6
+    },
+    {
+      "edge_id": "((0, 4), 'N')",
+      "orientation": "H",
+      "coordinate_m": 2.0717509227420168,
+      "ideal_coordinate_m": 2.0,
+      "offset_from_ideal_m": 0.07175092274201678,
+      "independent_view_clusters": 21,
+      "conflict_viewpoints": 6
+    },
+    {
+      "edge_id": "((0, 3), 'N')",
+      "orientation": "H",
+      "coordinate_m": 1.640789454636997,
+      "ideal_coordinate_m": 1.6,
+      "offset_from_ideal_m": 0.0407894546369969,
+      "independent_view_clusters": 21,
+      "conflict_viewpoints": 5
+    }
+  ],
+  "accepted_pose_corrections": 107,
+  "correction_rejections": {
+    "INSUFFICIENT_WALL_DIRECTIONS": 1130,
+    "CORRECTION_EXCEEDS_BOUND": 35,
+    "POOR_WALL_SUPPORT": 107,
+    "POOR_FIT": 111,
+    "INSUFFICIENT_WALL_SUPPORT": 183,
+    "INSUFFICIENT_ASSOCIATIONS": 56,
+    "INSUFFICIENT_FINAL_WALL_SUPPORT": 3,
+    "UNOBSERVABLE": 31
+  },
+  "correction_translation_m_p50_p90": [
+    0.01786685554350537,
+    0.039728948933725416
+  ],
+  "stable_wall_offset_from_ideal_m_abs_p50_p90": [
+    0.0507731274610308,
+    0.07188116474430473
+  ],
+  "wheel_odom_path_between_scan_samples_m": 37.84821327193124,
+  "integrated_predicted_path_m": 37.848213271931236,
+  "deviation_from_anchor_plus_raw_odom_m_p50_p90_final_max": [
+    1.0695084443661336e-14,
+    0.3274702712145878,
+    0.5696313523293333,
+    0.5696313523293333
+  ],
+  "yaw_deviation_from_anchor_plus_raw_odom_rad_p50_p90_final_max": [
+    2.6645352591003757e-15,
+    0.3593270562266024,
+    0.35932705622660227,
+    0.3593270562266029
+  ],
+  "stability_rule": "one robust estimate per edge per scan; at least four wheel-odometry pose clusters; clusters differ by >=0.15m or >=15deg and are >=1s apart; median absolute deviation <=12mm and full spread <=40mm; odometry drift can still fake viewpoint diversity",
+  "geometry": "Manhattan orientation and ideal 0.4m segment identity remain assumptions; only each segment normal coordinate can move; physical wall tilt/length distortion not modeled",
+  "limitations": [
+    "odometry drift can contaminate geometry before any stable wall correction; stability is temporal and viewpoint-based, not ground-truth validation",
+    "edge association still uses nearest ideal-grid line within 0.10m to name candidate edge IDs",
+    "only merged /scan_multi is present; sensor origins, source identity, beam times are unavailable, so OPEN evidence and true deskew are excluded",
+    "there is no independent physical pose or wall-survey truth; truth topology can score discrete IDs only under the unresolved session anchor/axis assumption",
+    "prototype is causal offline evidence, not production-ready and not applied to the vehicle"
+  ],
+  "post_replay_topology_score": {
+    "anchor_assumption": "session.yaml cell/heading and ideal 0.4m axes are correct; physical image transform remains unresolved",
+    "stable_edges": 20,
+    "true_positive": 8,
+    "false_positive": 12,
+    "missed_true_wall_edges": 54,
+    "precision": 0.4,
+    "recall": 0.12903225806451613,
+    "false_positive_edge_ids": [
+      "((0, 3), 'E')",
+      "((0, 3), 'N')",
+      "((0, 5), 'E')",
+      "((1, 2), 'E')",
+      "((1, 2), 'N')",
+      "((2, 0), 'E')",
+      "((2, 2), 'E')",
+      "((2, 5), 'N')",
+      "((3, 3), 'N')",
+      "((3, 5), 'E')",
+      "((3, 5), 'N')",
+      "((4, 1), 'E')"
+    ],
+    "true_positive_edge_ids": [
+      "('B', (0, 0), 'S')",
+      "('B', (0, 2), 'W')",
+      "('B', (1, 0), 'S')",
+      "((0, 4), 'N')",
+      "((1, 4), 'E')",
+      "((2, 0), 'N')",
+      "((2, 5), 'E')",
+      "((3, 4), 'E')"
+    ]
+  }
+}

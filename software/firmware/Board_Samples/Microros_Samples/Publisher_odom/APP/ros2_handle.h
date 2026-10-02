@@ -7,7 +7,7 @@
 
 
 // 定时器间隔时间，单位:ms, 频率=1000/timeout
-#define ODOM_PUBLISHER_TIMEOUT       (50)
+#define ODOM_PUBLISHER_TIMEOUT       (20)
 
 // ROS运行超时时间
 #define ROS2_SPIN_TIMEOUT_MS         (10)

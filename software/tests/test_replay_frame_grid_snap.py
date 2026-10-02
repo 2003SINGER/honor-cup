@@ -191,6 +191,55 @@ class FrameGridSnapTests(unittest.TestCase):
     self.assertEqual(scored['piece_fp'][boundary]['samples'][0]['line_k'],0)
     self.assertEqual(json.loads(json.dumps(scored))['segment_fp'][boundary]['count'],2)
 
+  def test_edge_roi_features_keep_real_half_wall_and_do_not_cross_empty_cell(self):
+    pose = Pose2D(0.0, 0.0, 0.0)
+    # A half wall in cell 0, a gap in cell 1, and a distant hit in cell 2.
+    points = [(0.405, y) for y in (0.05, 0.10, 0.15, 0.20, 0.25, 0.30)]
+    points += [(0.405, y) for y in (0.85, 0.90, 0.95, 1.0, 1.05, 1.10)]
+    edge0 = snap._edge_local_features('V', 1, 0, pose, points)
+    edge1 = snap._edge_local_features('V', 1, 1, pose, points)
+    edge2 = snap._edge_local_features('V', 1, 2, pose, points)
+
+    self.assertEqual(edge0['roi']['2']['support_points'], 6)
+    self.assertAlmostEqual(edge0['roi']['2']['span_m'], 0.25)
+    self.assertAlmostEqual(edge0['roi']['2']['max_gap_m'], 0.05)
+    self.assertAlmostEqual(edge0['roi']['2']['longest_contiguous_span_m'], 0.25)
+    self.assertEqual(edge0['roi']['2']['longest_contiguous_support_points'], 6)
+    self.assertEqual(edge1['roi']['5']['support_points'], 0)
+    self.assertEqual(edge2['roi']['5']['support_points'], 6)
+    for offset in edge0['roi_signed_normal_m']:
+      self.assertAlmostEqual(offset, 0.005)
+    self.assertFalse(edge0['heading_angle_is_incidence'])
+
+  def test_edge_roi_reports_separated_clusters_without_inflating_contiguous_span(self):
+    pose = Pose2D(0.0, 0.0, 0.0)
+    tangents = (0.05, 0.06, 0.07, 0.30, 0.31, 0.32)
+    points = [(0.405, y) for y in tangents]
+    roi = snap._edge_local_features('V', 1, 0, pose, points)['roi']['2']
+
+    self.assertEqual(roi['support_points'], 6)
+    self.assertAlmostEqual(roi['span_m'], 0.27)
+    self.assertAlmostEqual(roi['max_gap_m'], 0.23)
+    self.assertAlmostEqual(roi['longest_contiguous_span_m'], 0.02)
+    self.assertEqual(roi['longest_contiguous_support_points'], 3)
+
+  def test_edge_roi_features_expose_far_side_view_and_stationary_proxies(self):
+    pose = Pose2D(1.8, 2.0, math.pi / 2)
+    # Convert a real grid wall from maze coordinates into this far robot frame.
+    points = []
+    for y in (0.05, 0.10, 0.15, 0.20, 0.25, 0.30):
+      dx, dy = 0.405 - pose.x, y - pose.y
+      points.append((math.cos(pose.yaw)*dx + math.sin(pose.yaw)*dy,
+                     -math.sin(pose.yaw)*dx + math.cos(pose.yaw)*dy))
+    feature = snap._edge_local_features(
+        'V', 1, 0, pose, points, odom_yaw_rate_rad_s=0.0)
+
+    self.assertEqual(feature['roi']['5']['support_points'], 6)
+    self.assertGreater(min(feature['robot_to_edge_endpoint_m']), 2.0)
+    self.assertAlmostEqual(feature['heading_to_wall_normal_rad'], math.pi / 2)
+    self.assertEqual(feature['odom_yaw_rate_rad_s'], 0.0)
+    self.assertGreaterEqual(feature['normal_mad_m'], 0.0)
+
 
 if __name__ == '__main__':
     unittest.main()

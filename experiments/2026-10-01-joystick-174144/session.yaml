@@ -1,0 +1,17 @@
+label: joystick_full_maze
+timestamp: 20261001_174144
+git_sha: unknown
+deployed_git_sha: de2fd55e84aae468bbf410b7fbb2b90da7bf2a94
+ros_distro: humble
+cell: [3, 0]
+heading: N
+scan_topic: /scan_multi
+odom_topic: /odom_raw
+imu_topic: /imu/data_raw
+joy_topic: /joy
+joy_topic_visible_at_start: true
+laser_frame: base_link
+odom_frame: odom
+base_frame: base_footprint
+extrinsic_yaml: none
+config: none

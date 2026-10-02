@@ -30,6 +30,9 @@ from m3pro_nav.grid_association import edge_id_for_line
 DEFAULT_SESSION = ROOT / 'field_data' / '20261001_174719_joystick_full_maze'
 DEFAULT_LOG = Path('/tmp/honor-cup-frame-grid-snap.jsonl')
 DEFAULT_SUMMARY = Path('/tmp/honor-cup-frame-grid-snap-summary.json')
+EDGE_ROI_HALF_WIDTH_M = .12
+EDGE_ROI_HALF_WIDTHS_M = {'2': .02, '3': .03, '4': .04, '5': .05}
+EDGE_ROI_CONTIGUITY_GAP_M = .06
 
 
 @dataclass(frozen=True)
@@ -351,7 +354,76 @@ def _heldout_residual(segments, pose, dx=0., dy=0., dyaw=0.):
     return _median(vals)
 
 
-def _wall_edge_hits(segments, source_pose, corrected_pose):
+def _pose_local_point(point, corrected_pose):
+    """Project one base-frame endpoint under this frame's corrected pose."""
+    ct, st = math.cos(corrected_pose.yaw), math.sin(corrected_pose.yaw)
+    return (corrected_pose.x + ct*point[0] - st*point[1],
+            corrected_pose.y + st*point[0] + ct*point[1])
+
+
+def _edge_local_features(orientation, k, j, corrected_pose, raw_local_points,
+                         *, roi_halfwidth_m=EDGE_ROI_HALF_WIDTH_M,
+                         odom_yaw_rate_rad_s=None):
+    """Truth-free endpoint features inside one canonical edge rectangle.
+
+    These are geometric endpoint proxies. The heading angle is not true
+    per-beam lidar incidence because the merged scan has no source-ray IDs.
+    """
+    lo, hi = j * CELL_SIZE_M, (j + 1) * CELL_SIZE_M
+    grid_normal = k * CELL_SIZE_M
+    vertical = orientation == 'V'
+    endpoints = []
+    for point in raw_local_points:
+        x, y = _pose_local_point(point, corrected_pose)
+        tangent = y if vertical else x
+        normal = x if vertical else y
+        if lo <= tangent < hi and abs(normal - grid_normal) <= roi_halfwidth_m:
+            endpoints.append((tangent, normal - grid_normal))
+    roi = {}
+    for cm, halfwidth in EDGE_ROI_HALF_WIDTHS_M.items():
+        selected = sorted(t for t, offset in endpoints if abs(offset) <= halfwidth)
+        max_gap = max((b - a for a, b in zip(selected, selected[1:])), default=0.)
+        clusters = []
+        for tangent in selected:
+            if not clusters or tangent - clusters[-1][-1] > EDGE_ROI_CONTIGUITY_GAP_M:
+                clusters.append([tangent])
+            else:
+                clusters[-1].append(tangent)
+        longest = max(clusters,
+                      key=lambda run: (run[-1] - run[0], len(run)), default=[])
+        roi[cm] = {'support_points': len(selected),
+                   'span_m': max(selected) - min(selected) if len(selected) >= 2 else 0.,
+                   'max_gap_m': max_gap,
+                   'longest_contiguous_span_m': (longest[-1] - longest[0]
+                                                   if len(longest) >= 2 else 0.),
+                   'longest_contiguous_support_points': len(longest)}
+    angle_to_normal = corrected_pose.yaw - (0. if vertical else math.pi/2)
+    angle_to_normal = abs(_wrap_pi(angle_to_normal))
+    angle_to_normal = min(angle_to_normal, abs(math.pi - angle_to_normal))
+    edge_start = (grid_normal, lo) if vertical else (lo, grid_normal)
+    edge_end = (grid_normal, hi) if vertical else (hi, grid_normal)
+    return {
+        'roi_tangential_interval_m': [lo, hi],
+        'roi_halfwidth_m': roi_halfwidth_m,
+        'roi': roi,
+        'roi_tangent_m': [t for t, _ in endpoints],
+        'roi_signed_normal_m': [offset for _, offset in endpoints],
+        'normal_mad_m': _mad([offset for _, offset in endpoints]),
+        'robot_to_edge_endpoint_m': [
+            math.hypot(corrected_pose.x - p[0], corrected_pose.y - p[1])
+            for p in (edge_start, edge_end)],
+        'heading_to_wall_normal_rad': angle_to_normal,
+        'odom_yaw_rate_rad_s': odom_yaw_rate_rad_s,
+        'heading_angle_is_incidence': False,
+        'heading_to_wall_normal_semantics': (
+            'vehicle heading proxy; merged /scan_multi has no source-ray IDs, '
+            'so this is not per-beam incidence'),
+    }
+
+
+def _wall_edge_hits(segments, source_pose, corrected_pose, raw_local_points=(),
+                    *, roi_halfwidth_m=EDGE_ROI_HALF_WIDTH_M,
+                    odom_yaw_rate_rad_s=None):
     """Per-frame, per-cell WALL hit evidence after correction; truth-free."""
     by_edge = {}
     for segment_index, segment in enumerate(segments):
@@ -408,6 +480,11 @@ def _wall_edge_hits(segments, source_pose, corrected_pose):
                     'support_points': len(points), 'span_m': span,
                     'normal_residual_m': residual, 'distance_m': distance,
                     'same_frame_piece_count': 1,
+                    **_edge_local_features(
+                        'V' if vertical else 'H', k, j,
+                        corrected_pose, raw_local_points,
+                        roi_halfwidth_m=roi_halfwidth_m,
+                        odom_yaw_rate_rad_s=odom_yaw_rate_rad_s),
                 }
                 previous = by_edge.get(edge)
                 if previous is None:
@@ -423,12 +500,12 @@ def _wall_edge_hits(segments, source_pose, corrected_pose):
 
 
 def replay(session, log_path=DEFAULT_LOG, summary_path=DEFAULT_SUMMARY,
-           truth_path=None):
+           truth_path=None, edge_roi_halfwidth_m=EDGE_ROI_HALF_WIDTH_M):
     if log_path.parent != Path('/tmp') or summary_path.parent != Path('/tmp'):
         raise ValueError('outputs must be directly under /tmp')
     db,topics,values,odoms,extrinsic,anchor=_read_bag(session)
     counts=Counter(); rows=[]; truth_rows=[]
-    prev_odom=prev_corrected=None; first_odom=None; stamp0=None
+    prev_odom=prev_corrected=None; first_odom=None; stamp0=prev_scan_stamp=None
     try:
         query='SELECT timestamp,data FROM messages WHERE topic_id=? ORDER BY timestamp'
         for _,blob in db.execute(query,(topics[values['scan_topic']][0],)):
@@ -442,6 +519,11 @@ def replay(session, log_path=DEFAULT_LOG, summary_path=DEFAULT_SUMMARY,
                 pred=_pose(audit.compose(_tf(prev_corrected),delta))
             raw_delta=audit.compose(audit.inverse(_tf(first_odom)),_tf(odom))
             raw_pose=_pose(audit.compose(_tf(anchor),raw_delta))
+            odom_yaw_rate = None
+            if prev_odom is not None and prev_scan_stamp is not None:
+                dt = scan['stamp'] - prev_scan_stamp
+                if dt > 0:
+                    odom_yaw_rate = _wrap_pi(odom.yaw - prev_odom.yaw) / dt
             _,_,local_pts=audit.scan_frame(scan,Pose2D(0.,0.,0.),_tf(Pose2D(0.,0.,0.)),extrinsic)
             c,s=math.cos(pred.yaw),math.sin(pred.yaw)
             segs=extract_segments([(p.x,p.y) for p in local_pts])
@@ -485,7 +567,11 @@ def replay(session, log_path=DEFAULT_LOG, summary_path=DEFAULT_SUMMARY,
                 'x_residual_median':result.x_residual_median,'x_residual_mad':result.x_residual_mad,
                 'y_residual_median':result.y_residual_median,'y_residual_mad':result.y_residual_mad},
               'heldout_wall_count':len(held),
-              'wall_edge_hits':_wall_edge_hits(projected,pred,current),
+              'odom_yaw_rate_rad_s':odom_yaw_rate,
+              'wall_edge_hits':_wall_edge_hits(
+                  projected,pred,current,[(p.x,p.y) for p in local_pts],
+                  roi_halfwidth_m=edge_roi_halfwidth_m,
+                  odom_yaw_rate_rad_s=odom_yaw_rate),
               'heldout_pre_residual_m':held_pre,
               'heldout_post_residual_m':held_post,
               'heldout_raw_odom_residual_m':held_raw,
@@ -496,6 +582,7 @@ def replay(session, log_path=DEFAULT_LOG, summary_path=DEFAULT_SUMMARY,
             truth_rows.append((pred,current,raw_pose,projected))
             counts['accepted']+=int(result.accepted); counts[result.mode]+=1
             prev_odom,prev_corrected=odom,current
+            prev_scan_stamp=scan['stamp']
     finally: db.close()
     # Summarize causal motion and grid jumps before any truth access.
     jumps=[]; smooth=[]
@@ -685,7 +772,11 @@ def main():
     p.add_argument('--log',type=Path,default=DEFAULT_LOG)
     p.add_argument('--summary',type=Path,default=DEFAULT_SUMMARY)
     p.add_argument('--truth-score',type=Path,default=None)
+    p.add_argument('--edge-roi-halfwidth-m',type=float,
+                   default=EDGE_ROI_HALF_WIDTH_M,
+                   help='maximum normal half-width retained for per-edge endpoint features')
     a=p.parse_args()
-    print(json.dumps(replay(a.session,a.log,a.summary,a.truth_score),indent=2,ensure_ascii=False))
+    print(json.dumps(replay(a.session,a.log,a.summary,a.truth_score,
+                            a.edge_roi_halfwidth_m),indent=2,ensure_ascii=False))
 
 if __name__=='__main__': main()

@@ -1,0 +1,42 @@
+# Current pipeline and project entry points
+
+Checked against the working tree on 2026-10-03. This is a navigation index; the algorithm contract remains [`docs/design/算法规范.md`](../design/算法规范.md), and layer details remain in [`软件架构.md`](软件架构.md).
+
+## Module status
+
+`ACTIVE` means maintained code, **not** permission for autonomous driving. `DIAGNOSTIC` means read-only/offline or dry-run evidence, not a production map input. `SUPERSEDED` means the method is no longer a current candidate, while its script stays for reproducibility. `ARCHIVED` applies to historical reports and Git revisions, not duplicated source snapshots.
+
+| Status | Module and entry point | Current boundary |
+|---|---|---|
+| **ACTIVE** | [`nav_runtime_node.py`](../../software/ros2/m3pro_nav/m3pro_nav/nav_runtime_node.py), [`nav_runtime.py`](../../software/ros2/m3pro_nav/m3pro_nav/nav_runtime.py), [`config/nav_runtime.yaml`](../../software/ros2/m3pro_nav/config/nav_runtime.yaml) | ROS callbacks, timers, planner and control code exist. `dry_run` defaults true; trust remains diagnostic-only, correction/extrinsics/anchor are uncalibrated, and `/scan_multi` cannot prove OPEN. Real autonomous exploration is rejected by preflight. The package [`m3pro.launch.py`](../../software/ros2/m3pro_nav/launch/m3pro.launch.py) starts `driver_probe`, not autonomous navigation. |
+| **ACTIVE** | [`stream_nav.py`](../../software/ros2/m3pro_nav/m3pro_nav/stream_nav.py), [`action_horizon.py`](../../software/ros2/m3pro_nav/m3pro_nav/action_horizon.py), [`motion_planner.py`](../../software/ros2/m3pro_nav/m3pro_nav/motion_planner.py), [`motion_executor.py`](../../software/ros2/m3pro_nav/m3pro_nav/motion_executor.py), [`motion_runtime_node.py`](../../software/ros2/m3pro_nav/m3pro_nav/motion_runtime_node.py), [`runtime_v2.py`](../../software/sim/runtime_v2.py) | Fixed geometry, topology and task contracts have simulation coverage; this is not perception, localization or vehicle acceptance. Historical gate counts are preserved in Git (`git show ffd4aca:TODO.md`). |
+| **DIAGNOSTIC** | [`frame_grid_shadow.py`](../../software/ros2/m3pro_nav/m3pro_nav/frame_grid_shadow.py), [`frame_grid_shadow_worker.py`](../../software/ros2/m3pro_nav/m3pro_nav/frame_grid_shadow_worker.py), [`frame_grid_snap.py`](../../software/ros2/m3pro_nav/m3pro_nav/frame_grid_snap.py) | The optional frame solve runs in a child process; planner callback only submits work and collects results. Disabled by default and restricted to dry-run. Mac timing is not Orin timing; see the [shadow checkpoint](../reports/2026-10-02-temporal-wall-runtime-checkpoint.md). |
+| **DIAGNOSTIC** | [`replay_frame_grid_snap.py`](../../software/tools/replay_frame_grid_snap.py), [`sweep_wall_quality.py`](../../software/tools/sweep_wall_quality.py), [`wall_evidence_quality.py`](../../software/ros2/m3pro_nav/m3pro_nav/wall_evidence_quality.py), [`wall_trust_prior.py`](../../software/ros2/m3pro_nav/m3pro_nav/wall_trust_prior.py) | Current offline WALL candidates. Original frame-grid snap scored 99.1% per assigned observation but its first edge accumulator left 12 internal false walls. Later ROI/temporal candidates reached 62/62 true WALL and zero false WALL on the full 17:47 hand-driven bag; the strict temporal setting retained 11/18 observable true WALL on the separate 17:41 bag. No production threshold or independent pose accuracy is established. See the [frame-snap](../reports/2026-10-02-frame-grid-snap-replay.md) and [WALL quality](../reports/2026-10-02-wall-evidence-quality.md) reports. |
+| **DIAGNOSTIC** | [`analyze_conservative_open.py`](../../software/tools/analyze_conservative_open.py), [`replay_scan_match_odom.py`](../../software/tools/replay_scan_match_odom.py), [`replay_continuous_wall_geometry.py`](../../software/tools/replay_continuous_wall_geometry.py), [`replay_pointcloud_wall_match.py`](../../software/tools/replay_pointcloud_wall_match.py) | OPEN probing produced 1,365 true / 543 false votes and cannot feed the map. Scan-to-scan ICP is an odometry comparison, not absolute localization. Continuous-geometry and point-cloud scripts are diagnostic baselines; their helper functions are still imported by current replays. See the [OPEN](../reports/2026-10-02-conservative-open-probe.md), [geometry](../reports/2026-10-02-continuous-wall-geometry-prototype.md), and [point-cloud](../reports/2026-10-02-pointcloud-wall-match-prototype.md) reports. |
+| **SUPERSEDED** | [`replay_dynamic_wall_snap.py`](../../software/tools/replay_dynamic_wall_snap.py), [`replay_physical_wall_tracks.py`](../../software/tools/replay_physical_wall_tracks.py) | Dynamic snap confirmed 55 true and 50 false unique WALL IDs; physical tracks had 42/104 promoted tracks later conflict. Both scripts remain reproducible experiments and test dependencies, not current localization candidates. See the [dynamic](../reports/2026-10-02-dynamic-maze-truth-audit.md) and [physical-track](../reports/2026-10-02-physical-wall-track-replay.md) reports. |
+
+## Read these reports for the evidence
+
+- [`2026-10-02-dynamic-maze-truth-audit.md`](../reports/2026-10-02-dynamic-maze-truth-audit.md): runtime perception gates, scan limits, and why the closed-loop exploration path is not yet implemented end to end.
+- [`2026-10-02-frame-grid-snap-replay.md`](../reports/2026-10-02-frame-grid-snap-replay.md): offline pose/wall-association replay and edge-level acceptance.
+- [`2026-10-02-physical-wall-track-replay.md`](../reports/2026-10-02-physical-wall-track-replay.md), [`2026-10-02-continuous-wall-geometry-prototype.md`](../reports/2026-10-02-continuous-wall-geometry-prototype.md), [`2026-10-02-pointcloud-wall-match-prototype.md`](../reports/2026-10-02-pointcloud-wall-match-prototype.md): alternative wall-identity approaches and their failure evidence.
+- [`2026-10-02-temporal-wall-runtime-checkpoint.md`](../reports/2026-10-02-temporal-wall-runtime-checkpoint.md): shadow process boundary, WALL evidence limits, and current cancellation limits.
+- [`2026-10-02-firmware-probe.md`](../reports/2026-10-02-firmware-probe.md): latest recorded board/USB state and physical trial blocker. Recheck live state before acting; the report records a prior probe, not current connectivity.
+
+No offline score here establishes 100% general accuracy, vehicle validation, or safe autonomous exploration. The field truth/axis assumptions and captures are limited; the runtime remains fail-closed.
+
+## Next physical acceptance sequence
+
+1. Restore and read-only verify control-board USB enumeration and live `/odom_raw`, `/imu/data_raw`, `/scan0`, `/scan1`, and `/scan_multi` topics.
+2. Run the isolated fixed-template position-loop trial with explicit authorization to move; record feedback, timing, and stopping behavior. Do not begin autonomous exploration.
+3. Record a fresh dynamic bag with both raw lidar topics, odometry, IMU, TF/static transforms, and runtime events. Measure actual site axes, entry anchor, lidar extrinsics, and gyro bias.
+4. Replay held-out motion data. Quantify shadow latency/drop rate on Orin, pose residuals against independently measured references, and WALL/OPEN confusion by edge. Calibrate trust thresholds and validate OPEN evidence from origin-preserving raw scans.
+5. Only after those checks pass, review and update the real-run preflight gates. **No live autonomous exploration until OPEN evidence sources and trust thresholds are calibrated and accepted.**
+
+Detailed code responsibilities and control limits are in [`软件架构.md`](软件架构.md) and [`运动控制链与下位机审计.md`](运动控制链与下位机审计.md); this index intentionally does not restate their full specifications or the TODO list.
+
+## Data ownership
+
+- Keep source code, small derived reports, and reproducible experiment indexes in Git. The [`wall replay experiment index`](../../experiments/2026-10-02-wall-replay/README.md) names the archived outputs and their source bags.
+- Keep raw field bags, trial CSVs and board firmware backups in the ignored local `field_data/` archive; a compressed copy of one short bag is also tracked under `experiments/`. Check file integrity after each copy to the Mac and record the source, anchor, firmware/deployment SHA, and capture site; a second independent backup has not been verified. Do not treat a report or compressed derivative as a substitute for the raw recording.
+- The two bundled vendor workspaces under `car/` overlap in some files but contain different packages. No whole-directory deletion or merge is justified by this inventory alone.

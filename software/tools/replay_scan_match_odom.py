@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Offline scan-to-scan ICP versus wheel odometry for the joystick field bag.
 
+STATUS: DIAGNOSTIC
+Reason: relative scan matching is not an absolute localization input.
+
 Uses NumPy/SciPy on the Mac for diagnostics only. It does not read maze truth,
 write ROS state, alter the navigation map, or infer OPEN edges. Input scans are
 the merged /scan_multi endpoint clouds; their original sensor origins and beam

@@ -24,7 +24,7 @@
 - **Persistent Confirmed Map** —— 多帧确认 + 真实走过 + 校准后的长期拓扑，
   用于回头高速跑、树剪枝（成环必墙）、墙吸附定位
 
-## 系统数据流
+## 目标数据流（尚未端到端实车验收）
 
 ```
 odom+IMU → Pose 预测 → 已确认墙校正位姿（防自证循环：新墙不得本帧自证）
@@ -51,92 +51,35 @@ LaserScan → 连续可信遮罩 → 边离散归属(ABSTAIN 兜底) → EdgeMap
 - 不是不同弯道在线求复杂轨迹（只有一套固定模板）
 - 不存在 CREEP/蠕动探路（STOP 原地等扫描是异常边界情况，不是每格流程）
 
-## 实车状态与实验记录（2026-10-01 至 2026-10-02）
+## 当前状态（2026-10-03）
 
-- 宿舍地面三趟固定模板位置环对照已完成；较好的无碰撞试验候选是弧线参考上限
-  0.25 m/s、末级指令减速上限 3.0 m/s²、`kp_pos=1.0`。用户随后指定
-  共享位置环默认 `kp_pos=1.4`，尚未实车验收；`kp_pos=1.5`
-  的第三趟在返程发生真实碰撞，已停止试跑；详见
-  [宿舍地面位置环对照](docs/reports/2026-10-01-dorm-position-loop.md)。
-- 10 月 1 日试跑时 `/odom_raw` 约 11 Hz；10 月 2 日确认原厂集成固件为
-  V1.1.3，先后试烧多种发布周期，最后在板上恢复为 odom 30 Hz、IMU 30 Hz、
-  雷达发布 140 ms；实测和之后的 USB 连接故障分开记录于
-  [固件与车端探测记录](docs/reports/2026-10-02-firmware-probe.md)。
-  这些静态帧率试验不是地面位置环验收，轮式 odom 判稳也不是物理路径验收。
-- 故障停机已改成立即连续发零，逐回调 odom 和零速窗口位姿已入 CSV。
-  雷达与外部位姿真值仍需在场地验证。
-- 10 月 2 日对手柄动态包做了逐帧墙体定位离线回放：连续物理墙 track
-  在后半程的关联率和条件身份评分改善，但仍存在大量冲突，不能作为位姿
-  精度验收或接入实车 runtime；见
-  [连续物理墙回放](docs/reports/2026-10-02-physical-wall-track-replay.md)。
-- 同一动态包的逐帧共同格线偏差校正已在离线回放中得到条件墙号评分：
-  同一墙段可评分覆盖 89.7%、命中率 99.1%，原始 odom 对照分别为
-  40.0% 和 52.3%；但按 112 格边累计，62 个真墙都确认的同时留下 12 个有效假墙。
-  评分采用用户给定的迷宫墙表，外部位姿误差未测，未接入车端。
-  见[逐帧格线吸附报告](docs/reports/2026-10-02-frame-grid-snap-replay.md)。
+| 部分 | 已证实的范围 | 尚未验收 |
+|---|---|---|
+| 拓扑、任务与固定运动模板 | 确定性测试及历史 Tier A 模拟已通过；车头保持朝向，ARC 是麦轮平移轨迹。 | 实车完整迷宫自主探索。 |
+| 位置闭环 | 软件链和宿舍地面往返试验已有记录；当前默认参数仍需复测。 | 固件更新后的地面过冲、回正、制动、yaw 和外部位姿误差。 |
+| 雷达墙吸附与 WALL | 旧 17:47 完整手柄包的离线候选达到 62/62 真墙、0 假墙；另一短包的严格门槛仅保留 11/18 原可观测真墙。 | 新自动行驶包、独立位姿真值、跨场地阈值和生产晋升。 |
+| 在线定位 shadow | 重计算已隔离到子进程，只读、默认关闭、仅 dry-run 可启用；软件测试通过。 | Orin 上的耗时、丢帧、主控制 timer 抖动与物理墙误差。 |
+| OPEN 与自主导航 | `nav_runtime` 有计算及安全门槛。 | 可靠 OPEN 来源和 trust 标定；实跑仍被 preflight 阻止。 |
+| 底盘连接 | 10 月 2 日固件试验记录了 odom 30 Hz、IMU 30 Hz、雷达发布 140 ms 的配置。 | 最近记录的 CP2104/USB 故障之后，实时 `/odom_raw` 尚待重新核验。 |
 
-## 先前阶段记录（2026-09-26）
+**下一步**先恢复并只读核对底盘通信，再做限定轨迹位置环、同步录包和只读 shadow 对照。具体顺序及停止条件见[当前任务](TODO.md)；代码入口、实验版本与数据归属见[现行链路索引](docs/architecture/CURRENT_PIPELINE.md)。完整测量及限制见[位置环报告](docs/reports/2026-10-01-dorm-position-loop.md)、[WALL 质量报告](docs/reports/2026-10-02-wall-evidence-quality.md)、[shadow 检查点](docs/reports/2026-10-02-temporal-wall-runtime-checkpoint.md)和[固件记录](docs/reports/2026-10-02-firmware-probe.md)。
 
-- 设计真相已按用户原始方案重新定稿（`docs/design/算法规范.md`），旧架构文档
-  已归档至 `docs/decisions/`（Rejected after requirement re-alignment）
-- `a1d43aa` 是旧架构 Tier A 1000+1000 seeds 全绿的回归基线；
-  `8893956` 是拓扑游标与方块任务层的 WIP，随机 Gate 尚未通过。
-- 当前功能分支已修正固定模板的几何契约、计划内局部 DFS、方块任务剪枝
-  和速度接缝；51 项确定性测试及 Tier A 随机 Gate 双模式各 1000 seed
-  已通过。准确指标与未验收边界见 [TODO](TODO.md)。
-- 控制链分支已加入固定轨迹速度时间表、轨迹参考、独立车身 yaw 的位置环、
-  源码对照的下位速度环与五项确定性运动门槛；下位电机动态参数仍未实测。
-  细节见 [运动控制链与下位机审计](docs/architecture/运动控制链与下位机审计.md)。
-- 当前分支使动作链在运行中接收地图更新并延长队尾，保留虚拟 DFS 状态与
-  已启动运动；同时阻止方块任务把已走返程边当作空死枝再次折返。
-  95 项确定性测试及两种模式各 10 seed 的本分支复查通过；历史 1000+1000
-  结果不替代本分支验收。
-- ROS 包的失效 `decision` 启动项已替换为默认只读的 `driver_probe`，
-  可记录 `/cmd_vel`、`/odom_raw`、`/imu/data_raw`；小幅阶跃须显式启用，
-  尚未在车端运行。
-- 当前分支新增默认只读的 `control_probe`，可记录原始里程计和 IMU；
-  显式启用后才把现有速度时间表、轨迹参考与位置环接到 `/cmd_vel` 做
-  不超过 0.03 m 的直线试验。本机纯逻辑测试通过，车端 frame、速度方向、
-  话题频率和控制效果均待实测。
-- 本轮验收依照用户方案 §24：确定性 A–G → 随机 H（双模式各 100 seed，
-  然后各 1000 seed）；规范 §13 的实车/感知 Gate 留待对应阶段。
+## 仓库入口
 
-## 仓库结构
-
-```
-software/ros2/m3pro_nav/m3pro_nav/   核心实现 (单一真相源)
-  ├─ edge_map.py        EdgeMap (hard/soft/derived) + TraversalMap 分离
-  ├─ tree_inference.py  树公理闭包 (成环必墙, 纯 base 重算可撤销)
-  ├─ cell_classifier.py CellMark 分类与局部墙状态
-  ├─ pose.py            Pose2D (唯一物理真相的数据类型)
-  ├─ events.py / visits.py / event_detector.py   几何事件链
-  ├─ action_horizon.py  计划内局部 DFS overlay 与滚动动作链
-  ├─ motion_primitive.py / motion_planner.py / motion_executor.py
-  │                     固定模板与 Tier A 理想执行器
-  ├─ speed_profile.py / trajectory_reference.py / position_controller.py
-  │                     速度时间表、世界系参考、车体系位置环输出
-  ├─ control_chain.py / plant.py   多速率运动链、理想/下位环模型
-  ├─ driver_probe.py      默认只读 ROS 接口/CSV 探针
-  ├─ odometry_adapter.py / control_probe.py
-  │                     原始里程计适配与默认只读的位置环 ROS 探针
-  ├─ frame_transform.py  规划参考到里程计参考的显式平面坐标映射
-  ├─ stream_nav.py      薄 coordinator: 图递推, BRANCH 局部 DFS, 任务剪枝
-  ├─ mazemap.py        旧模拟器依赖，非当前地图真相
-software/sim/           runtime_v2 Tier A + motion_gate 五项控制机动
-software/tests/         确定性几何、拓扑、任务与控制接口测试
-docs/design/            现行设计文档 (算法规范 = 唯一设计真相)
-docs/decisions/         历史/已否决方案存档 (Rejected after re-alignment)
-docs/官方资料总览.md     134 份官方 PDF 摘要
-```
+- `software/ros2/m3pro_nav/m3pro_nav/`：现行 ROS/导航包，包含 runtime、控制、墙证据和 shadow；具体模块身份见[现行链路索引](docs/architecture/CURRENT_PIPELINE.md)。
+- `software/sim/`、`software/tests/`：仿真门槛和可执行契约；测试通过不能代替实车验收。
+- `software/scripts/`：车端部署、数据采集及限定运动试验入口。会发布 `/cmd_vel` 的脚本须以实际使用说明和显式 `--run` 为准。
+- `software/tools/`、`experiments/`：离线分析工具及带版本的实验索引；失败原型保留作可复核证据，不代表生产链。
+- `field_data/`：Git 忽略的原始车端/场地数据和固件档案；复制后检查完整性。数据保留规则见[现行链路索引](docs/architecture/CURRENT_PIPELINE.md#data-ownership)。
+- `docs/design/`：设计规范；`docs/architecture/`：实现边界与现行入口；`docs/reports/`：实验结果；`docs/decisions/`：项目决策记录。
 
 ## 阅读顺序
 
-算法规范（设计真相）→ 本 README（总纲）→ tests（语义的可执行定义）→
-stream_nav / runtime_v2（当前实现断点）。
+本 README → [现行链路索引](docs/architecture/CURRENT_PIPELINE.md) → [当前任务](TODO.md)；修改算法时再读[算法规范](docs/design/算法规范.md)，判断实验结论时回到对应报告和原始数据。AI 与开发者修改导航或定位前，先读现行链路索引确认模块身份。
 
 ## 约定与关键节点
 
-- 比赛关键节点：报名截止 2026-09-30，作品提交 2026-11-09
+- 比赛关键节点：报名截止 2026-09-30（已过），作品提交 2026-11-09
 - 算法规范是唯一设计真相；改代码前先对规范，规范改动须可追溯到用户原始方案
 - "SemanticSim 已验证" ≠ "实车已验证"。性能数字必须带 Gate 级别与 failures
   计数，failures>0 即 INVALID

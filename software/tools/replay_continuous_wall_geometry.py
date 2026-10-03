@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Causal offline replay: corrected odometry plus continuous geometry per edge.
 
+STATUS: DIAGNOSTIC
+Reason: this localization candidate did not pass; current replays import helpers.
+
 This is an experiment, not an online mapper.  Edge IDs stay discrete while
 the normal coordinate of a wall segment is estimated in metres.  Every scan
 is first predicted from the previous corrected pose and the wheel-odometry

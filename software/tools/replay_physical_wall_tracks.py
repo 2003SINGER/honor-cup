@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Offline causal replay using continuous finite physical-wall tracks.
 
+STATUS: SUPERSEDED
+SUPERSEDED_BY: replay_frame_grid_snap.py (offline pose candidate)
+Reason: promoted track identities conflicted in later scans; keep for replay.
+
 Tracks are associated by measured direction, normal distance, and finite
 tangential overlap. Grid geometry is never used to create or move a track.
 Only prior stable tracks may propose pose corrections. Truth is consulted

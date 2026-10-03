@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Offline experiment: fit wall segments directly from /scan_multi endpoints.
 
+STATUS: DIAGNOSTIC
+Reason: point-cloud baseline; current replays also import its geometry helpers.
+
 Unlike LaserScan-ray association, this treats finite ranges as a base-frame
 point cloud. No free-space/open inference is made. Grid truth is consulted
 only by the optional post-replay score.

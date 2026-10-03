@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Causal, read-only per-scan wall correction replay for the joystick bag.
 
+STATUS: SUPERSEDED
+SUPERSEDED_BY: replay_frame_grid_snap.py (offline WALL candidate)
+Reason: two-scan confirmation produced 55 true / 50 false unique WALL IDs.
+
 This experimental tool reads only the supplied rosbag2 SQLite database. It
 does not import maze truth, write ROS state, or infer OPEN edges. Confirmed
 walls must have been accumulated from earlier scans in this replay.

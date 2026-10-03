@@ -367,10 +367,10 @@ def test_frame_grid_shadow_is_dry_run_only_and_does_not_replace_runtime_state():
     live, *_ = (NavRuntime(entry=entry, cell=entry, heading='N', dry_run=False,
                            perception=perception,
                            extrinsic=LaserExtrinsic.from_yaml(0, 0, 0)),)
-    assert shadow._frame_grid_shadow is not None
-    assert live._frame_grid_shadow is None
+    assert shadow._shadow_enabled
+    assert not live._shadow_enabled
     assert shadow.anchor is None and not shadow.nav.edges.soft
-    assert dry._frame_grid_shadow is None
+    assert not dry._shadow_enabled
     assert NavRuntime._shadow_json({'predicted_pose': [0.1, 0.2, 0.3]}) == {
         'predicted_pose': [0.1, 0.2, 0.3]}
 
@@ -384,16 +384,74 @@ def test_shadow_source_time_queue_runs_even_when_legacy_scan_alignment_abstains(
     rt.set_anchor_spec(entry, 'N')
     rt.on_odom(odom_state(Pose2D(0.2, 0.2, 0.0), 1.0))
     rt.on_odom(odom_state(Pose2D(0.2, 0.2, 0.0), 1.1))
-    seen = []
-    rt._frame_grid_shadow.process = lambda *args: seen.append(args) or {
-        'accepted': False, 'reason': 'diagnostic'}
+    class Worker:
+        def __init__(self):
+            self.submitted = []
+
+        def submit(self, *args, **_kwargs):
+            self.submitted.append(args)
+            return True
+
+        def poll(self):
+            if self.submitted:
+                stamp = self.submitted[-1][0]
+                return [(stamp, {'accepted': False, 'reason': 'diagnostic'}, None)]
+            return []
+
+    worker = Worker()
+    rt._frame_grid_shadow_worker = worker
     scan = FakeLaserScan([1.0] * 180, 1.05)
     scan.time_increment = 0.0
     assert rt.on_scan(scan) is None       # legacy requires later static window
     rt.on_odom(odom_state(Pose2D(0.2, 0.2, 0.0), 1.2))
     assert rt.process_shadow_pending(max_frames=1) == 1
-    assert len(seen) == 1
+    assert len(worker.submitted) == 1
     assert any(e['kind'] == 'frame_grid_shadow' for e in rt.events)
+
+
+def test_shadow_subprocess_returns_real_scan_without_changing_runtime_anchor():
+    import time
+
+    walls, entry, ex, side = maze_sim.gen_maze(0)
+    rt = NavRuntime(
+        entry=entry, cell=entry, heading='N', dry_run=True,
+        perception={'frame_grid_shadow': {'enabled': True}},
+        extrinsic=LaserExtrinsic.from_yaml(0, 0, 0))
+    try:
+        rt.set_anchor_spec(entry, 'N')
+        rt.on_odom(odom_state(Pose2D(0.2, 0.2, 0.0), 10.0))
+        rt.on_odom(odom_state(Pose2D(0.2, 0.2, 0.0), 10.1))
+        anchor = rt.anchor
+        anchor_pose_before = anchor.maze_pose(Pose2D(0.2, 0.2, 0.0))
+
+        assert rt.start_shadow_worker(10.1)
+        scan = FakeLaserScan([1.0] * 180, 10.0)
+        scan.time_increment = 0.0
+        assert rt.on_scan(scan) is None
+        rt.on_odom(odom_state(Pose2D(0.2, 0.2, 0.0), 10.2))
+        assert rt.process_shadow_pending(max_frames=1) == 1
+
+        deadline = time.monotonic() + 4.0
+        while time.monotonic() < deadline and not any(
+                event['kind'] in ('frame_grid_shadow',
+                                  'frame_grid_shadow_error')
+                for event in rt.events):
+            rt._collect_shadow_results()
+            time.sleep(0.01)
+
+        result_events = [event for event in rt.events
+                         if event['kind'] in ('frame_grid_shadow',
+                                              'frame_grid_shadow_error')]
+        assert result_events
+        assert result_events[0]['kind'] == 'frame_grid_shadow'
+        assert rt.anchor is anchor
+        anchor_pose_after = rt.anchor.maze_pose(Pose2D(0.2, 0.2, 0.0))
+        assert (anchor_pose_after.x, anchor_pose_after.y,
+                anchor_pose_after.yaw) == pytest.approx(
+                    (anchor_pose_before.x, anchor_pose_before.y,
+                     anchor_pose_before.yaw))
+    finally:
+        rt.close_shadow_worker()
 
 
 def test_runtime_defers_expansion_when_planned_task_suffix_becomes_pruned():

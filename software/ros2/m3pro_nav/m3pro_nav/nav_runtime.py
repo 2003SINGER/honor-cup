@@ -235,14 +235,16 @@ class NavRuntime:
             max_gap_s=float(yaw_cfg.get('max_gap_s', 0.12)),
             bias_radps=float(yaw_cfg.get('bias_radps', 0.0)),
             sign=float(yaw_cfg.get('sign', 1.0)))
-        self._frame_grid_shadow = None
+        self._shadow_enabled = False
+        self._frame_grid_shadow_worker = None
         shadow_cfg = perc.get('frame_grid_shadow', {})
         self._shadow_max_lag_s = float(shadow_cfg.get('max_scan_lag_s', 0.8))
         if not math.isfinite(self._shadow_max_lag_s) or self._shadow_max_lag_s <= 0:
             raise ValueError('frame_grid_shadow.max_scan_lag_s must be positive')
         if bool(shadow_cfg.get('enabled', False)) and dry_run:
-            from .frame_grid_shadow import FrameGridShadow
-            self._frame_grid_shadow = FrameGridShadow()
+            self._shadow_enabled = True
+            from .frame_grid_shadow_worker import FrameGridShadowWorker
+            self._frame_grid_shadow_worker = FrameGridShadowWorker(queue_size=2)
         self.correction_enabled = bool(
             perc.get('correction', {}).get('enabled', False))
         self._last_correction_stamp = None
@@ -353,7 +355,7 @@ class NavRuntime:
         if self.anchor is None or self.latest_odom is None:
             return None                     # 传感器未就绪: 丢弃
         frame = parse_scan(scan_msg)
-        if self._frame_grid_shadow is not None:
+        if self._shadow_enabled:
             if len(self._pending_shadow_scans) >= 32:
                 dropped = self._pending_shadow_scans.popleft()
                 self._log_event('frame_grid_shadow_drop', dropped.stamp,
@@ -369,12 +371,19 @@ class NavRuntime:
         return self._process_scan_frame(frame)
 
     def process_shadow_pending(self, max_frames=1):
-        """Run a small shadow-only budget outside the 50 Hz control callback."""
-        if self._frame_grid_shadow is None or not self._pending_shadow_scans:
+        """Submit bounded shadow work and collect finished results.
+
+        This method is safe on the single-thread ROS executor: all fitting and
+        solving runs in a child process, and IPC operations never wait.
+        """
+        if not self._shadow_enabled or not self._pending_shadow_scans:
+            if self._frame_grid_shadow_worker is not None:
+                self._collect_shadow_results()
             return 0
-        processed = 0
+        self._collect_shadow_results()
+        submitted = 0
         history = self.odom_history.samples
-        while self._pending_shadow_scans and processed < max_frames:
+        while self._pending_shadow_scans and submitted < max_frames:
             frame = self._pending_shadow_scans[0]
             midpoint = frame.stamp + max(0, len(frame.rays) - 1) * \
                 frame.time_increment * 0.5
@@ -397,18 +406,50 @@ class NavRuntime:
                                     reason='ODOM_HISTORY_EXPIRED')
                     continue
                 break
-            self._pending_shadow_scans.popleft()
             pose, _skew = sample
-            try:
-                result = self._frame_grid_shadow.process(
-                    frame, pose, self.projector.extrinsic, self.anchor)
-                self._log_event('frame_grid_shadow', frame.stamp,
+            accepted = self._frame_grid_shadow_worker.submit(
+                frame.stamp, frame, pose, self.projector.extrinsic,
+                self.anchor, start_if_needed=False)
+            self._pending_shadow_scans.popleft()
+            if accepted:
+                submitted += 1
+            else:
+                self._log_event('frame_grid_shadow_drop', frame.stamp,
+                                reason=('SHADOW_WORKER_BACKPRESSURE'
+                                        if self._frame_grid_shadow_worker.started
+                                        else 'SHADOW_WORKER_UNAVAILABLE'))
+        self._collect_shadow_results()
+        return submitted
+
+    def _collect_shadow_results(self):
+        if self._frame_grid_shadow_worker is None:
+            return
+        self._record_shadow_worker_results(
+            self._frame_grid_shadow_worker.poll())
+
+    def _record_shadow_worker_results(self, records):
+        for stamp, result, error in records:
+            if error is not None:
+                self._log_event('frame_grid_shadow_error', stamp, error=error)
+            else:
+                self._log_event('frame_grid_shadow', stamp,
                                 **self._shadow_json(result))
-            except Exception as exc:  # diagnostic failure cannot alter runtime
-                self._log_event('frame_grid_shadow_error', frame.stamp,
-                                error=f'{type(exc).__name__}: {exc}')
-            processed += 1
-        return processed
+
+    def start_shadow_worker(self, stamp=0.0):
+        """Explicit startup hook for ROS node construction before timers."""
+        if self._frame_grid_shadow_worker is None:
+            return True
+        started = self._frame_grid_shadow_worker.start()
+        if not started:
+            self._log_event('frame_grid_shadow_error', stamp,
+                            error=('worker startup failed: ' +
+                                   str(self._frame_grid_shadow_worker.startup_error)))
+        return started
+
+    def close_shadow_worker(self):
+        if self._frame_grid_shadow_worker is not None:
+            records = self._frame_grid_shadow_worker.shutdown()
+            self._record_shadow_worker_results(records)
 
     def _process_scan_frame(self, frame):
         if not self.projector.extrinsic.available:

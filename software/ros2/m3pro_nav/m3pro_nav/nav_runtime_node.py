@@ -157,6 +157,11 @@ class NavRuntimeNode(Node):
         self._scans_seen = 0
         self._odoms_seen = 0
 
+        # Spawn the optional diagnostic child before any ROS timers can run;
+        # process creation must never occur inside the planner callback.
+        self.runtime.start_shadow_worker(
+            self.get_clock().now().nanoseconds * 1e-9)
+
         qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
         self._odom_sub = self.create_subscription(
             Odometry, odom_topic, self._on_odom, qos)
@@ -358,6 +363,8 @@ class NavRuntimeNode(Node):
             self._last_flushed_event += 1
 
     def shutdown(self):
+        # Stop the isolated diagnostic child before final evidence snapshot.
+        self.runtime.close_shadow_worker()
         if self._cmd_pub is not None:
             # spin has ended before shutdown() is called, so this bounded wait
             # cannot starve subscriptions/timers. Publish throughout a real
